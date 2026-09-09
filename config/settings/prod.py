@@ -10,16 +10,35 @@ CSRF_COOKIE_SECURE = True
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
-# MinIO — распределённое S3-хранилище по ТЗ 4.9 (WORM Object Locking
-# настраивается на стороне бакета средствами MinIO, вне Django).
-STORAGES["default"] = {
+# MinIO — распределённое S3-хранилище по ТЗ 4.9. Два бакета с разными
+# политиками (STACK.md → «Разделение политик хранения MinIO»): "originals"
+# создаётся с Object Locking/WORM (см. deploy/minio/init-bucket.sh) и не
+# допускает перезаписи; "working" — обычный бакет для редактируемых копий
+# и бланков, которые правомерно заменяются при минорной корректировке
+# (ТЗ 4.3.1). Никогда не указывать один и тот же MINIO_BUCKET_* для обоих.
+_s3_common_options = {
+    "access_key": os.environ.get("MINIO_ACCESS_KEY"),
+    "secret_key": os.environ.get("MINIO_SECRET_KEY"),
+    "endpoint_url": os.environ.get("MINIO_ENDPOINT_URL"),
+    "default_acl": "private",
+    "file_overwrite": False,
+}
+
+STORAGES["originals"] = {
     "BACKEND": "storages.backends.s3.S3Storage",
     "OPTIONS": {
-        "access_key": os.environ.get("MINIO_ACCESS_KEY"),
-        "secret_key": os.environ.get("MINIO_SECRET_KEY"),
-        "bucket_name": os.environ.get("MINIO_BUCKET_NAME", "bz-get-documents"),
-        "endpoint_url": os.environ.get("MINIO_ENDPOINT_URL"),
-        "default_acl": "private",
-        "file_overwrite": False,
+        **_s3_common_options,
+        "bucket_name": os.environ.get("MINIO_BUCKET_ORIGINALS", "bz-get-originals"),
     },
 }
+STORAGES["working"] = {
+    "BACKEND": "storages.backends.s3.S3Storage",
+    "OPTIONS": {
+        **_s3_common_options,
+        "bucket_name": os.environ.get("MINIO_BUCKET_WORKING", "bz-get-working"),
+    },
+}
+# "default" — сознательно указывает на заменяемый бакет "working", а не на
+# защищённый "originals": любое будущее FileField без явного storage= не
+# должно случайно попасть под WORM-блокировку.
+STORAGES["default"] = STORAGES["working"]

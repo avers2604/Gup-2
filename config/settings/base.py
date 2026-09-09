@@ -122,4 +122,12 @@ STORAGES = {
     "staticfiles": {
         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
     },
+    # Оригиналы НРД — неизменяемый бакет с Object Locking (WORM).
+    "originals": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    # Редактируемые копии и бланки — заменяемый бакет, см. apps/core/storage.py.
+    "working": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
 }

@@ -3,6 +3,7 @@ import uuid
 from django.db import models
 
 from apps.core.models import TimeStampedModel
+from apps.core.storage import working_storage
 from apps.documents.models import NormativeDocument
 
 
@@ -55,11 +56,15 @@ class Template(TimeStampedModel):
         related_name="revoked_templates", verbose_name="Отменяющий приказ",
     )
 
+    # working_storage — не WORM: минорная корректировка (ТЗ 4.3.1) заменяет
+    # именно этот файл без прерывания жизненного цикла записи Template.
     file_editable = models.FileField(
-        upload_to="templates/editable/%Y/", verbose_name="Защищённый рабочий бланк (.docx/.xlsx)"
+        upload_to="templates/editable/%Y/", storage=working_storage,
+        verbose_name="Защищённый рабочий бланк (.docx/.xlsx)",
     )
     file_sample = models.FileField(
-        upload_to="templates/samples/%Y/", verbose_name="Эталонный образец заполнения (.pdf)"
+        upload_to="templates/samples/%Y/", storage=working_storage,
+        verbose_name="Эталонный образец заполнения (.pdf)",
     )
 
     download_count = models.PositiveIntegerField(default=0)
