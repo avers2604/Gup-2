@@ -40,6 +40,15 @@ class ImportThesaurusBasicTests(TestCase):
         with self.assertRaises(ValidationError):
             import_thesaurus(_file([]))
 
+    def test_oversized_file_rejected_before_json_parsing(self):
+        with self.assertRaisesMessage(ValidationError, "слишком большой"):
+            import_thesaurus(io.BytesIO(b"{" + b"x" * (10 * 1024 * 1024) + b"}"))
+
+    def test_too_many_entries_rejected(self):
+        entries = [_entry(id=f"entry-{index}", canonical=f"Термин {index}") for index in range(10_001)]
+        with self.assertRaisesMessage(ValidationError, "слишком много записей"):
+            import_thesaurus(_file(entries))
+
     def test_unknown_category_reported_as_error_not_raised(self):
         report = import_thesaurus(_file([_entry(id="a", category="not.a.category")]))
         self.assertEqual(report.created, [])

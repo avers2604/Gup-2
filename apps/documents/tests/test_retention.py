@@ -153,6 +153,16 @@ class NormativeDocumentRetentionFieldTests(TestCase):
         self.assertEqual(doc.retention_mode, RetentionMode.COMPLIANCE)
         self.assertIsNone(doc.retention_until)
 
+    def test_category_change_with_update_fields_persists_derived_fields(self):
+        doc = make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+
+        doc.retention_category = RetentionCategory.ORDERS_PERSONNEL
+        doc.save(update_fields={"retention_category"})
+        doc.refresh_from_db()
+
+        self.assertEqual(doc.retention_mode, RetentionMode.COMPLIANCE)
+        self.assertEqual(doc.retention_until, datetime.date(2076, 1, 1))
+
     def test_resaving_without_category_change_does_not_recompute_retention_until(self):
         # Раньше retention_until пересчитывался на КАЖДЫЙ save() — дата могла
         # "уехать", если карточку просто пересохранили спустя время с уже

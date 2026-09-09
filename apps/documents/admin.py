@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 
 from .models import DocumentRelation, DocumentStatusHistory, NormativeDocument, Tag
 
@@ -25,6 +26,34 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     filter_horizontal = ("applied_depts", "category_tags")
     readonly_fields = ("retention_mode", "retention_until")
     inlines = [DocumentRelationInline, DocumentStatusHistoryInline]
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        if request.user.is_superuser or request.user.dsp_access:
+            return queryset
+        return queryset.filter(access_level=NormativeDocument.AccessLevel.GENERAL)
+
+    def _can_access(self, request, obj):
+        return (
+            obj is None
+            or obj.access_level == NormativeDocument.AccessLevel.GENERAL
+            or request.user.is_superuser
+            or request.user.dsp_access
+        )
+
+    def has_view_permission(self, request, obj=None):
+        return super().has_view_permission(request, obj) and self._can_access(request, obj)
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and self._can_access(request, obj)
+
+    def has_delete_permission(self, request, obj=None):
+        return super().has_delete_permission(request, obj) and self._can_access(request, obj)
+
+    def save_model(self, request, obj, form, change):
+        if not self._can_access(request, obj):
+            raise PermissionDenied("Для работы с документами ДСП требуется соответствующий допуск.")
+        super().save_model(request, obj, form, change)
 
 
 @admin.register(Tag)

@@ -23,7 +23,7 @@ nginx, pgBackRest) и открытые лицензионные вопросы (
 
 ## Структура
 
-```
+```text
 config/            настройки Django (base/dev/prod), urls, wsgi/asgi
 apps/core/         общие абстракции (UUID PK, TimeStamped), /styleguide/
 apps/iam/          оргструктура (Department), пользователи, роли — ТЗ 4.6
@@ -80,6 +80,7 @@ docker compose up -d
   и миграции не пройдёт CI.
 - Тесты: `python manage.py test`. С отчётом о покрытии (только пакет
   `apps/`, конфигурация в `.coveragerc`):
+
   ```bash
   .venv/bin/pip install -r requirements-dev.txt
   .venv/bin/coverage run manage.py test && .venv/bin/coverage report

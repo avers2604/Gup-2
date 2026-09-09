@@ -38,3 +38,9 @@ class UserAdmin(DjangoUserAdmin):
             ),
         }),
     )
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = tuple(super().get_readonly_fields(request, obj))
+        if not request.user.is_superuser:
+            fields += ("is_staff", "is_superuser", "groups", "user_permissions")
+        return fields
