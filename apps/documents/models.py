@@ -118,7 +118,7 @@ class DocumentRelation(models.Model):
                 name="unique_document_relation",
             ),
             models.CheckConstraint(
-                check=~models.Q(from_document=models.F("to_document")),
+                condition=~models.Q(from_document=models.F("to_document")),
                 name="document_relation_no_self_reference",
             ),
         ]
