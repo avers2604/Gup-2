@@ -4,6 +4,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 
 from apps.core.models import TimeStampedModel, UUIDPKModel
+from apps.core.storage import originals_storage, working_storage
 from apps.iam.models import Department
 
 
@@ -64,10 +65,14 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
 
-    files_original = models.FileField(upload_to="documents/originals/%Y/%m/", verbose_name="Скан оригинала (PDF/A)")
+    files_original = models.FileField(
+        upload_to="documents/originals/%Y/%m/", storage=originals_storage,
+        verbose_name="Скан оригинала (PDF/A)",
+    )
     files_original_sha256 = models.CharField(max_length=64, blank=True, verbose_name="SHA-256 оригинала")
     files_editable = models.FileField(
-        upload_to="documents/editable/%Y/%m/", blank=True, null=True, verbose_name="Редактируемый файл"
+        upload_to="documents/editable/%Y/%m/", storage=working_storage,
+        blank=True, null=True, verbose_name="Редактируемый файл",
     )
 
     ocr_confidence = models.FloatField(

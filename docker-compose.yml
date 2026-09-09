@@ -53,11 +53,12 @@ services:
       - etcd_data:/etcd-data
 
   # MinIO Community Edition (AGPLv3) — решение риск-ревью вместо коммерческой
-  # AIStor, см. STACK.md → «Лицензии». Distributed mode + Erasure Coding
-  # (ТЗ 4.9) здесь эмулированы на 4 локальных дисках одного узла — реальный
-  # многоузловой кластер настраивается на Этапе 4. Object Locking (WORM) и
-  # Versioning на бакете включаются отдельно при создании бакета
-  # (`--with-lock`), см. deploy/minio/init-bucket.sh.
+  # AIStor, см. STACK.md → «Лицензии». ВНИМАНИЕ: 4 диска на одном контейнере —
+  # это ТОЛЬКО локальная эмуляция Distributed mode + Erasure Coding (ТЗ 4.9)
+  # для проверки кода и образов; она НЕ отражает целевую эксплуатационную
+  # топологию (число узлов/дисков — открытый вопрос, см. STACK.md). Два
+  # бакета с разными политиками создаются отдельно (см. deploy/minio/
+  # init-bucket.sh): originals — с Object Locking (WORM), working — без.
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: server /data{1...4} --console-address ":9001"
@@ -73,9 +74,9 @@ services:
       - minio_data3:/data3
       - minio_data4:/data4
 
-  # Разовая утилита для настройки бакета MinIO (Object Locking/WORM,
-  # Versioning) — не запускается автоматически с `up`, см.
-  # deploy/minio/init-bucket.sh.
+  # Разовая утилита для настройки бакетов MinIO (Object Locking/WORM для
+  # originals, Versioning для working) — не запускается автоматически с
+  # `up`, см. deploy/minio/init-bucket.sh.
   mc:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
     profiles: ["tools"]
@@ -83,7 +84,8 @@ services:
     environment:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-bz_get}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-bz_get_secret}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-bz-get-documents}
+      MINIO_BUCKET_ORIGINALS: ${MINIO_BUCKET_ORIGINALS:-bz-get-originals}
+      MINIO_BUCKET_WORKING: ${MINIO_BUCKET_WORKING:-bz-get-working}
     depends_on:
       - minio
 
