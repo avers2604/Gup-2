@@ -12,11 +12,14 @@ Baseline) и дополнению к нему.
 
 Открытый вопрос №1 плана работ (выбор языка/фреймворка) закрыт Заказчиком:
 Python / Django, модульный монолит (DDD), границы доменов — отдельные
-Django-приложения без прямых импортов друг в друга. Точные версии всего
-стека (Python, Django, PostgreSQL, Patroni, MinIO AIStor, Redis, Celery,
-Tesseract, nginx, pgBackRest) зафиксированы в [`STACK.md`](STACK.md) — там
-же отмечено, где локальная среда разработки отличается от целевой
-(недоступность PostgreSQL 18 и Python 3.14 в песочнице сборки каркаса).
+Django-приложения без прямых импортов друг в друга. Framework
+зафиксирован как **Django 5.2 LTS** (только минорные/патч-обновления
+внутри ветки); Python — связка с ним, текущий базовый вариант **3.13.x**,
+3.14.7 остаётся candidate target до подтверждения совместимости на
+целевой ОС (детали и условия — в `STACK.md`). Точные версии всего
+остального стека (PostgreSQL, Patroni, MinIO, Redis, Celery, Tesseract,
+nginx, pgBackRest) и открытые лицензионные вопросы (Redis/MinIO — AGPLv3)
+зафиксированы в [`STACK.md`](STACK.md).
 
 ## Структура
 
@@ -33,9 +36,17 @@ templates/         базовый шаблон + живой стайлгайд �
 
 ## Локальный запуск
 
-Требуется Python 3.12+ (целевая версия — 3.14.7, см. `STACK.md`) и
-PostgreSQL с расширением `btree_gist` (используется для исключающего
-ограничения на период действия статуса документа, ТЗ 4.2.3).
+Требуется Python 3.12+ (проверено на 3.13; версия 3.14.7 из исходного
+списка Заказчика пока не подтверждена — см. «Отклонения от исходного
+списка» в `STACK.md`) и PostgreSQL с расширением `btree_gist`
+(используется для исключающего ограничения на период действия статуса
+документа, ТЗ 4.2.3).
+
+`docker-compose.yml` поднимает полный контур для локальной разработки:
+Postgres, PgBouncer, etcd (для будущего Patroni), MinIO, Redis, ClamAV,
+Prometheus, Grafana. Приложение пока обращается к Postgres/MinIO/Redis
+напрямую — маршрутизация через PgBouncer, HA-кластер на etcd/Patroni,
+антивирусная проверка и метрики подключаются на Этапах 3–4.
 
 ```bash
 python3 -m venv .venv
@@ -44,8 +55,12 @@ python3 -m venv .venv
 cp .env.example .env
 # при необходимости отредактируйте параметры подключения к БД
 
-# поднять зависимости локально (Postgres, MinIO, Redis)
+# поднять зависимости локально (Postgres, MinIO, Redis и т.д.)
 docker compose up -d
+
+# один раз: включить Object Locking (WORM) и Versioning на бакете MinIO —
+# доступно только при создании бакета, см. deploy/minio/init-bucket.sh
+./deploy/minio/init-bucket.sh
 
 .venv/bin/python manage.py migrate
 .venv/bin/python manage.py createsuperuser

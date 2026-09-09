@@ -15,12 +15,52 @@ services:
       timeout: 5s
       retries: 10
 
+  # Пул соединений перед PostgreSQL (снижение риска: явно выделен в стек по
+  # рекомендации ревью, ТЗ 4.8 подразумевает его неявно при HA-переключении
+  # Patroni). Приложение пока подключено к postgres напрямую — маршрутизация
+  # через pgbouncer (порт 6432) переключается на Этапе 4 вместе с Patroni.
+  pgbouncer:
+    image: edoburu/pgbouncer:1.21.0
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER:-bz_get}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-bz_get}
+      DB_NAME: ${POSTGRES_DB:-bz_get}
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      ADMIN_USERS: ${POSTGRES_USER:-bz_get}
+    ports:
+      - "6432:6432"
+    depends_on:
+      - postgres
+
+  # etcd — распределённое хранилище консенсуса для Patroni (ТЗ 4.9). Здесь —
+  # одноузловая dev-конфигурация; кластер из 3+ узлов настраивается на Этапе 4.
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    environment:
+      ETCD_NAME: etcd0
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd_data:/etcd-data
+
+  # MinIO Community Edition (AGPLv3) — решение риск-ревью вместо коммерческой
+  # AIStor, см. STACK.md → «Лицензии». Distributed mode + Erasure Coding
+  # (ТЗ 4.9) здесь эмулированы на 4 локальных дисках одного узла — реальный
+  # многоузловой кластер настраивается на Этапе 4. Object Locking (WORM) и
+  # Versioning на бакете включаются отдельно при создании бакета
+  # (`--with-lock`), см. deploy/minio/init-bucket.sh.
   minio:
-    # Целевая версия — MinIO AIStor RELEASE.2026-09-07T08-39-31Z (см. STACK.md).
-    # Реестр/образ AIStor у поставщика может отличаться от community minio/minio —
-    # уточнить точный путь образа и лицензионные условия у DevOps перед прод-развёртыванием.
-    image: minio/minio:RELEASE.2026-09-07T08-39-31Z
-    command: server /data --console-address ":9001"
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data{1...4} --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-bz_get}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-bz_get_secret}
@@ -28,7 +68,24 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio_data:/data
+      - minio_data1:/data1
+      - minio_data2:/data2
+      - minio_data3:/data3
+      - minio_data4:/data4
+
+  # Разовая утилита для настройки бакета MinIO (Object Locking/WORM,
+  # Versioning) — не запускается автоматически с `up`, см.
+  # deploy/minio/init-bucket.sh.
+  mc:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    profiles: ["tools"]
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-bz_get}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-bz_get_secret}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-bz-get-documents}
+    depends_on:
+      - minio
 
   redis:
     image: redis:8.10-alpine
@@ -37,7 +94,44 @@ services:
     volumes:
       - redis_data:/data
 
+  # Антивирусная проверка загружаемых файлов (ТЗ 4.7). Демон поднят с
+  # Этапа 1 для раннего тестирования интеграции; вызов clamd из конвейера
+  # загрузки документов реализуется на Этапе 3 (анти-фрод и контроль
+  # целостности). Первый запуск дольше обычного — скачивание баз сигнатур.
+  clamav:
+    image: clamav/clamav:1.4
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav_data:/var/lib/clamav
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-bz_get}
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
-  minio_data:
+  minio_data1:
+  minio_data2:
+  minio_data3:
+  minio_data4:
   redis_data:
+  etcd_data:
+  clamav_data:
+  prometheus_data:
+  grafana_data:
