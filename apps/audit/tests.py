@@ -101,3 +101,24 @@ class AuditLogDatabaseLevelWormTests(TestCase):
             cursor.execute("SELECT object_id FROM audit_auditlog")
             rows = cursor.fetchall()
         self.assertEqual(rows, [("142-п",)])
+
+    def test_raw_sql_truncate_is_rejected_by_db_trigger_when_table_has_rows(self):
+        # BEFORE UPDATE/DELETE — row-level, TRUNCATE вообще не подпадает
+        # под них в Postgres. Нужен отдельный STATEMENT-level триггер
+        # (audit.0005_worm_truncate_trigger) — без него TRUNCATE обошёл бы
+        # WORM-защиту полностью, стерев журнал одной командой.
+        AuditLog.objects.create(event_type=AuditLog.EventType.DOCUMENT_PUBLISHED, object_id="142-п")
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute("TRUNCATE audit_auditlog")
+        self.assertEqual(AuditLog.objects.count(), 1)
+
+    def test_raw_sql_truncate_allowed_when_table_is_empty(self):
+        # DELETE уже невозможен (0003) — единственный способ таблице стать
+        # пустой снова — если в неё ещё никогда не писали. TRUNCATE пустой
+        # таблицы не теряет ни одной записи, поэтому безопасен и намеренно
+        # разрешён — иначе триггер ломает штатный flush Django между
+        # TransactionTestCase-тестами (сам flush использует TRUNCATE).
+        self.assertEqual(AuditLog.objects.count(), 0)
+        with connection.cursor() as cursor:
+            cursor.execute("TRUNCATE audit_auditlog")  # не должно бросать исключение

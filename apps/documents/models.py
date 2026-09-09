@@ -142,6 +142,24 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         super().save(*args, **kwargs)
 
 
+class DocumentRelationQuerySet(models.QuerySet):
+    """bulk_create() запрещён — обнаружение циклов длиной больше одного
+    ребра (apps.documents.services.relation_would_create_cycle) требует
+    вставки по одной связи за раз через .save()/.create(), которые вызывают
+    full_clean(). bulk_create() обходит save() целиком, а проверять цикл
+    для каждого объекта партии независимо недостаточно: цикл может
+    замыкаться связями ВНУТРИ одного пакета (A->B и B->A в одном вызове),
+    и последовательная проверка «текущий объект против уже сохранённого в
+    БД графа» его не увидит, если обе стороны ещё не закоммичены. Честнее
+    запретить путь целиком, чем сделать вид, что он безопасен."""
+
+    def bulk_create(self, objs, *args, **kwargs):
+        raise NotImplementedError(
+            "DocumentRelation.objects.bulk_create() запрещён — проверка ацикличности "
+            "требует создания связей по одной через .save()/.create()."
+        )
+
+
 class DocumentRelation(models.Model):
     """Ориентированный ациклический граф связей версионности (ТЗ 4.2.2)."""
 
@@ -161,6 +179,8 @@ class DocumentRelation(models.Model):
     relation_type = models.CharField(max_length=32, choices=RelationType.choices)
     note = models.TextField(blank=True, verbose_name="Описание затронутых пунктов")
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = DocumentRelationQuerySet.as_manager()
 
     class Meta:
         verbose_name = "Связь версионности"

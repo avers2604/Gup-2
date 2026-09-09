@@ -29,6 +29,21 @@ class Department(UUIDPKModel, TimeStampedModel):
         verbose_name = "Подразделение"
         verbose_name_plural = "Подразделения"
         ordering = ["level", "name"]
+        constraints = [
+            # Неоднозначность путей department_path при импорте персонала
+            # (apps.iam.services._resolve_department резолвит по
+            # name+parent): пока есть только уровни 1-2 (реальные службы
+            # из ТЗ), дублей нет, но при появлении уровня 3-4 («Нарядная»,
+            # «Диспетчерская станция» в разных парках) без этого
+            # ограничения ничего не мешает завести два одноимённых узла
+            # под одним родителем. Добавлено сейчас, не отложено до
+            # появления данных: NULL parent (уровень 1, Аппарат
+            # управления) этим ограничением НЕ защищён — в Postgres NULL
+            # не равен NULL, повторный Аппарат управления с parent=NULL
+            # такой констрейнт не поймает (на практике он один, отдельным
+            # правилом сейчас не покрыто).
+            models.UniqueConstraint(fields=["name", "parent"], name="unique_department_name_per_parent"),
+        ]
 
     def __str__(self):
         return self.name
@@ -96,6 +111,14 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     # 4.6 («Читатель … Куратор … Контролёр/Юрист … Офицер ИБ …
     # Администратор»). Используется для определения «повышения роли» при
     # импорте персонала — не придуман отдельно, только формализован.
+    #
+    # ВАЖНО: Офицер ИБ и Контролёр/Юрист по смыслу — параллельные ветки
+    # аудита (безопасность vs юридическая проверка), а не один выше
+    # другого. Линейная модель делает переход между ними асимметричным
+    # (в одну сторону — «повышение» с audit-записью, в другую — нет).
+    # Не решено самостоятельно — см. STACK.md → «Открытый вопрос:
+    # линейный порядок привилегий ролей», нужно решение Заказчика/ЧТЗ
+    # до того, как такой переход реально пройдёт через импорт.
     ROLE_PRIVILEGE_ORDER = [
         Role.READER, Role.CURATOR, Role.CONTROLLER_LAWYER, Role.SECURITY_OFFICER, Role.ADMINISTRATOR,
     ]
@@ -127,5 +150,17 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         # is_active синхронизируется от него, а не задаётся отдельно, чтобы
         # два поля не могли разъехаться (is_active нужен Django-аутентификации
         # как есть — под него нельзя просто подставить свойство).
+        was_blocked = (
+            type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
+            == self.Status.BLOCKED
+        )
         self.is_active = self.status != self.Status.BLOCKED
         super().save(*args, **kwargs)
+        # Принудительный сброс сессий при блокировке (ТЗ 4.7) — is_active
+        # сам по себе не выкидывает уже вошедшего пользователя, только
+        # запрещает будущий вход. Срабатывает именно на ПЕРЕХОД в blocked,
+        # не на каждое сохранение уже заблокированной записи.
+        if self.status == self.Status.BLOCKED and not was_blocked:
+            from .sessions import force_logout_user
+
+            force_logout_user(self.pk)

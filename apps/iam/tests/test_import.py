@@ -1,9 +1,10 @@
 import io
+import threading
 from unittest import mock
 
 import openpyxl
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 from apps.audit.models import AuditLog
 
@@ -281,3 +282,73 @@ class PersonnelImportReportTests(TestCase):
 
             self.assertIn("0003", errors_content)
             self.assertIn("Несуществующий", errors_content)
+
+
+class PersonnelImportConcurrencyTests(TransactionTestCase):
+    """Уникальный констрейнт tab_number реально есть в БД
+    (iam_user_personnel_number_key), но приложение должно превращать его
+    нарушение в понятную ошибку строки, а не ронять весь импорт (задание:
+    «только уникальный индекс защищает от гонки при параллельном
+    импорте» — сам индекс уже был, здесь проверяется обработка гонки на
+    его фоне). TransactionTestCase + реальные потоки/соединения — как и в
+    ConcurrentStatusTransitionTests, обычный TestCase (одна обёрнутая
+    транзакция) не даёт по-настоящему параллельно попасть в SELECT/INSERT
+    двух вызовов import_personnel."""
+
+    def test_concurrent_import_of_same_new_tab_number_reports_error_not_crash(self):
+        # Не полагаемся на _make_tree()/данные из iam.0002_seed_departments:
+        # TransactionTestCase чистит таблицы через TRUNCATE после теста, а
+        # serialized_rollback (штатный способ пережить это) на практике
+        # конфликтует с пересозданием django_content_type между тестами
+        # (Django сам пересоздаёт content types в post_migrate после
+        # flush, а serialized_rollback пытается восстановить те же строки
+        # поверх — IntegrityError на дубле). Строим дерево локально через
+        # get_or_create — не зависит от того, что уже есть в БД к моменту
+        # запуска этого конкретного теста.
+        head, _ = Department.objects.get_or_create(
+            name="Аппарат управления", level=Department.Level.HEAD_OFFICE
+        )
+        Department.objects.get_or_create(
+            name="Служба движения", level=Department.Level.SERVICE, parent=head
+        )
+        results = []
+        barrier = threading.Barrier(2)
+
+        def worker():
+            try:
+                barrier.wait(timeout=5)
+                report = import_personnel(_build_xlsx([_row(tab_number="0099999")]))
+                results.append(report)
+            finally:
+                from django.db import connection
+
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(User.objects.filter(personnel_number="0099999").count(), 1)
+        self.assertEqual(len(results), 2)  # оба вызова вернулись — ни один не упал исключением наружу
+
+        successes = sum(len(r.successes) for r in results)
+        updates = sum(len(r.updates) for r in results)
+        errors = sum(len(r.errors) for r in results)
+
+        # Ровно один раз запись реально создаётся (INSERT может успешно
+        # пройти только один раз для нового tab_number). Что происходит со
+        # вторым вызовом — недетерминировано и оба исхода корректны:
+        #   а) он успевает увидеть уже созданную запись через свой
+        #      filter().first() и обрабатывает её как upsert (updates=1);
+        #   б) оба вызова проходят filter().first() и full_clean() до того,
+        #      как второй успевает закоммититься, и второй ловит гонку —
+        #      либо на validate_unique() (ValidationError), либо на самом
+        #      constraint БД при INSERT (IntegrityError) — оба варианта
+        #      наш except (ValueError, ValidationError, IntegrityError)
+        #      превращает в errors=1, не в падение всего импорта.
+        # Раньше тест жёстко ожидал только исход (б) и был флейковым —
+        # плавающий тайминг ОС иногда давал (а).
+        self.assertEqual(successes, 1)
+        self.assertEqual(updates + errors, 1)

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import openpyxl
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from apps.audit.models import AuditLog
 
@@ -108,6 +108,14 @@ def _is_role_elevated(previous_role: str, new_role: str) -> bool:
 def _format_error(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return "; ".join(exc.messages)
+    if isinstance(exc, IntegrityError):
+        # Гонка параллельного импорта: между проверкой full_clean() (своим
+        # SELECT) и реальным INSERT другая транзакция успела создать
+        # запись с тем же tab_number — уникальный констрейнт БД
+        # (iam_user_personnel_number_key) отработал как задумано. Строка
+        # помечается ошибкой вместо падения всего импорта — оператор
+        # перезапустит именно её.
+        return "Табельный номер уже создан параллельной операцией импорта — повторите загрузку этой строки."
     return str(exc)
 
 
@@ -213,7 +221,7 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
                             "source": "personnel_import",
                         },
                     )
-        except (ValueError, ValidationError) as exc:
+        except (ValueError, ValidationError, IntegrityError) as exc:
             report.errors.append(ImportRowResult(row_number, tab_number, _format_error(exc)))
             continue
 
