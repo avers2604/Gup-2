@@ -63,14 +63,28 @@ NORMATIVE_DOCUMENT_CATEGORIES = {
 
 
 class RetentionPolicy:
-    __slots__ = ("category", "mode", "period_years", "conditional_on_declassification", "legal_basis")
+    __slots__ = (
+        "category", "mode", "period_years", "conditional_on_declassification", "legal_basis",
+        "is_active", "stage",
+    )
 
-    def __init__(self, category, mode, period_years, conditional_on_declassification, legal_basis):
+    def __init__(
+        self, category, mode, period_years, conditional_on_declassification, legal_basis,
+        *, is_active=True, stage=None,
+    ):
         self.category = category
         self.mode = mode
         self.period_years = period_years  # None = «постоянно»
         self.conditional_on_declassification = conditional_on_declassification
         self.legal_basis = legal_basis
+        # is_active=False — категория заведена в матрице (данные присланы
+        # Заказчиком), но ни одна модель ещё не пишет её на реальные записи:
+        # ни один экран/API не должен предлагать её к выбору, чтобы её
+        # нельзя было присвоить документу «случайно» до того, как для неё
+        # реализована сама карточка (Мастер заполнения, Этап 2). stage —
+        # человекочитаемая пометка, когда это ожидается.
+        self.is_active = is_active
+        self.stage = stage
 
 
 # Данные — дословно из присланной матрицы (типичный срок / режим WORM / основание).
@@ -90,10 +104,12 @@ RETENTION_MATRIX = {
     RetentionCategory.ACTS_INVESTIGATION: RetentionPolicy(
         RetentionCategory.ACTS_INVESTIGATION, RetentionMode.COMPLIANCE, 45, False,
         "ФЗ-125, требования Ространснадзора (45/75 лет — принято 45 как консервативный минимум)",
+        is_active=False, stage="Этап 2 (Мастер заполнения актов)",
     ),
     RetentionCategory.PERMITS_EH: RetentionPolicy(
         RetentionCategory.PERMITS_EH, RetentionMode.GOVERNANCE, 10, False,
         "ПТЭ, требования Ростехнадзора",
+        is_active=False, stage="Этап 2 (Мастер заполнения актов)",
     ),
     RetentionCategory.TEMPLATES_APPROVED: RetentionPolicy(
         RetentionCategory.TEMPLATES_APPROVED, RetentionMode.GOVERNANCE, None, False,
@@ -150,6 +166,76 @@ def resolve_retention_until(
         period_years = _PERSONNEL_ORDER_PERIOD_BEFORE_CUTOFF
 
     return _add_years(reg_date, period_years)
+
+
+def is_retention_still_binding(retention_until: datetime.date | None, *, as_of: datetime.date | None = None) -> bool:
+    """Единственное место, где retention_until полагается сравнивать с
+    датой — весь остальной код должен звать эту функцию, а не писать
+    `if retention_until and retention_until < today` напрямую.
+
+    retention_until=None означает ОДНО из двух: «постоянно» (ORDERS_CORE,
+    TEMPLATES_APPROVED, ARCHIVAL_SCANS) или «срок ещё не может быть
+    посчитан» (ДСП без даты рассекречивания) — в обоих случаях документ
+    остаётся под блокировкой. Голая проверка `if retention_until and ...`
+    трактует NULL как falsy и тем самым как «ограничений нет», что для
+    Object Locking означает практически «можно снимать когда угодно» —
+    ровно обратное задуманному. Эта функция всегда возвращает True для
+    None, чтобы такую ошибку нельзя было допустить по недосмотру."""
+    if retention_until is None:
+        return True
+    if as_of is None:
+        as_of = datetime.date.today()
+    return retention_until >= as_of
+
+
+def is_expired_at_intake(retention_until: datetime.date | None, *, as_of: datetime.date | None = None) -> bool:
+    """True, если вычисленный retention_until уже в прошлом на момент
+    первого сохранения карточки — ожидаемая ситуация при обратной загрузке
+    старых документов с коротким сроком хранения (особенно категория
+    ARCHIVAL_SCANS: сканы «до 2017 года» регистрируются в системе сильно
+    позже даты самого документа). Сам по себе такой случай — не ошибка
+    данных и не повод отклонить сохранение: старый документ закономерно
+    может быть уже «просрочен» по формальному сроку хранения. Но это
+    подлежит явному решению Куратора/Контролёра (снимать ли блокировку
+    сразу, оставлять ли документ вообще), а не тихому прохождению мимо —
+    вызывающий код обязан это поверхность (см. NormativeDocument.save(),
+    которая пишет предупреждающую запись в журнал аудита при первом
+    сохранении с уже просроченным сроком), а не полагаться на то, что
+    дата в прошлом сама по себе что-то запрещает."""
+    if retention_until is None:
+        return False
+    if as_of is None:
+        as_of = datetime.date.today()
+    return retention_until < as_of
+
+
+def object_lock_params_for(policy: RetentionPolicy, retention_until: datetime.date | None) -> dict:
+    """Переводит разрешённую политику + вычисленную дату в точные параметры
+    S3 Object Lock (заголовки x-amz-object-lock-mode /
+    x-amz-object-lock-retain-until-date / x-amz-object-lock-legal-hold) —
+    чистая функция, готовая для вызова из будущего MinIO-клиента (см.
+    чек-лист «живой MinIO» в STACK.md). Сам клиент, загружающий файлы в
+    MinIO, в проекте ещё не реализован — эта функция никуда не подключена,
+    только подготовлена заранее, чтобы матрица не переносилась заново.
+
+    retention_until=None (постоянное или ещё не определённое хранение)
+    сознательно транслируется в legal-hold=ON, а не в retain-until-date с
+    произвольно далёкой датой (например, +100 лет): «далёкая дата» — это
+    подделка постоянства, которая создаёт риск, что кто-то в будущем
+    ошибочно решит, что срок истёк естественным образом, когда наступит
+    выбранная дата. legal-hold не имеет даты истечения в принципе — снять
+    его может только явное административное действие."""
+    if retention_until is None:
+        return {
+            "ObjectLockMode": None,
+            "ObjectLockLegalHoldStatus": "ON",
+            "ObjectLockRetainUntilDate": None,
+        }
+    return {
+        "ObjectLockMode": "GOVERNANCE" if policy.mode == RetentionMode.GOVERNANCE else "COMPLIANCE",
+        "ObjectLockLegalHoldStatus": "OFF",
+        "ObjectLockRetainUntilDate": retention_until.isoformat(),
+    }
 
 
 def suggest_retention_category(*, access_level: str, reg_date: datetime.date) -> str | None:

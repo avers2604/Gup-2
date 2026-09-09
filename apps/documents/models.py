@@ -13,6 +13,7 @@ from .retention import (
     RETENTION_MATRIX,
     RetentionCategory,
     RetentionMode,
+    is_expired_at_intake,
     resolve_retention_until,
 )
 
@@ -131,7 +132,23 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
             })
 
     def save(self, *args, **kwargs):
-        if self.retention_category:
+        # retention_until — юридическая дата, а не производное поле, которое
+        # можно пересчитывать на каждый save(): если бы она пересчитывалась
+        # безусловно (как раньше), достаточно было бы просто сохранить
+        # карточку ещё раз спустя время, чтобы дата "уехала" от исходной
+        # даты присвоения категории вперёд/назад — WORM-хранение подразумевает
+        # фиксированный срок, а не плавающий. Поэтому пересчёт происходит
+        # только при первом сохранении и при фактической смене
+        # retention_category; смена категории — это изменение юридической
+        # классификации и обязана попасть в WORM-журнал аудита (старое и
+        # новое значение), а не пройти тихо.
+        previous_category = (
+            type(self).objects.filter(pk=self.pk).values_list("retention_category", flat=True).first()
+        )
+        is_new = previous_category is None
+        category_changed = is_new or previous_category != self.retention_category
+
+        if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
             self.retention_mode = policy.mode
             self.retention_until = resolve_retention_until(
@@ -139,7 +156,43 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 reg_date=self.reg_date,
                 declassification_date=self.declassification_date,
             )
+
         super().save(*args, **kwargs)
+
+        if not category_changed:
+            return
+
+        if is_new:
+            # Обратная загрузка старого документа с уже истёкшим по матрице
+            # сроком хранения — не ошибка данных (см. retention.is_expired_at_intake),
+            # но и не то, что должно пройти незамеченным: пишем
+            # предупреждающую запись в журнал аудита, чтобы Куратор/Контролёр
+            # приняли осознанное решение, а не узнали об этом случайно.
+            if is_expired_at_intake(self.retention_until):
+                from apps.audit.models import AuditLog
+
+                AuditLog.objects.create(
+                    event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
+                    object_type="NormativeDocument",
+                    object_id=self.reg_number,
+                    details={
+                        "retention_category": self.retention_category,
+                        "retention_until": self.retention_until.isoformat(),
+                    },
+                )
+            return
+
+        from apps.audit.models import AuditLog
+
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
+            object_type="NormativeDocument",
+            object_id=self.reg_number,
+            details={
+                "old_category": previous_category,
+                "new_category": self.retention_category,
+            },
+        )
 
 
 class DocumentRelationQuerySet(models.QuerySet):

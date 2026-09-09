@@ -49,6 +49,12 @@ class AuditLog(models.Model):
         EXPORT_RESTRICTED = "export.restricted", "Выгрузка документа «ДСП»"
         ARCHIVE_DOWNLOAD = "archive.download", "Скачивание архивного бланка"
         USER_ROLE_ELEVATED = "user.role_elevated", "Повышение роли пользователя"
+        DOCUMENT_RETENTION_CATEGORY_CHANGED = (
+            "document.retention_category_changed", "Изменена категория срока хранения"
+        )
+        DOCUMENT_RETENTION_EXPIRED_AT_INTAKE = (
+            "document.retention_expired_at_intake", "Срок хранения уже истёк на момент регистрации"
+        )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.CharField(max_length=64, choices=EventType.choices)
