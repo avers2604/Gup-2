@@ -161,3 +161,32 @@ class ImportThesaurusFileLevelWarningsTests(TestCase):
     def test_small_dataset_warns_th08(self):
         report = import_thesaurus(_file([_entry(id="a", canonical="Единственный термин")]))
         self.assertTrue(any("TH-08" in w for w in report.warnings))
+
+    def test_close_short_forms_warn_th03(self):
+        # "149-фз" и "152-фз" — расстояние Левенштейна 2, оба длиннее
+        # порога (>=5 символов) — реальный риск спутать номер закона.
+        report = import_thesaurus(_file([
+            _entry(id="a", canonical="ФЗ О персональных данных", short_forms=["149-фз"]),
+            _entry(id="b", canonical="ФЗ О безопасности движения", short_forms=["152-фз"]),
+        ]))
+        self.assertTrue(any("TH-03" in w for w in report.warnings))
+
+    def test_registered_th03_pair_does_not_warn(self):
+        report = import_thesaurus(_file(
+            [
+                _entry(id="a", canonical="ФЗ О персональных данных", short_forms=["149-фз"]),
+                _entry(id="b", canonical="ФЗ О безопасности движения", short_forms=["152-фз"]),
+            ],
+            ambiguity_registry=[{"abbr": "149-фз", "candidates": []}],
+        ))
+        self.assertFalse(any("TH-03" in w for w in report.warnings))
+
+    def test_short_abbreviations_below_length_threshold_do_not_warn_th03(self):
+        # Короткие формы (<5 символов) намеренно исключены из TH-03 — см.
+        # комментарий в _check_file_level_rules: расстояние <=2 для них
+        # почти ничего не отсекает и превратило бы предупреждение в шум.
+        report = import_thesaurus(_file([
+            _entry(id="a", canonical="Термин А", short_forms=["ГИ"]),
+            _entry(id="b", canonical="Термин Б", short_forms=["ОК"]),
+        ]))
+        self.assertFalse(any("TH-03" in w for w in report.warnings))

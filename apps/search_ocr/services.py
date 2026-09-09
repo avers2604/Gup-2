@@ -64,6 +64,27 @@ def _normalize(text: str) -> str:
     return text.strip().lower()
 
 
+def _levenshtein(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            current[j] = min(
+                previous[j] + 1,
+                current[j - 1] + 1,
+                previous[j - 1] + cost,
+            )
+        previous = current
+    return previous[-1]
+
+
 def _format_error(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc)
@@ -104,6 +125,45 @@ def _check_file_level_rules(data: dict, report: ThesaurusImportReport) -> None:
                 report.warnings.append(
                     f"TH-02: short_form {sf!r} записи {entry_id!r} совпадает с canonical "
                     f"записи {match_id!r} и не зарегистрирован в ambiguity_registry."
+                )
+
+    # TH-03: пары short_forms с расстоянием Левенштейна <= 2 между собой,
+    # не зарегистрированные в ambiguity_registry, — кандидаты на опечатку
+    # или спутанную аббревиатуру. Порог длины min(len) >= 5 — сознательное
+    # отступление от буквального текста правила (в файле нет нижней
+    # границы длины), проверенное на самом файле, а не выбранное наугад:
+    # для типичных 2-4-символьных аббревиатур (их большинство —
+    # 178 из 215 форм длиннее 2 символов) расстояние <= 2 почти ничего не
+    # отсекает — для двух произвольных 3-символьных строк максимум
+    # возможного расстояния как раз 2-3, проверка выродилась бы в ~300
+    # предупреждений на полностью не связанные по смыслу формы («гэт» и
+    # «пэо») и стала бы шумом, который курато́р быстро научится
+    # игнорировать целиком. При min(len) >= 5 на реальном файле —
+    # 10 пар, и все содержательные (напр. «149-фз»/«152-фз»/«196-фз» —
+    # реальный риск спутать номер закона, «асиит»/«аудит» — визуально
+    # похожие акронимы).
+    short_forms_with_ids = [
+        (_normalize(sf), e.get("id"))
+        for e in entries
+        for sf in (e.get("short_forms", []) or [])
+        if len(_normalize(sf)) >= 5
+    ]
+    reported_pairs: set[tuple[str, str]] = set()
+    for i, (norm_i, id_i) in enumerate(short_forms_with_ids):
+        for norm_j, id_j in short_forms_with_ids[i + 1:]:
+            if id_i == id_j or norm_i == norm_j:
+                continue
+            if norm_i in registered_abbrs or norm_j in registered_abbrs:
+                continue
+            pair_key = tuple(sorted((norm_i, norm_j)))
+            if pair_key in reported_pairs:
+                continue
+            if _levenshtein(norm_i, norm_j) <= 2:
+                reported_pairs.add(pair_key)
+                report.warnings.append(
+                    f"TH-03: short_forms {norm_i!r} (запись {id_i!r}) и {norm_j!r} "
+                    f"(запись {id_j!r}) близки по написанию (Левенштейн <= 2) и не "
+                    "зарегистрированы в ambiguity_registry."
                 )
 
 
