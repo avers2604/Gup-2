@@ -1,0 +1,423 @@
+{
+  "meta": {
+    "title": "Тезаурус отраслевых сокращений и синонимов СПб ГУП «Горэлектротранс»",
+    "system": "АИС «БЗ ГЭТ»",
+    "module": "Search & OCR / Smart Search (лингвистический модуль)",
+    "tz_ref": ["ТЗ 2.2 §4.4.1", "ТЗ 2.2 §4.6.1", "ТЗ 2.2 §3"],
+    "version": "0.9.0-draft",
+    "status": "DRAFT — требует верификации кураторами служб на Этапе 1",
+    "language": "ru",
+    "encoding": "UTF-8",
+    "normalization": {
+      "case": "lower",
+      "strip_chars": ["«", "»", "\"", "№", ".", ",", "  "],
+      "note": "Нормализация применяется к short_forms и synonyms при построении словаря расширения запроса. Каноническая форма сохраняется в исходном виде."
+    },
+    "schema": {
+      "id": "Уникальный slug записи",
+      "canonical": "Каноническая (официальная) форма термина",
+      "category": "Код категории (см. meta.categories)",
+      "service": "Код службы-владельца или null",
+      "short_forms": "Аббревиатуры и шифры — высокий вес при точном совпадении",
+      "synonyms": "Синонимы, разговорные и профессиональные формы",
+      "synonyms_legacy": "Устаревшие обозначения — вес 0.3, только для поиска по историческому фонду",
+      "weight": "Вес расширения запроса 0.0–1.0 (по умолчанию 1.0)",
+      "source": "Источник термина",
+      "ambiguous": "true — аббревиатура конфликтует с другой записью (см. ambiguity_registry)",
+      "status": "draft | verified | rejected"
+    },
+    "categories": {
+      "org.l1": "Аппарат управления (уровень 1)",
+      "org.l2": "Отраслевые службы (уровень 2)",
+      "org.l3.depot": "Обособленные парки (уровень 3)",
+      "org.l3.district": "Районы и дистанции (уровень 3)",
+      "org.l4": "Линейные подразделения (уровень 4)",
+      "doc.type": "Типы нормативно-распорядительных документов",
+      "doc.status": "Статусы жизненного цикла документа",
+      "doc.form": "Бланки, формы актов и протоколов",
+      "tech.vehicle": "Подвижной состав и изготовители",
+      "tech.energy": "Энергохозяйство и контактная сеть",
+      "tech.track": "Путевое хозяйство",
+      "incident": "Происшествия и инциденты",
+      "hse": "Охрана труда, промышленная и пожарная безопасность, БДД",
+      "role.person": "Должности линейного и инженерного персонала",
+      "role.ais": "Роли в АИС «БЗ ГЭТ»",
+      "process": "Производственные процессы",
+      "ais.system": "Термины самой АИС",
+      "reg.external": "Внешние нормативные акты"
+    },
+    "services": {
+      "SD": "Служба движения",
+      "SPS": "Служба подвижного состава",
+      "EKH": "Энергохозяйство (Служба ЭХ)",
+      "SPUT": "Служба пути",
+      "ASIT": "Служба АСиИТ",
+      "OTPB": "Служба ОТ, ПБ и БДД",
+      "IB": "Служба информационной безопасности",
+      "APPARAT": "Аппарат управления",
+      "YUR": "Юридический отдел",
+      "null": "Общепредприятийский термин"
+    },
+    "abbrev_conventions": {
+      "ТМ": "Трамвайный парк. Введено решением Заказчика. В ТЗ 2.2 §4.4.1 использовалось «ТП-1» — сохранено в synonyms_legacy.",
+      "ТБ": "Троллейбусный парк. Введено решением Заказчика.",
+      "СТТП": "Совмещённый трамвайно-троллейбусный парк.",
+      "ТП": "Тяговая подстанция — основное значение аббревиатуры.",
+      "ТО": "Техническое обслуживание — основное значение; «технический осмотр» регистрируется как конфликт.",
+      "ПБ": "Значение зависит от контекста: промышленная или пожарная безопасность — оба сохраняются с равным весом."
+    }
+  },
+
+  "entries": [
+
+    {"id":"apparat_upravleniya","canonical":"Аппарат управления СПб ГУП «Горэлектротранс»","category":"org.l1","service":"APPARAT","short_forms":["ГУП ГЭТ","ГЭТ"],"synonyms":["Горэлектротранс","СПб ГУП Горэлектротранс","предприятие","аппарат предприятия","управление предприятия"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"director","canonical":"Директор СПб ГУП «Горэлектротранс»","category":"org.l1","service":"APPARAT","short_forms":[],"synonyms":["директор предприятия","руководитель предприятия","генеральный директор"],"source":"экспертная оценка","status":"draft"},
+    {"id":"chief_engineer","canonical":"Главный инженер","category":"org.l1","service":"APPARAT","short_forms":["ГИ"],"synonyms":["главный инженер предприятия","технический руководитель","заместитель директора / главный инженер"],"source":"ТЗ 2.2 титульный лист","status":"draft"},
+    {"id":"deputy_exploitation","canonical":"Заместитель директора по эксплуатации","category":"org.l1","service":"APPARAT","short_forms":[],"synonyms":["заместитель директора","зам. по эксплуатации"],"source":"экспертная оценка","status":"draft"},
+    {"id":"kancelyariya","canonical":"Канцелярия","category":"org.l1","service":"APPARAT","short_forms":[],"synonyms":["делопроизводство","сектор документационного обеспечения","ДОУ","служба делопроизводства"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"legal_dept","canonical":"Юридический отдел","category":"org.l1","service":"YUR","short_forms":["ЮО"],"synonyms":["юротдел","юридическая служба","правовое управление","юристы предприятия"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"hr_dept","canonical":"Отдел кадров","category":"org.l1","service":"APPARAT","short_forms":["ОК"],"synonyms":["кадровая служба","служба персонала","кадровый учёт","HR"],"source":"ТЗ 2.2 §4.6.2","status":"draft"},
+    {"id":"planning_dept","canonical":"Планово-экономический отдел","category":"org.l1","service":"APPARAT","short_forms":["ПЭО"],"synonyms":["плановый отдел","планово-экономическая служба","служба планирования"],"source":"экспертная оценка","status":"draft"},
+    {"id":"supply_dept","canonical":"Служба материально-технического снабжения","category":"org.l1","service":"APPARAT","short_forms":["МТС"],"synonyms":["снабжение","отдел снабжения","складское хозяйство","служба закупок"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"svc_sd","canonical":"Служба движения","category":"org.l2","service":"SD","short_forms":["СД","СлД"],"synonyms":["служба движения ГЭТ","движенцы","служба организации движения"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"svc_sps","canonical":"Служба подвижного состава","category":"org.l2","service":"SPS","short_forms":["СПС"],"synonyms":["служба ПС","служба подвижного состава ГЭТ","трамвайные и троллейбусные парки"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"svc_ekh","canonical":"Энергохозяйство","category":"org.l2","service":"EKH","short_forms":["ЭХ"],"synonyms":["Служба ЭХ","энергохозяйство ГЭТ","энергослужба","служба энергохозяйства"],"source":"ТЗ 2.2 §3, §4.4.1","status":"draft"},
+    {"id":"svc_sput","canonical":"Служба пути","category":"org.l2","service":"SPUT","short_forms":["СП"],"synonyms":["служба пути ГЭТ","путейцы","путевая служба"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"svc_asit","canonical":"Служба АСиИТ","category":"org.l2","service":"ASIT","short_forms":["АСиИТ","Служба ИТ"],"synonyms":["служба автоматизированных систем и информационных технологий","ИТ-служба","служба информационных технологий","начальник Службы информационных технологий"],"source":"ТЗ 2.2 §3, титульный лист","status":"draft"},
+    {"id":"svc_otpb","canonical":"Служба ОТ, ПБ и БДД","category":"org.l2","service":"OTPB","short_forms":["ОТ ПБ БДД","Служба ОТ и БДД"],"synonyms":["служба охраны труда, промышленной и пожарной безопасности и безопасности дорожного движения","служба охраны труда","служба безопасности движения"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"svc_ib","canonical":"Служба информационной безопасности","category":"org.l2","service":"IB","short_forms":["ИБ"],"synonyms":["служба ИБ","отдел информационной безопасности","офицер ИБ"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+
+    {"id":"depot_tram_generic","canonical":"Трамвайный парк","category":"org.l3.depot","service":"SPS","short_forms":["ТМ"],"synonyms":["трампарк","трамвайное депо","парк трамвая"],"synonyms_legacy":["ТП"],"source":"решение Заказчика (замена ТП→ТМ); ТЗ 2.2 §4.6.1","status":"draft","ambiguous":true},
+    {"id":"tm_1","canonical":"Трамвайный парк № 1","category":"org.l3.depot","service":"SPS","short_forms":["ТМ-1","ТМ1"],"synonyms":["трамвайный парк 1","первый трамвайный парк","1-й трамвайный парк"],"synonyms_legacy":["ТП-1","ТП1"],"source":"ТЗ 2.2 §4.6.1; шифр ТМ по решению Заказчика","status":"draft"},
+    {"id":"tm_3","canonical":"Трамвайный парк № 3","category":"org.l3.depot","service":"SPS","short_forms":["ТМ-3","ТМ3"],"synonyms":["трамвайный парк 3","третий трамвайный парк","3-й трамвайный парк"],"synonyms_legacy":["ТП-3","ТП3"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tm_5","canonical":"Трамвайный парк № 5","category":"org.l3.depot","service":"SPS","short_forms":["ТМ-5","ТМ5"],"synonyms":["трамвайный парк 5","пятый трамвайный парк","5-й трамвайный парк"],"synonyms_legacy":["ТП-5","ТП5"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tm_7","canonical":"Трамвайный парк № 7","category":"org.l3.depot","service":"SPS","short_forms":["ТМ-7","ТМ7"],"synonyms":["трамвайный парк 7","седьмой трамвайный парк","7-й трамвайный парк"],"synonyms_legacy":["ТП-7","ТП7"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tm_8","canonical":"Трамвайный парк № 8","category":"org.l3.depot","service":"SPS","short_forms":["ТМ-8","ТМ8"],"synonyms":["трамвайный парк 8","восьмой трамвайный парк","8-й трамвайный парк"],"synonyms_legacy":["ТП-8","ТП8"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"sttp","canonical":"Совмещённый трамвайно-троллейбусный парк","category":"org.l3.depot","service":"SPS","short_forms":["СТТП"],"synonyms":["совмещённый парк","трамвайно-троллейбусный парк","объединённый парк"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"depot_trolley_generic","canonical":"Троллейбусный парк","category":"org.l3.depot","service":"SPS","short_forms":["ТБ"],"synonyms":["тролпарк","троллейбусное депо","парк троллейбуса"],"source":"решение Заказчика; ТЗ 2.2 §4.6.1","status":"draft","ambiguous":true},
+    {"id":"tb_1","canonical":"Троллейбусный парк № 1","category":"org.l3.depot","service":"SPS","short_forms":["ТБ-1","ТБ1"],"synonyms":["троллейбусный парк 1","первый троллейбусный парк","1-й троллейбусный парк"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tb_2","canonical":"Троллейбусный парк № 2","category":"org.l3.depot","service":"SPS","short_forms":["ТБ-2","ТБ2"],"synonyms":["троллейбусный парк 2","второй троллейбусный парк","2-й троллейбусный парк"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tb_3","canonical":"Троллейбусный парк № 3","category":"org.l3.depot","service":"SPS","short_forms":["ТБ-3","ТБ3"],"synonyms":["троллейбусный парк 3","третий троллейбусный парк","3-й троллейбусный парк"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tb_6","canonical":"Троллейбусный парк № 6","category":"org.l3.depot","service":"SPS","short_forms":["ТБ-6","ТБ6"],"synonyms":["троллейбусный парк 6","шестой троллейбусный парк","6-й троллейбусный парк"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+
+    {"id":"district_ekh","canonical":"Район энергохозяйства","category":"org.l3.district","service":"EKH","short_forms":["Район ЭХ"],"synonyms":["энергоучасток","район ЭХ","участок энергохозяйства"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"district_cable","canonical":"Кабельный район","category":"org.l3.district","service":"EKH","short_forms":["КР"],"synonyms":["кабельный участок","кабельные сети района","кабельная группа"],"source":"ТЗ 2.2 §4.4.1 (уровень 3)","status":"draft"},
+    {"id":"district_traction","canonical":"Тяговый район","category":"org.l3.district","service":"EKH","short_forms":[],"synonyms":["тяговый участок","район тягового электроснабжения"],"source":"экспертная оценка","status":"draft"},
+    {"id":"put_distanciya","canonical":"Путевая дистанция","category":"org.l3.district","service":"SPUT","short_forms":["ПЧ"],"synonyms":["дистанция пути","путевая дистанция ГЭТ","участок пути"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tyagovaya_podstanciya","canonical":"Тяговая подстанция","category":"org.l4","service":"EKH","short_forms":["ТП","ТПС"],"synonyms":["подстанция","тяговая ПС","тяговая подстанция ЭХ","преобразовательная подстанция"],"source":"ТЗ 2.2 §4.6.1, §3","status":"draft","ambiguous":true},
+    {"id":"dispetcherskaya_stanciya","canonical":"Диспетчерская станция","category":"org.l4","service":"SD","short_forms":["ДС"],"synonyms":["диспетчерский пункт","линейная диспетчерская","пост диспетчера"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"centralnaya_dispetcherskaya","canonical":"Центральная диспетчерская служба","category":"org.l4","service":"SD","short_forms":["ЦДС","ЦДП"],"synonyms":["центральный диспетчерский пункт","диспетчерская служба движения","главный диспетчер"],"source":"экспертная оценка","status":"draft"},
+    {"id":"naryadnaya","canonical":"Нарядная","category":"org.l4","service":"SPS","short_forms":[],"synonyms":["комната нарядов","нарядная парка","помещение нарядной"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"ceh_to_tr","canonical":"Цех ТО и ТР","category":"org.l4","service":"SPS","short_forms":["Цех ТО/ТР"],"synonyms":["цех технического обслуживания и текущего ремонта","ремонтный цех","цех ТО","цех ТР"],"source":"ТЗ 2.2 §4.6.1","status":"draft"},
+    {"id":"tehnicheskiy_otdel_parka","canonical":"Технический отдел парка","category":"org.l4","service":"SPS","short_forms":["техотдел"],"synonyms":["технический отдел","техотдел депо","инженерно-техническая служба парка"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"otk","canonical":"Отдел технического контроля","category":"org.l4","service":"SPS","short_forms":["ОТК"],"synonyms":["техконтроль","служба качества парка","контролёр ОТК"],"source":"экспертная оценка","status":"draft"},
+    {"id":"kolonna_voditeley","canonical":"Водительская колонна","category":"org.l4","service":"SD","short_forms":["колонна"],"synonyms":["колонна водителей","маршрутная колонна"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"nrd","canonical":"Нормативно-распорядительный документ","category":"doc.type","service":null,"short_forms":["НРД"],"synonyms":["нормативный документ","нормативный акт","распорядительный документ","документ нормативной базы"],"source":"ТЗ 2.2 §2.1","status":"draft"},
+    {"id":"prikaz_direktora","canonical":"Приказ директора","category":"doc.type","service":"APPARAT","short_forms":["приказ"],"synonyms":["приказ по предприятию","приказ ГЭТ","приказ руководителя","директорский приказ"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"rasporyazhenie","canonical":"Распоряжение","category":"doc.type","service":"APPARAT","short_forms":["распор."],"synonyms":["распоряжение по службе","служебное распоряжение","распоряжение начальника службы"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"polozhenie","canonical":"Положение","category":"doc.type","service":"APPARAT","short_forms":[],"synonyms":["положение о подразделении","положение о службе","положение о порядке"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"sto_predpriyatiya","canonical":"Стандарт предприятия","category":"doc.type","service":"APPARAT","short_forms":["СТО"],"synonyms":["стандарт организации","внутренний стандарт","СТО ГЭТ","стандарт предприятия ГЭТ"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"instrukciya","canonical":"Инструкция","category":"doc.type","service":null,"short_forms":["инстр."],"synonyms":["служебная инструкция","производственная инструкция","инструкция по порядку действий"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"reglament","canonical":"Регламент","category":"doc.type","service":null,"short_forms":[],"synonyms":["регламент взаимодействия","регламент работ","административный регламент"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"iot","canonical":"Инструкция по охране труда","category":"doc.type","service":"OTPB","short_forms":["ИОТ"],"synonyms":["инструкция ОТ","инструкция по технике безопасности","инструкция по охране труда ГЭТ"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"tehnologicheskaya_karta","canonical":"Технологическая карта","category":"doc.type","service":"SPS","short_forms":["ТК","техкарта"],"synonyms":["технологическая карта ТО","карта технологического процесса","карта осмотра"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"cirkulyar_zavoda","canonical":"Циркулярное письмо изготовителя","category":"doc.type","service":"SPS","short_forms":["циркуляр"],"synonyms":["циркулярное письмо","письмо изготовителя","заводской циркуляр","информационное письмо завода"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"lna","canonical":"Локальный нормативный акт","category":"doc.type","service":"YUR","short_forms":["ЛНА"],"synonyms":["локальный акт","внутренний нормативный документ","локальный нормативный документ"],"source":"экспертная оценка","status":"draft"},
+    {"id":"dsp_grif","canonical":"Для служебного пользования","category":"doc.type","service":"IB","short_forms":["ДСП"],"synonyms":["гриф ДСП","документ ДСП","служебная информация ограниченного распространения","ограниченный доступ"],"source":"ТЗ 2.2 §4.2.1, §4.7","status":"draft"},
+    {"id":"proekt_dokumenta","canonical":"Проект документа","category":"doc.type","service":null,"short_forms":["проект"],"synonyms":["черновик","проект приказа","проект НРД","документ в статусе Черновик"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"svodnaya_redakciya","canonical":"Сводная редакция документа","category":"doc.type","service":"YUR","short_forms":[],"synonyms":["консолидированный текст","редакция с учётом изменений","сводный текст","текст с изменениями"],"source":"ТЗ 2.2 §2.1","status":"draft"},
+
+    {"id":"status_deystvuet","canonical":"Действует","category":"doc.status","service":null,"short_forms":[],"synonyms":["действующий документ","актуальный документ","в силе"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"status_deystvuet_s_izm","canonical":"Действует с изменениями","category":"doc.status","service":null,"short_forms":[],"synonyms":["действует в редакции","действует с изм.","с изменениями","частично изменён"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"status_utratil_silu","canonical":"Утратил силу","category":"doc.status","service":null,"short_forms":[],"synonyms":["отменён","недействующий документ","отменённый акт","не применяется","утратил действие"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"status_arhiv","canonical":"Архив","category":"doc.status","service":null,"short_forms":[],"synonyms":["архивный документ","в архиве","архивный фонд"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"status_superseded","canonical":"Заменён новой редакцией","category":"doc.status","service":null,"short_forms":["superseded"],"synonyms":["заменён","замещён новой версией","неактуальная редакция формы"],"source":"ТЗ 2.2 §4.3.1","status":"draft"},
+
+    {"id":"blank_forma","canonical":"Бланк типовой формы","category":"doc.form","service":null,"short_forms":["форма"],"synonyms":["бланк","типовая форма","шаблон документа","чистый бланк","форма акта"],"source":"ТЗ 2.2 §4.3","status":"draft"},
+    {"id":"etalon_zapolneniya","canonical":"Эталонный образец заполнения","category":"doc.form","service":null,"short_forms":["эталон"],"synonyms":["образец заполнения","пример заполнения","эталонный образец","заполненный образец"],"source":"ТЗ 2.2 §4.3.2","status":"draft"},
+    {"id":"akt_zaderzhki_dvizheniya","canonical":"Акт задержки движения","category":"doc.form","service":"SD","short_forms":["АЗД"],"synonyms":["акт задержки","акт о задержке движения","акт задержки трамвая","акт задержки троллейбуса","акт простоя"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"raport_voditelya","canonical":"Рапорт водителя","category":"doc.form","service":"SD","short_forms":["рапорт"],"synonyms":["рапорт водителя трамвая","рапорт водителя троллейбуса","водительский рапорт","докладная водителя"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"zhurnal_instruktazhey","canonical":"Журнал инструктажей","category":"doc.form","service":"OTPB","short_forms":[],"synonyms":["журнал инструктажа","журнал проведения инструктажей","журнал по БДД","журнал регистрации инструктажей"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_shoda","canonical":"Акт схода с рельсов","category":"doc.form","service":"SD","short_forms":["акт схода"],"synonyms":["акт о сходе","акт схода вагона","акт схода подвижного состава","акт о сходе с рельсов"],"source":"ТЗ 2.2 §3, §4.3.2","status":"draft"},
+    {"id":"akt_stolknoveniya","canonical":"Акт столкновения","category":"doc.form","service":"SD","short_forms":[],"synonyms":["акт о столкновении","акт столкновения транспортных средств","акт наезда на препятствие"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_dtp","canonical":"Акт о дорожно-транспортном происшествии","category":"doc.form","service":"OTPB","short_forms":["акт ДТП"],"synonyms":["акт о ДТП","акт дорожной аварии","Акт-ДТП-01"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_priema_peredachi_ps","canonical":"Акт приёма-передачи подвижного состава","category":"doc.form","service":"SPS","short_forms":["акт приёма-передачи"],"synonyms":["акт передачи ПС","акт приёма вагона","акт приёма троллейбуса","акт передачи транспортного средства"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"defektnaya_vedomost","canonical":"Дефектная ведомость","category":"doc.form","service":"SPS","short_forms":["ДВ"],"synonyms":["дефектовка","ведомость дефектов","дефектный лист","ведомость выявленных неисправностей"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"reklamaciya","canonical":"Рекламация","category":"doc.form","service":"SPS","short_forms":[],"synonyms":["акт рекламации","рекламационный акт","претензия изготовителю","гарантийная претензия"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"list_to_1","canonical":"Лист ТО-1","category":"doc.form","service":"SPS","short_forms":["ТО-1","лист ТО-1"],"synonyms":["лист технического обслуживания 1","ежедневное ТО","ЕТО","листок ТО-1"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"list_to_2","canonical":"Лист ТО-2","category":"doc.form","service":"SPS","short_forms":["ТО-2","лист ТО-2"],"synonyms":["лист технического обслуживания 2","периодическое ТО","листок ТО-2"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"naryad_dopusk","canonical":"Наряд-допуск","category":"doc.form","service":"EKH","short_forms":["НД","наряд"],"synonyms":["допуск","наряд на работы","наряд-допуск на работы в электроустановках","наряд-допуск на работы на контактной сети"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_povrezhdeniya_kabelya","canonical":"Акт повреждения кабельной линии","category":"doc.form","service":"EKH","short_forms":["акт повреждения КЛ"],"synonyms":["акт о повреждении кабеля","акт повреждения кабеля","акт аварийного отключения КЛ"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"protokol_ispytaniy","canonical":"Протокол испытаний","category":"doc.form","service":"EKH","short_forms":[],"synonyms":["протокол электроиспытаний","протокол испытаний электрооборудования","испытательный протокол","протокол замеров"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_promera_puti","canonical":"Акт промера пути","category":"doc.form","service":"SPUT","short_forms":["акт промера"],"synonyms":["акт промера колеи","промер пути","акт замера путей","акт проверки геометрических параметров пути"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"defektny_akt_relsov","canonical":"Дефектный акт рельсов","category":"doc.form","service":"SPUT","short_forms":["дефектный акт"],"synonyms":["акт о дефекте рельса","дефект рельсов","акт выявления дефекта рельса"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_priemki_uchastka","canonical":"Акт приёмки отремонтированного участка","category":"doc.form","service":"SPUT","short_forms":["акт приёмки"],"synonyms":["акт приёмки работ","акт приёмки участка","акт приёмки после ремонта"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_osmotra_strelok","canonical":"Акт осмотра стрелочных переводов","category":"doc.form","service":"SPUT","short_forms":[],"synonyms":["акт осмотра стрелки","акт осмотра стрелочного перевода","стрелочный акт","акт проверки стрелок"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_formy_n1","canonical":"Акт формы Н-1","category":"doc.form","service":"OTPB","short_forms":["Н-1","акт Н-1"],"synonyms":["акт о несчастном случае на производстве","акт Н1","акт о несчастном случае","форма Н-1"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"protokol_proverki_znaniy","canonical":"Протокол проверки знаний комиссией","category":"doc.form","service":"OTPB","short_forms":["протокол проверки знаний"],"synonyms":["протокол экзамена","протокол проверки знаний по охране труда","протокол аттестации","протокол заседания комиссии"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"predpisanie_inzhenera_ot","canonical":"Предписание инженера по охране труда","category":"doc.form","service":"OTPB","short_forms":["предписание"],"synonyms":["предписание по ОТ","предписание инженера ОТ","предписание инспектора по ОТ"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_inspekcii","canonical":"Акт инспекции","category":"doc.form","service":"OTPB","short_forms":[],"synonyms":["акт инспекционной проверки","акт проверки","акт инспекционного контроля","акт контрольной проверки"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"akt_osmotra_ps","canonical":"Акт осмотра подвижного состава","category":"doc.form","service":"SPS","short_forms":["акт осмотра"],"synonyms":["акт осмотра ПС","акт технического осмотра","акт осмотра вагона","акт осмотра троллейбуса"],"source":"экспертная оценка","status":"draft"},
+    {"id":"akt_razgranicheniya","canonical":"Акт разграничения балансовой принадлежности","category":"doc.form","service":"EKH","short_forms":["акт разграничения"],"synonyms":["акт балансовой принадлежности","акт разграничения ответственности","акт эксплуатационной ответственности"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"schema_pitaniya_sekcionirovaniya","canonical":"Схема питания и секционирования","category":"doc.form","service":"EKH","short_forms":["схема питания"],"synonyms":["схема секционирования","однолинейная схема","исполнительная схема ЭХ","схема электроснабжения"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"schema_ks","canonical":"Схема контактной сети","category":"doc.form","service":"EKH","short_forms":["схема КС"],"synonyms":["схема контактной сети","исполнительная схема КС","план контактной сети"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"plan_putevogo_razvitiya","canonical":"План путевого развития","category":"doc.form","service":"SPUT","short_forms":["план пути"],"synonyms":["схема путей","путевая схема","план путей","схема путевого развития"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"shtamp_gost_2104","canonical":"Основная надпись по ГОСТ 2.104","category":"doc.form","service":null,"short_forms":["ГОСТ 2.104","штамп чертежа"],"synonyms":["штамп","основная надпись","рамка чертежа","титульный штамп схемы"],"source":"ТЗ 2.2 §4.4.2 (категория IV)","status":"draft"},
+    {"id":"putevoy_list","canonical":"Путевой лист","category":"doc.form","service":"SD","short_forms":["ПЛ"],"synonyms":["путевой лист трамвая","путевой лист троллейбуса","путёвка","листок учёта работы"],"source":"экспертная оценка","status":"draft","ambiguous":true},
+
+    {"id":"podvizhnoy_sostav","canonical":"Подвижной состав","category":"tech.vehicle","service":"SPS","short_forms":["ПС"],"synonyms":["подвижка","транспортные средства","парк подвижного состава","единица ПС"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"tramvaynyy_vagon","canonical":"Трамвайный вагон","category":"tech.vehicle","service":"SPS","short_forms":["вагон"],"synonyms":["трамвай","вагон трамвая","единица трамвайного парка"],"source":"экспертная оценка","status":"draft"},
+    {"id":"trolleybus","canonical":"Троллейбус","category":"tech.vehicle","service":"SPS","short_forms":[],"synonyms":["троллейбусная машина","единица троллейбусного парка"],"source":"экспертная оценка","status":"draft"},
+    {"id":"bortovoy_nomer","canonical":"Бортовой номер","category":"tech.vehicle","service":"SPS","short_forms":["борт. №","борт №"],"synonyms":["бортовой","учётный номер","инвентарный номер вагона"],"source":"ТЗ 2.2 §4.3.2","status":"draft"},
+    {"id":"zavodskoy_nomer","canonical":"Заводской номер","category":"tech.vehicle","service":"SPS","short_forms":["зав. №"],"synonyms":["серийный номер","заводской номер вагона","номер изготовителя"],"source":"ТЗ 2.2 §4.3.2","status":"draft"},
+    {"id":"tyagovyy_elektrodvigatel","canonical":"Тяговый электродвигатель","category":"tech.vehicle","service":"SPS","short_forms":["ТЭД"],"synonyms":["тяговый двигатель","тяговый мотор","двигатель тяговый"],"source":"ТЗ 2.2 §4.3.2","status":"draft"},
+    {"id":"tokopriemnik","canonical":"Токоприёмник","category":"tech.vehicle","service":"SPS","short_forms":[],"synonyms":["пантограф","полупантограф","бугель","токосъёмник"],"source":"экспертная оценка","status":"draft"},
+    {"id":"shtangovyy_tokopriemnik","canonical":"Штанговый токоприёмник","category":"tech.vehicle","service":"SPS","short_forms":["штанга"],"synonyms":["штанговый токосъёмник","ролик штанги","штанга троллейбуса"],"source":"экспертная оценка","status":"draft"},
+    {"id":"telezhka_vagona","canonical":"Тележка вагона","category":"tech.vehicle","service":"SPS","short_forms":["тележка"],"synonyms":["колёсная тележка","ходовая тележка","ходовая часть"],"source":"экспертная оценка","status":"draft"},
+    {"id":"kolesnaya_para","canonical":"Колёсная пара","category":"tech.vehicle","service":"SPS","short_forms":["КП","колпара"],"synonyms":["колесная пара вагона","ось с колёсами"],"source":"экспертная оценка","status":"draft","ambiguous":true},
+    {"id":"tyagovaya_batareya","canonical":"Тяговая аккумуляторная батарея","category":"tech.vehicle","service":"SPS","short_forms":["Тяговая АКБ"],"synonyms":["тяговая батарея","батарея автономного хода","АКБ автономного хода"],"source":"экспертная оценка","status":"draft"},
+    {"id":"avtonomnyy_hod","canonical":"Автономный ход","category":"tech.vehicle","service":"SPS","short_forms":["АХ"],"synonyms":["режим автономного хода","автономный ход троллейбуса","движение без контактной сети"],"source":"экспертная оценка","status":"draft"},
+    {"id":"specialnyy_vagon","canonical":"Специальный вагон","category":"tech.vehicle","service":"SPS","short_forms":["спецвагон"],"synonyms":["специальный подвижной состав","хозяйственный вагон","служебный вагон"],"source":"экспертная оценка","status":"draft"},
+    {"id":"snegouborochnyy_vagon","canonical":"Снегоуборочный вагон","category":"tech.vehicle","service":"SPS","short_forms":["снегоочиститель"],"synonyms":["снегоуборщик","путевой снегоочиститель","вагон-снегоочиститель"],"source":"экспертная оценка","status":"draft"},
+    {"id":"vagon_laboratoriya","canonical":"Вагон-лаборатория","category":"tech.vehicle","service":"SPUT","short_forms":["дефектоскоп"],"synonyms":["путеизмерительный вагон","вагон-дефектоскоп","измерительная лаборатория"],"source":"экспертная оценка","status":"draft"},
+    {"id":"zavod_pk_ts","canonical":"Петербургский трамвайно-механический завод","category":"tech.vehicle","service":"SPS","short_forms":["ПК ТС"],"synonyms":["завод ПК ТС","изготовитель ПК ТС","Петербургский трамвайно-механический завод"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"zavod_bkm","canonical":"Белкоммунмаш","category":"tech.vehicle","service":"SPS","short_forms":["БКМ"],"synonyms":["завод БКМ","изготовитель БКМ","ОАО Белкоммунмаш"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"zavod_trans_alfa","canonical":"Транс-Альфа","category":"tech.vehicle","service":"SPS","short_forms":["Транс-Альфа"],"synonyms":["завод Транс-Альфа","изготовитель Транс-Альфа","Вологодский завод"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"remontnyy_zavod","canonical":"Ремонтный завод","category":"tech.vehicle","service":"SPS","short_forms":["РМЗ"],"synonyms":["ремонтно-механический завод","завод по ремонту подвижного состава","ремонтное предприятие"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"kontaktnaya_set","canonical":"Контактная сеть","category":"tech.energy","service":"EKH","short_forms":["КС"],"synonyms":["контактная подвеска","контактный провод","сеть контактная"],"source":"ТЗ 2.2 §4.4.1","status":"draft"},
+    {"id":"kontaktnyy_provod","canonical":"Контактный провод","category":"tech.energy","service":"EKH","short_forms":[],"synonyms":["провод контактной сети","МФ-100","медный контактный провод"],"source":"экспертная оценка","status":"draft"},
+    {"id":"tyagovyy_fider","canonical":"Тяговый фидер","category":"tech.energy","service":"EKH","short_forms":["фидер"],"synonyms":["фидер тяговой подстанции","питающий фидер","фидерная линия"],"source":"экспертная оценка","status":"draft"},
+    {"id":"kabelnaya_liniya","canonical":"Кабельная линия","category":"tech.energy","service":"EKH","short_forms":["КЛ"],"synonyms":["кабель","кабельная линия 10 кВ","питающий кабель"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"kabelnaya_mufta","canonical":"Кабельная муфта","category":"tech.energy","service":"EKH","short_forms":["муфта"],"synonyms":["концевая муфта","соединительная муфта","кабельная заделка"],"source":"экспертная оценка","status":"draft"},
+    {"id":"sekcionirovanie_ks","canonical":"Секционирование контактной сети","category":"tech.energy","service":"EKH","short_forms":["секционирование"],"synonyms":["секция контактной сети","секционный участок","деление КС на секции"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"sekcionnyy_razedinitel","canonical":"Секционный разъединитель","category":"tech.energy","service":"EKH","short_forms":["разъединитель"],"synonyms":["РКС","секционный разъединитель КС","моторизованный разъединитель"],"source":"экспертная оценка","status":"draft"},
+    {"id":"pitayushchaya_liniya","canonical":"Питающая линия","category":"tech.energy","service":"EKH","short_forms":[],"synonyms":["питающий кабель ТП","линия питания","питающая линия тяговой подстанции"],"source":"экспертная оценка","status":"draft"},
+    {"id":"sbornye_shiny","canonical":"Сборные шины","category":"tech.energy","service":"EKH","short_forms":["ШС"],"synonyms":["шины","шинный мост","система сборных шин"],"source":"экспертная оценка","status":"draft"},
+    {"id":"vyklyuchatel","canonical":"Выключатель","category":"tech.energy","service":"EKH","short_forms":["ВВ"],"synonyms":["вакуумный выключатель","масляный выключатель","коммутационный аппарат"],"source":"экспертная оценка","status":"draft"},
+    {"id":"silovoy_transformator","canonical":"Силовой трансформатор","category":"tech.energy","service":"EKH","short_forms":["трансформатор"],"synonyms":["тяговый трансформатор","трансформатор ТП","преобразовательный трансформатор"],"source":"экспертная оценка","status":"draft"},
+    {"id":"vypryamitelnyy_agregat","canonical":"Выпрямительный агрегат","category":"tech.energy","service":"EKH","short_forms":["ВА","ППА"],"synonyms":["выпрямитель","преобразовательный агрегат","тяговый преобразователь"],"source":"экспертная оценка","status":"draft","ambiguous":true},
+    {"id":"zazemlyayushchee_ustroystvo","canonical":"Заземляющее устройство","category":"tech.energy","service":"EKH","short_forms":["ЗУ"],"synonyms":["заземление","контур заземления","заземлитель"],"source":"экспертная оценка","status":"draft"},
+    {"id":"rza","canonical":"Релейная защита и автоматика","category":"tech.energy","service":"EKH","short_forms":["РЗА"],"synonyms":["релейная защита","защита электроустановки","автоматика подстанции"],"source":"экспертная оценка","status":"draft"},
+    {"id":"rabota_pod_napryazheniem","canonical":"Работа под напряжением","category":"tech.energy","service":"EKH","short_forms":["РПН"],"synonyms":["работы под напряжением","работа в электроустановках под напряжением"],"source":"экспертная оценка","status":"draft"},
+    {"id":"otklyuchenie_ks","canonical":"Отключение контактной сети","category":"tech.energy","service":"EKH","short_forms":["снятие напряжения"],"synonyms":["отключение КС","обесточивание участка","снятие напряжения с КС"],"source":"экспертная оценка","status":"draft"},
+    {"id":"elektrobezopasnost","canonical":"Электробезопасность","category":"tech.energy","service":"OTPB","short_forms":["ЭБ"],"synonyms":["группа по электробезопасности","группа допуска по ЭБ","электробезопасность персонала"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"putevoe_hozyaystvo","canonical":"Путевое хозяйство","category":"tech.track","service":"SPUT","short_forms":["ПХ"],"synonyms":["путь и путевое хозяйство","путевая инфраструктура","путевое хозяйство ГЭТ"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"rels","canonical":"Рельс","category":"tech.track","service":"SPUT","short_forms":[],"synonyms":["рельсовая нитка","рельсовое звено","элемент верхнего строения пути"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"relsovaya_koleya","canonical":"Рельсовая колея","category":"tech.track","service":"SPUT","short_forms":["колея"],"synonyms":["ширина колеи","промер колеи","геометрия колеи"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"strelochnyy_perevod","canonical":"Стрелочный перевод","category":"tech.track","service":"SPUT","short_forms":["стрелка"],"synonyms":["перевод","стрелочный перевод пути","СП"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"gluhoe_peresechenie","canonical":"Глухое пересечение","category":"tech.track","service":"SPUT","short_forms":["пересечение"],"synonyms":["глухое пересечение путей","крестовина пересечения"],"source":"экспертная оценка","status":"draft"},
+    {"id":"krestovina","canonical":"Крестовина","category":"tech.track","service":"SPUT","short_forms":[],"synonyms":["сердечник крестовины","крестовина стрелочного перевода"],"source":"экспертная оценка","status":"draft"},
+    {"id":"ostryak","canonical":"Остряк","category":"tech.track","service":"SPUT","short_forms":[],"synonyms":["остряк стрелки","остряковый элемент","рамный рельс с остряком"],"source":"экспертная оценка","status":"draft"},
+    {"id":"specialnaya_chast_puti","canonical":"Специальная часть пути","category":"tech.track","service":"SPUT","short_forms":["СЧП","спецчасть"],"synonyms":["спецчасть пути","специальная часть","спецчастей"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"shpala","canonical":"Шпала","category":"tech.track","service":"SPUT","short_forms":[],"synonyms":["рельсовая опора","лежень","шпальная решётка"],"source":"экспертная оценка","status":"draft"},
+    {"id":"ballastnyy_sloy","canonical":"Балластный слой","category":"tech.track","service":"SPUT","short_forms":["балласт"],"synonyms":["балластная призма","щебёночный балласт","балластное основание"],"source":"экспертная оценка","status":"draft"},
+    {"id":"styk_relsov","canonical":"Стык рельсов","category":"tech.track","service":"SPUT","short_forms":["стык"],"synonyms":["стыковое соединение","стыковой зазор","рельсовый стык"],"source":"экспертная оценка","status":"draft"},
+    {"id":"temperaturnyy_rezhim_relsov","canonical":"Температурный режим рельсов","category":"tech.track","service":"SPUT","short_forms":["температурный режим"],"synonyms":["температурный зазор","температурные напряжения в рельсах","режим закрепления рельсов"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"defekt_relsa","canonical":"Дефект рельса","category":"tech.track","service":"SPUT","short_forms":["дефект"],"synonyms":["трещина в рельсе","повреждение рельса","выбоина в рельсе"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"iznos_golovki_relsa","canonical":"Износ головки рельса","category":"tech.track","service":"SPUT","short_forms":["износ"],"synonyms":["вертикальный износ","боковой износ","предельный износ головки рельса"],"source":"экспертная оценка","status":"draft"},
+    {"id":"krivaya_uchastka_puti","canonical":"Кривая участка пути","category":"tech.track","service":"SPUT","short_forms":["кривая"],"synonyms":["радиус кривой","переходная кривая","криволинейный участок"],"source":"экспертная оценка","status":"draft"},
+    {"id":"remont_puti","canonical":"Ремонт пути","category":"tech.track","service":"SPUT","short_forms":["ТРП","КРП"],"synonyms":["текущий ремонт пути","капитальный ремонт пути","ремонтно-путевые работы"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"dtp","canonical":"Дорожно-транспортное происшествие","category":"incident","service":"OTPB","short_forms":["ДТП"],"synonyms":["авария","дорожная авария","дорожно-транспортное происшествие с участием ПС"],"source":"ТЗ 2.2 §2.1, §3","status":"draft"},
+    {"id":"transportnoe_proisshestvie","canonical":"Транспортное происшествие","category":"incident","service":"SD","short_forms":["ТП"],"synonyms":["происшествие","транспортный инцидент","событие на линии"],"source":"ТЗ 2.2 §4.4.1","status":"draft","ambiguous":true},
+    {"id":"shod_s_relsov","canonical":"Сход с рельсов","category":"incident","service":"SD","short_forms":["сход"],"synonyms":["сошёл вагон","сход подвижного состава","сход с пути"],"source":"ТЗ 2.2 §4.4.1","status":"draft"},
+    {"id":"stolknovenie","canonical":"Столкновение","category":"incident","service":"SD","short_forms":[],"synonyms":["столкновение транспортных средств","наезд на препятствие","боковой удар"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"naezd_na_peshehoda","canonical":"Наезд на пешехода","category":"incident","service":"OTPB","short_forms":["наезд"],"synonyms":["ДТП с пешеходом","наезд на человека","наезд на участника движения"],"source":"экспертная оценка","status":"draft"},
+    {"id":"zaderzhka_dvizheniya","canonical":"Задержка движения","category":"incident","service":"SD","short_forms":["задержка"],"synonyms":["простой","задержка рейса","задержка трамвая","задержка троллейбуса"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"zator_na_linii","canonical":"Затор на линии","category":"incident","service":"SD","short_forms":["затор"],"synonyms":["пробка","скопление подвижного состава","затруднённое движение"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"sboy_dvizheniya","canonical":"Сбой движения","category":"incident","service":"SD","short_forms":["сбой"],"synonyms":["нарушение графика движения","отклонение от расписания","сбой графика"],"source":"экспертная оценка","status":"draft"},
+    {"id":"neschastnyy_sluchay","canonical":"Несчастный случай на производстве","category":"incident","service":"OTPB","short_forms":["НС"],"synonyms":["несчастный случай","травма на производстве","производственная травма"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"avariya_obekta_ekh","canonical":"Авария на объекте энергохозяйства","category":"incident","service":"EKH","short_forms":["авария ЭХ"],"synonyms":["авария на тяговой подстанции","отказ оборудования ЭХ","аварийное отключение"],"source":"экспертная оценка","status":"draft"},
+    {"id":"otkaz_ps_na_linii","canonical":"Отказ подвижного состава на линии","category":"incident","service":"SPS","short_forms":["отказ ПС"],"synonyms":["поломка на линии","сход с линии","неисправность на маршруте","вынужденная остановка"],"source":"экспертная оценка","status":"draft"},
+    {"id":"pozar_vozgoranie","canonical":"Пожар и возгорание","category":"incident","service":"OTPB","short_forms":["пожар"],"synonyms":["возгорание","задымление","пожар на объекте"],"source":"экспертная оценка","status":"draft"},
+    {"id":"incident_obschiy","canonical":"Инцидент","category":"incident","service":null,"short_forms":["ЧП"],"synonyms":["нештатная ситуация","происшествие","инцидент на линии","событие, подлежащее расследованию"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"ohrana_truda","canonical":"Охрана труда","category":"hse","service":"OTPB","short_forms":["ОТ"],"synonyms":["техника безопасности","охрана труда ГЭТ","система управления охраной труда","СУОТ"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"promyshlennaya_bezopasnost","canonical":"Промышленная безопасность","category":"hse","service":"OTPB","short_forms":["ПБ"],"synonyms":["промбезопасность","промышленная безопасность опасных объектов"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"pozharnaya_bezopasnost","canonical":"Пожарная безопасность","category":"hse","service":"OTPB","short_forms":["ПожБ"],"synonyms":["пожарная безопасность объекта","противопожарный режим","стандарт пожарной безопасности"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"bdd","canonical":"Безопасность дорожного движения","category":"hse","service":"OTPB","short_forms":["БДД"],"synonyms":["безопасность движения","дорожная безопасность","обеспечение БДД"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"instruktazh","canonical":"Инструктаж","category":"hse","service":"OTPB","short_forms":[],"synonyms":["вводный инструктаж","повторный инструктаж","целевой инструктаж","внеплановый инструктаж","предрейсовый инструктаж"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"stazhirovka","canonical":"Стажировка","category":"hse","service":"OTPB","short_forms":[],"synonyms":["стажёр","наставничество","дублирование на рабочем месте"],"source":"экспертная оценка","status":"draft"},
+    {"id":"obuchenie_ot","canonical":"Обучение и проверка знаний по охране труда","category":"hse","service":"OTPB","short_forms":["обучение ОТ"],"synonyms":["курсы охраны труда","проверка знаний по ОТ","обучение персонала"],"source":"экспертная оценка","status":"draft"},
+    {"id":"siz","canonical":"Средства индивидуальной защиты","category":"hse","service":"OTPB","short_forms":["СИЗ"],"synonyms":["средства защиты","спецодежда","индивидуальная защита персонала"],"source":"экспертная оценка","status":"draft"},
+    {"id":"attestaciya_personala","canonical":"Аттестация персонала","category":"hse","service":"OTPB","short_forms":["аттестация"],"synonyms":["квалификационная аттестация","аттестация водителя","проверка квалификации"],"source":"экспертная оценка","status":"draft"},
+    {"id":"medosmotr","canonical":"Медицинский осмотр","category":"hse","service":"OTPB","short_forms":["ПМО"],"synonyms":["медосмотр","предрейсовый медосмотр","периодический медосмотр","предсменный медосмотр"],"source":"экспертная оценка","status":"draft"},
+    {"id":"predraysovyy_kontrol","canonical":"Предрейсовый контроль технического состояния","category":"hse","service":"SPS","short_forms":["ПКТС"],"synonyms":["предрейсовый контроль","выпуск на линию","контроль перед выездом"],"source":"экспертная оценка","status":"draft"},
+    {"id":"souot","canonical":"Специальная оценка условий труда","category":"hse","service":"OTPB","short_forms":["СОУТ"],"synonyms":["спецоценка","аттестация рабочих мест","оценка условий труда"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"voditel_tramvaya","canonical":"Водитель трамвая","category":"role.person","service":"SD","short_forms":["водитель"],"synonyms":["вагоновожатый","водитель трамвая 1 класса","водитель ТПС"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"voditel_trolleybusa","canonical":"Водитель троллейбуса","category":"role.person","service":"SD","short_forms":[],"synonyms":["водитель троллейбуса 1 класса","водитель ТБ"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"dispetcher_lineynyy","canonical":"Диспетчер","category":"role.person","service":"SD","short_forms":["ДСП движения"],"synonyms":["линейный диспетчер","диспетчер движения","дежурный диспетчер"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"master_depo","canonical":"Мастер депо","category":"role.person","service":"SPS","short_forms":["мастер"],"synonyms":["мастер участка","мастер цеха","мастер ТО","мастер парка"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"elektromonter_ks","canonical":"Электромонтёр контактной сети","category":"role.person","service":"EKH","short_forms":["электромонтёр КС"],"synonyms":["монтёр контактной сети","электромонтёр ЭХ","монтёр КС"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"elektromonter_tp","canonical":"Электромонтёр тяговой подстанции","category":"role.person","service":"EKH","short_forms":["монтёр ТП"],"synonyms":["электромонтёр ТП","дежурный по подстанции","электромонтёр ЭХ"],"source":"экспертная оценка","status":"draft"},
+    {"id":"slesar_po_remontu_ps","canonical":"Слесарь по ремонту подвижного состава","category":"role.person","service":"SPS","short_forms":["слесарь"],"synonyms":["слесарь-ремонтник","слесарь ПС","ремонтный рабочий"],"source":"экспертная оценка","status":"draft"},
+    {"id":"elektroslesar","canonical":"Электрослесарь","category":"role.person","service":"SPS","short_forms":[],"synonyms":["слесарь-электрик","электрослесарь подземный","слесарь по электрооборудованию"],"source":"экспертная оценка","status":"draft"},
+    {"id":"inzhener_ot","canonical":"Инженер по охране труда","category":"role.person","service":"OTPB","short_forms":["инженер ОТ"],"synonyms":["специалист по охране труда","инженер по технике безопасности","инспектор по ОТ"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"inzhener_bdd","canonical":"Инженер по безопасности дорожного движения","category":"role.person","service":"OTPB","short_forms":["инженер БДД"],"synonyms":["специалист БДД","инженер по безопасности движения"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"metodist_podrazdeleniya","canonical":"Методист подразделения","category":"role.person","service":null,"short_forms":["методист"],"synonyms":["методист службы","инженер техотдела","специалист по методической работе"],"source":"ТЗ 2.2 §4.6.3","status":"draft"},
+    {"id":"nachalnik_sluzhby","canonical":"Начальник службы","category":"role.person","service":null,"short_forms":["нач. службы"],"synonyms":["руководитель службы","начальник отраслевой службы"],"source":"ТЗ 2.2 §4.5","status":"draft"},
+    {"id":"nachalnik_parka","canonical":"Начальник парка","category":"role.person","service":"SPS","short_forms":["начальник депо"],"synonyms":["директор парка","руководитель обособленного подразделения"],"source":"экспертная оценка","status":"draft"},
+    {"id":"glavnyy_mehanik","canonical":"Главный механик","category":"role.person","service":"SPS","short_forms":["главмех"],"synonyms":["главный механик парка","руководитель ремонтной службы"],"source":"экспертная оценка","status":"draft"},
+    {"id":"glavnyy_energetik","canonical":"Главный энергетик","category":"role.person","service":"EKH","short_forms":["главэнергетик"],"synonyms":["главный энергетик предприятия","руководитель энергохозяйства"],"source":"экспертная оценка","status":"draft"},
+
+    {"id":"ais_bz_get","canonical":"АИС «БЗ ГЭТ»","category":"ais.system","service":"ASIT","short_forms":["БЗ ГЭТ"],"synonyms":["база знаний ГЭТ","система базы знаний","автоматизированная информационная система ведения базы знаний"],"source":"ТЗ 2.2 §1.1","status":"draft"},
+    {"id":"bank_blankov","canonical":"Банк бланков и шаблонов","category":"ais.system","service":null,"short_forms":["банк бланков"],"synonyms":["реестр форм","каталог бланков","банк шаблонов","подсистема бланков"],"source":"ТЗ 2.2 §4.3","status":"draft"},
+    {"id":"kartochka_dokumenta","canonical":"Карточка документа","category":"ais.system","service":null,"short_forms":["карточка НРД"],"synonyms":["учётная карточка","карточка нормативного акта","карточка приказа"],"source":"ТЗ 2.2 §4.2.1","status":"draft"},
+    {"id":"graf_svyazey","canonical":"Граф связей версионности","category":"ais.system","service":null,"short_forms":["DAG"],"synonyms":["ориентированный ациклический граф","граф документов","связи документов","дерево версий"],"source":"ТЗ 2.2 §4.2.2","status":"draft"},
+    {"id":"time_travel_query","canonical":"Поиск на дату (исторический срез)","category":"ais.system","service":null,"short_forms":["Time-Travel Query"],"synonyms":["исторический срез","статус на дату","реконструкция статуса","поиск на контрольную дату"],"source":"ТЗ 2.2 §4.2.3","status":"draft"},
+    {"id":"smart_search","canonical":"Интеллектуальный поиск","category":"ais.system","service":null,"short_forms":["Smart Search"],"synonyms":["умный поиск","расширенный поиск","поисковый движок"],"source":"ТЗ 2.2 §4.4","status":"draft"},
+    {"id":"fuzzy_search","canonical":"Нечёткий поиск","category":"ais.system","service":null,"short_forms":["Fuzzy Search"],"synonyms":["поиск с опечатками","поиск по триграммам","приближённый поиск"],"source":"ТЗ 2.2 §4.4.1","status":"draft"},
+    {"id":"tezaurus","canonical":"Тезаурус отраслевых сокращений ГЭТ","category":"ais.system","service":"ASIT","short_forms":["тезаурус"],"synonyms":["словарь сокращений","справочник аббревиатур","синонимический словарь"],"source":"ТЗ 2.2 §4.4.1","status":"draft"},
+    {"id":"ocr_raspoznavanie","canonical":"Оптическое распознавание текста","category":"ais.system","service":null,"short_forms":["OCR"],"synonyms":["распознавание сканов","распознавание текста","оптическое распознавание"],"source":"ТЗ 2.2 §4.5","status":"draft"},
+    {"id":"ocr_confidence_score","canonical":"Оценка уверенности распознавания","category":"ais.system","service":null,"short_forms":["Confidence Score","OCR Score"],"synonyms":["уверенность распознавания","качество распознавания","индекс уверенности"],"source":"ТЗ 2.2 §4.2.1, §4.5","status":"draft"},
+    {"id":"vychitka_ocr","canonical":"Ручная вычитка OCR","category":"ais.system","service":null,"short_forms":["вычитка"],"synonyms":["ручная проверка OCR","коррекция распознанного текста","очередь вычитки"],"source":"ТЗ 2.2 §4.5","status":"draft"},
+    {"id":"oznakomlenie","canonical":"Ознакомление под роспись","category":"ais.system","service":null,"short_forms":["ознакомление"],"synonyms":["лист ознакомления","подтверждение ознакомления","обязательное ознакомление"],"source":"ТЗ 2.2 §2.1","status":"draft"},
+    {"id":"vodyanoy_znak","canonical":"Динамический водяной знак","category":"ais.system","service":"IB","short_forms":["водяной знак"],"synonyms":["watermark","штамп ДСП","динамический штамп","нанесение водяного знака"],"source":"ТЗ 2.2 §4.7","status":"draft"},
+    {"id":"worm_audit","canonical":"Неизменяемый журнал аудита","category":"ais.system","service":"IB","short_forms":["WORM","аудит"],"synonyms":["журнал аудита","журнал событий","лог действий","журнал Write Once Read Many"],"source":"ТЗ 2.2 §4.7","status":"draft"},
+    {"id":"golden_dataset","canonical":"Эталонный набор поисковых запросов","category":"ais.system","service":"ASIT","short_forms":["Golden Dataset"],"synonyms":["золотой датасет","эталонный набор запросов","тестовый набор поиска"],"source":"ТЗ 2.2 §6.2","status":"draft"},
+
+    {"id":"to_obschie","canonical":"Техническое обслуживание","category":"process","service":"SPS","short_forms":["ТО"],"synonyms":["техобслуживание","техническое обслуживание подвижного состава","плановое ТО"],"source":"ТЗ 2.2 §3","status":"draft","ambiguous":true},
+    {"id":"to_1_process","canonical":"Техническое обслуживание № 1","category":"process","service":"SPS","short_forms":["ТО-1"],"synonyms":["ежедневное техническое обслуживание","ЕТО","первое ТО"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"to_2_process","canonical":"Техническое обслуживание № 2","category":"process","service":"SPS","short_forms":["ТО-2"],"synonyms":["периодическое техническое обслуживание","второе ТО"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"tekushchiy_remont","canonical":"Текущий ремонт","category":"process","service":"SPS","short_forms":["ТР"],"synonyms":["текущий ремонт ПС","неплановый ремонт","ремонт по отказу"],"source":"ТЗ 2.2 §4.6.1","status":"draft","ambiguous":true},
+    {"id":"kapitalnyy_remont","canonical":"Капитальный ремонт","category":"process","service":"SPS","short_forms":["КР"],"synonyms":["капитальный ремонт ПС","капремонт","восстановительный ремонт"],"source":"экспертная оценка","status":"draft"},
+    {"id":"tehnicheskiy_osmotr","canonical":"Технический осмотр","category":"process","service":"SPS","short_forms":["техосмотр","ТО"],"synonyms":["обязательный технический осмотр","ГТО","контрольный осмотр"],"source":"экспертная оценка","status":"draft","ambiguous":true},
+    {"id":"vypusk_na_liniyu","canonical":"Выпуск на линию","category":"process","service":"SD","short_forms":["выпуск"],"synonyms":["выпуск подвижного состава на линию","выезд из парка","выпускной наряд"],"source":"экспертная оценка","status":"draft"},
+    {"id":"ppr","canonical":"Планово-предупредительный ремонт","category":"process","service":"SPS","short_forms":["ППР"],"synonyms":["плановый ремонт","система ППР","график плановых ремонтов"],"source":"экспертная оценка","status":"draft"},
+    {"id":"soderzhanie_puti","canonical":"Содержание пути","category":"process","service":"SPUT","short_forms":["содержание пути"],"synonyms":["текущее содержание пути","эксплуатационное содержание","обслуживание путевого хозяйства"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"priyomka_rabot","canonical":"Приёмка работ","category":"process","service":null,"short_forms":["приёмка"],"synonyms":["приёмка выполненных работ","комиссия по приёмке","актирование работ"],"source":"экспертная оценка","status":"draft"},
+    {"id":"rassledovanie_proisshestviya","canonical":"Расследование происшествия","category":"process","service":"OTPB","short_forms":["расследование"],"synonyms":["служебное расследование","комиссия по расследованию","расследование несчастного случая"],"source":"ТЗ 2.2 §3","status":"draft"},
+    {"id":"revisiya_formy","canonical":"Плановая ревизия формы","category":"process","service":null,"short_forms":["ревизия"],"synonyms":["пересмотр бланка","ревизия шаблона","актуализация формы"],"source":"ТЗ 2.2 §4.3.1","status":"draft"},
+
+    {"id":"fz_16_transportnaya_bezopasnost","canonical":"Федеральный закон № 16-ФЗ «О транспортной безопасности»","category":"reg.external","service":"OTPB","short_forms":["16-ФЗ"],"synonyms":["закон о транспортной безопасности","транспортная безопасность","ФЗ-16"],"source":"экспертная оценка","status":"draft"},
+    {"id":"fz_196_bdd","canonical":"Федеральный закон № 196-ФЗ «О безопасности дорожного движения»","category":"reg.external","service":"OTPB","short_forms":["196-ФЗ"],"synonyms":["закон о БДД","ФЗ о безопасности дорожного движения","ФЗ-196"],"source":"экспертная оценка","status":"draft"},
+    {"id":"tk_rf","canonical":"Трудовой кодекс Российской Федерации","category":"reg.external","service":"APPARAT","short_forms":["ТК РФ"],"synonyms":["трудовой кодекс","ТК","трудовое законодательство"],"source":"экспертная оценка","status":"draft"},
+    {"id":"pot_gorodskoy_elektricheskiy_transport","canonical":"Правила по охране труда на городском электрическом транспорте","category":"reg.external","service":"OTPB","short_forms":["ПОТ"],"synonyms":["правила охраны труда ГЭТ","правила по охране труда","ПОТ на городском электрическом транспорте"],"source":"экспертная оценка","status":"draft"},
+    {"id":"fz_152_personalnye_dannye","canonical":"Федеральный закон № 152-ФЗ «О персональных данных»","category":"reg.external","service":"IB","short_forms":["152-ФЗ"],"synonyms":["закон о персональных данных","персональные данные","ПДн","ФЗ-152"],"source":"экспертная оценка","status":"draft"},
+    {"id":"fz_149_informaciya","canonical":"Федеральный закон № 149-ФЗ «Об информации, информационных технологиях и о защите информации»","category":"reg.external","service":"ASIT","short_forms":["149-ФЗ"],"synonyms":["закон об информации","ФЗ об ИТ и защите информации","ФЗ-149"],"source":"экспертная оценка","status":"draft"},
+    {"id":"pravila_perevozok_passazhirov","canonical":"Правила перевозок пассажиров городским наземным электрическим транспортом","category":"reg.external","service":"SD","short_forms":["ППГЭТ"],"synonyms":["правила перевозок","правила перевозок пассажиров","правила пользования транспортом"],"source":"экспертная оценка","status":"draft"},
+    {"id":"chetkoe_tz","canonical":"Частное техническое задание","category":"reg.external","service":"ASIT","short_forms":["ЧТЗ"],"synonyms":["детальное техническое задание","частное ТЗ","ЧТЗ на разработку"],"source":"ТЗ 2.2 §5 Этап 1","status":"draft"}
+  ],
+
+  "ambiguity_registry": [
+    {
+      "abbr": "ТП",
+      "candidates": [
+        {"id": "tyagovaya_podstanciya", "weight": 1.0, "reason": "Основное значение в контексте ЭХ и ТЗ 2.2 §3"},
+        {"id": "transportnoe_proisshestvie", "weight": 0.6, "reason": "Контекст инцидентов Службы движения"},
+        {"id": "depot_tram_generic", "weight": 0.25, "reason": "Устаревшее обозначение трамвайного парка; заменено на ТМ решением Заказчика"}
+      ],
+      "disambiguation": "Разрешение по активной фасете: при фильтре category=incident → транспортное происшествие; при фильтре service=EKH → тяговая подстанция; при фильтре service=SPS → трамвайный парк (legacy). Без фасетов — тяговая подстанция."
+    },
+    {
+      "abbr": "ТБ",
+      "candidates": [
+        {"id": "depot_trolley_generic", "weight": 1.0, "reason": "Основное значение по решению Заказчика"},
+        {"id": "ohrana_truda", "weight": 0.2, "reason": "Разговорное устаревшее «техника безопасности»"}
+      ],
+      "disambiguation": "Приоритет — троллейбусный парк. В запросах с фасетой hse добавляется вторичное расширение."
+    },
+    {
+      "abbr": "ТО",
+      "candidates": [
+        {"id": "to_obschie", "weight": 1.0, "reason": "Основное значение в регламентах ТО и ремонта"},
+        {"id": "tehnicheskiy_osmotr", "weight": 0.6, "reason": "Внешний обязательный техосмотр"}
+      ],
+      "disambiguation": "Оба значения добавляются в расширение запроса с указанными весами; ранжирование определяется гибридной формулой ТЗ 2.2 §4.4.1."
+    },
+    {
+      "abbr": "ПБ",
+      "candidates": [
+        {"id": "promyshlennaya_bezopasnost", "weight": 0.8, "reason": "Составная часть наименования Службы ОТ, ПБ и БДД"},
+        {"id": "pozharnaya_bezopasnost", "weight": 0.8, "reason": "Стандарты пожарной безопасности по ТЗ 2.2 §3"}
+      ],
+      "disambiguation": "Равнозначные кандидаты — расширение по обоим. Требует уточнения у Службы ОТ, ПБ и БДД на Этапе 1."
+    },
+    {
+      "abbr": "СП",
+      "candidates": [
+        {"id": "svc_sput", "weight": 1.0, "reason": "Служба пути — организационный контекст"},
+        {"id": "strelochnyy_perevod", "weight": 0.5, "reason": "Путевой контекст"}
+      ],
+      "disambiguation": "Приоритет — Служба пути; при фасете category=tech.track — стрелочный перевод."
+    },
+    {
+      "abbr": "ТР",
+      "candidates": [
+        {"id": "tekushchiy_remont", "weight": 1.0, "reason": "Основное значение (цех ТО/ТР)"},
+        {"id": "temperaturnyy_rezhim_relsov", "weight": 0.2, "reason": "Редкое сокращение в путевых документах"}
+      ],
+      "disambiguation": "Приоритет — текущий ремонт."
+    },
+    {
+      "abbr": "КР",
+      "candidates": [
+        {"id": "kapitalnyy_remont", "weight": 1.0, "reason": "Основное значение"},
+        {"id": "krestovina", "weight": 0.25, "reason": "Путевой контекст"}
+      ],
+      "disambiguation": "Приоритет — капитальный ремонт."
+    },
+    {
+      "abbr": "КП",
+      "candidates": [
+        {"id": "kolesnaya_para", "weight": 1.0, "reason": "Основное значение в контексте ПС"}
+      ],
+      "disambiguation": "Проверить отсутствие употребления «КП» как «кабельная подстанция» в документах ЭХ."
+    },
+    {
+      "abbr": "ПЛ",
+      "candidates": [
+        {"id": "putevoy_list", "weight": 1.0, "reason": "Основное значение в Службе движения"},
+        {"id": "pitayushchaya_liniya", "weight": 0.3, "reason": "Встречается в схемах ЭХ"}
+      ],
+      "disambiguation": "Разрешение по фасете service."
+    },
+    {
+      "abbr": "ВА",
+      "candidates": [
+        {"id": "vypryamitelnyy_agregat", "weight": 1.0, "reason": "Оборудование тяговой подстанции"},
+        {"id": null, "weight": 0.3, "reason": "Единица измерения вольт-ампер — не является объектом поиска по НРД"}
+      ],
+      "disambiguation": "Только выпрямительный агрегат."
+    },
+    {
+      "abbr": "ДС",
+      "candidates": [
+        {"id": "dispetcherskaya_stanciya", "weight": 1.0, "reason": "Уровень 4 оргструктуры"},
+        {"id": null, "weight": 0.2, "reason": "Возможное употребление как «диспетчерская служба» — покрывается записью centralnaya_dispetcherskaya"}
+      ],
+      "disambiguation": "Приоритет — диспетчерская станция."
+    },
+    {
+      "abbr": "СТТП",
+      "candidates": [
+        {"id": "sttp", "weight": 1.0, "reason": "Единственное значение"}
+      ],
+      "disambiguation": "Конфликтов нет."
+    }
+  ],
+
+  "validation_rules": [
+    {"code": "TH-01", "rule": "canonical уникален по всему файлу (без учёта регистра и нормализации)", "severity": "error"},
+    {"code": "TH-02", "rule": "Ни один short_form не может совпадать с canonical другой записи, если пара не зарегистрирована в ambiguity_registry", "severity": "error"},
+    {"code": "TH-03", "rule": "Пары short_forms с расстоянием Левенштейна ≤ 2 между собой должны быть зарегистрированы в ambiguity_registry или помечены как допустимые варианты написания", "severity": "warning"},
+    {"code": "TH-04", "rule": "Каждая запись содержит не менее одного short_form или synonym", "severity": "error"},
+    {"code": "TH-05", "rule": "category и service принадлежат перечню из meta.categories и meta.services", "severity": "error"},
+    {"code": "TH-06", "rule": "weight ∈ [0.0, 1.0]; synonyms_legacy расширяют запрос только с весом 0.3", "severity": "error"},
+    {"code": "TH-07", "rule": "status=verified проставляется только после подтверждения куратором службы-владельца", "severity": "error"},
+    {"code": "TH-08", "rule": "Итоговое число записей ≥ 150", "severity": "info"}
+  ],
+
+  "loading_notes": {
+    "target_table": "thesaurus_entries (модуль Search & OCR)",
+    "strategy": "upsert по id; при повторной загрузке обновляются synonyms, canonical и weight",
+    "index_rebuild": "После загрузки — асинхронная переиндексация расширенного словаря и сброс кэша поисковых подсказок (Redis)",
+    "owner_role": "Контролер (Юрист) — утверждение; Администратор — техническая загрузка",
+    "audit_event": "THESAURUS_UPDATED (WORM-журнал) с указанием id записей, оператора и diff"
+  }
+}

@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "apps.documents",
     "apps.templates_bank",
     "apps.audit",
+    "apps.search_ocr",
 ]
 
 MIDDLEWARE = [

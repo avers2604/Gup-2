@@ -55,6 +55,7 @@ class AuditLog(models.Model):
         DOCUMENT_RETENTION_EXPIRED_AT_INTAKE = (
             "document.retention_expired_at_intake", "Срок хранения уже истёк на момент регистрации"
         )
+        THESAURUS_UPDATED = "thesaurus.updated", "Обновление тезауруса (импорт)"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.CharField(max_length=64, choices=EventType.choices)
