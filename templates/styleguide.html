@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Стайлгайд · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">DESIGN.md · веб-порт</p>
+  <h1 class="display">Компоненты интерфейса</h1>
+  <p class="muted" style="max-width: 60ch; margin-top: var(--space-2);">
+    Живой каталог токенов и компонентов, перенесённых из настольной дизайн-системы
+    (<code>DESIGN.md</code>) в веб по требованию дополнения к ТЗ, п.3. Палитра и правила
+    ниже не переизобретены — это тот же брендбук ГЭТ, что и в исходном файле.
+  </p>
+
+  <section style="margin-top: var(--space-10);">
+    <h2 class="title">Цвет и семантика статусов</h2>
+    <div class="table-scroll" style="margin-top: var(--space-4);">
+      <table class="table">
+        <thead>
+          <tr><th>Роль</th><th>Образец</th><th>HEX</th><th>Применение в АИС</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Тёмно-синий</td><td><span class="status-pill" style="background:var(--color-navy); color:var(--text-on-navy);">основной</span></td><td class="data">#24305E</td><td>Шапка, навигация, основные поверхности</td></tr>
+          <tr><td>Бирюзовый (accent)</td><td><span class="status-pill" style="background:var(--color-accent); color:#fff;">индикатор</span></td><td class="data">#009CBC</td><td>Только элементы без подписи — точки, полосы, вкладки</td></tr>
+          <tr><td>Бирюзовый (accent_fill)</td><td><span class="status-pill" style="background:var(--color-accent-fill); color:var(--text-on-accent-fill);">кнопка</span></td><td class="data">#00809A</td><td>Главное действие экрана</td></tr>
+          <tr><td>Красный</td><td><span class="status-pill status-pill--revoked">Утратил силу</span></td><td class="data">#E4032E</td><td>Критичные ошибки, блокировки, отменённые акты</td></tr>
+          <tr><td>Жёлтый</td><td><span class="status-pill status-pill--amended">Действует с изм.</span></td><td class="data">#FBBA00</td><td>Исторический срез, предупреждение</td></tr>
+          <tr><td>Лайм</td><td><span class="status-pill status-pill--active">Действует</span></td><td class="data">#AFCB37</td><td>Актуальный бланк, успешное состояние</td></tr>
+          <tr><td>Мята</td><td><span class="status-pill status-pill--draft">Черновик</span></td><td class="data">#8ACBC1</td><td>Информационные элементы, терминалы</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section style="margin-top: var(--space-10);">
+    <h2 class="title">Типографика</h2>
+    <div class="card" style="margin-top: var(--space-4); display:grid; gap: var(--space-3);">
+      <div class="display">Display · Приказ № 210 от 15.06.2026</div>
+      <div class="title">Title · «О регламенте осмотра пути»</div>
+      <div class="heading">Heading · Карточка нормативного документа</div>
+      <div>Body · Служба движения, служба подвижного состава, энергохозяйство, служба пути.</div>
+      <div class="label">Label · Регистрационный номер</div>
+      <div class="caption">Caption · Скан оригинала защищён WORM-блокировкой</div>
+      <div class="data">Data · 142-п · 15.06.2026 · OCR 96.4%</div>
+    </div>
+  </section>
+
+  <section style="margin-top: var(--space-10);">
+    <h2 class="title">Кнопки</h2>
+    <p class="caption" style="margin-top: var(--space-2);">Правило «один акцент на экран» (дополнение к ТЗ, п.3.2): на карточке документа — одна Accent-кнопка, остальные действия — Ghost.</p>
+    <div class="card" style="margin-top: var(--space-4); display:flex; gap: var(--space-3); flex-wrap:wrap;">
+      <button class="btn btn--accent">Скачать актуальную редакцию</button>
+      <button class="btn btn--ghost">Показать историю версий</button>
+      <button class="btn btn--ghost">Копировать ссылку</button>
+      <button class="btn btn--primary">Войти</button>
+      <button class="btn btn--danger">Заблокировать учётную запись</button>
+    </div>
+  </section>
+
+  <section style="margin-top: var(--space-10);">
+    <h2 class="title">Поля и карточка</h2>
+    <div class="card" style="margin-top: var(--space-4); max-width: 420px;">
+      <label class="field-label" for="reg_number">Регистрационный номер</label>
+      <input class="field" id="reg_number" placeholder="142-п" style="margin-bottom: var(--space-4);">
+      <label class="field-label" for="doc_type">Тип документа</label>
+      <select class="field" id="doc_type" style="margin-bottom: var(--space-4);">
+        <option>Приказ директора</option>
+        <option>Распоряжение</option>
+        <option>Положение</option>
+      </select>
+      <span class="field-label">Индексация OCR</span>
+      <div class="progress"><span style="width: 96%;"></span></div>
+      <p class="caption" style="margin-top: var(--space-2);">Confidence Score: 96.4%</p>
+    </div>
+  </section>
+{% endblock %}
