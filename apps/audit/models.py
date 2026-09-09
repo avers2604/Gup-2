@@ -5,13 +5,33 @@ from django.db import models
 
 
 class WORMQuerySet(models.QuerySet):
-    """Запрет массовых update/delete — журнал аудита неизменяем (ТЗ 4.7)."""
+    """Запрет массовых update/delete — журнал аудита неизменяем (ТЗ 4.7).
+
+    bulk_update() перечислен отдельно от update(), потому что Django не
+    выражает его через QuerySet.update() — это отдельный метод, который
+    сам строит и выполняет UPDATE-запрос, и переопределение update() его
+    не перехватывает. bulk_create(update_conflicts=True) — по той же
+    причине: это INSERT ... ON CONFLICT DO UPDATE, то есть замаскированный
+    update через видимость INSERT. Обычный bulk_create() (без
+    update_conflicts) — это просто пакетная вставка новых записей и WORM
+    не нарушает, поэтому разрешён."""
 
     def update(self, **kwargs):
         raise PermissionError("Записи журнала аудита WORM неизменяемы: update() запрещён.")
 
     def delete(self):
         raise PermissionError("Записи журнала аудита WORM неизменяемы: delete() запрещён.")
+
+    def bulk_update(self, objs, fields, **kwargs):
+        raise PermissionError("Записи журнала аудита WORM неизменяемы: bulk_update() запрещён.")
+
+    def bulk_create(self, objs, *args, **kwargs):
+        if kwargs.get("update_conflicts"):
+            raise PermissionError(
+                "Записи журнала аудита WORM неизменяемы: "
+                "bulk_create(update_conflicts=True) запрещён."
+            )
+        return super().bulk_create(objs, *args, **kwargs)
 
 
 class AuditLog(models.Model):

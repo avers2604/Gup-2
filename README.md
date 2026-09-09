@@ -72,6 +72,19 @@ docker compose up -d
   Контролёров до появления рабочих мест из ТЗ 4.1).
 - `/styleguide/` — живой каталог компонентов дизайн-системы.
 
+## Разработка
+
+- **Любое изменение моделей — с миграцией в том же коммите.**
+  `.github/workflows/ci.yml` проверяет это шагом
+  `manage.py makemigrations --check --dry-run`: PR с расхождением модели
+  и миграции не пройдёт CI.
+- Тесты: `python manage.py test`. С отчётом о покрытии (только пакет
+  `apps/`, конфигурация в `.coveragerc`):
+  ```bash
+  .venv/bin/pip install -r requirements-dev.txt
+  .venv/bin/coverage run manage.py test && .venv/bin/coverage report
+  ```
+
 ## Что уже реализовано (Этап 1)
 
 - Карточка НРД (14 атрибутов ТЗ 4.2.1), граф связей версионности DAG

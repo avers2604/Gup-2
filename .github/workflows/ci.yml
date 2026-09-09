@@ -15,6 +15,15 @@ jobs:
     # PostgreSQL 17/18 (tstzrange/EXCLUDE USING gist/btree_gist доступны
     # с 9.2), поэтому расхождение не должно менять исход этих проверок,
     # но не заменяет проверку на целевой версии перед вводом в ПЭ.
+    #
+    # Права на CREATE EXTENSION (нужны миграции documents.0002_initial,
+    # которая создаёт btree_gist): официальный образ postgres создаёт роль
+    # из POSTGRES_USER суперпользователем, когда это имя отличается от
+    # дефолтного "postgres" — см. https://hub.docker.com/_/postgres,
+    # раздел про POSTGRES_USER. Явно настраивать права не требуется.
+    # (Проверено и локально: даже без SUPERUSER, только с CREATEDB,
+    # миграция тоже проходит — btree_gist помечено "trusted" начиная с
+    # PostgreSQL 13 и доступно владельцу БД без прав суперпользователя.)
     services:
       postgres:
         image: postgres:16
@@ -48,18 +57,24 @@ jobs:
         with:
           # 3.13 — текущий проверенный baseline (STACK.md → «Политика версий»).
           python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
 
       - name: Установить зависимости
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: manage.py check
         run: python manage.py check
 
       - name: Нет неучтённых изменений моделей
+        # Падает, если модель изменена без соответствующей миграции —
+        # миграция должна приезжать в том же коммите/PR, что и модель.
         run: python manage.py makemigrations --check --dry-run
 
       - name: Применить миграции
         run: python manage.py migrate
 
-      - name: Тесты
-        run: python manage.py test
+      - name: Тесты с покрытием
+        run: |
+          coverage run manage.py test
+          coverage report

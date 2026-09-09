@@ -1,5 +1,6 @@
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
+from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 
@@ -131,10 +132,42 @@ class DocumentRelation(models.Model):
     def __str__(self):
         return f"{self.from_document.reg_number} → {self.get_relation_type_display()} → {self.to_document.reg_number}"
 
+    def clean(self):
+        super().clean()
+        # Самоссылку и точный дубль уже ловят CheckConstraint/UniqueConstraint
+        # в Meta (это защита на уровне БД, независимая от Python). Цикл
+        # длиной больше единицы (A -> B -> C -> A) они физически не видят —
+        # SQL CHECK смотрит только на вставляемую строку, не на весь граф.
+        if self.from_document_id and self.to_document_id:
+            from .services import relation_would_create_cycle
+
+            if relation_would_create_cycle(self.from_document_id, self.to_document_id):
+                raise ValidationError(
+                    "Эта связь создаст цикл в графе версионности "
+                    f"({self.from_document_id} -> ... -> {self.to_document_id} уже существует)."
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
 
 class DocumentStatusHistory(models.Model):
     """Темпоральные срезы SCD-2 (ТЗ 4.2.3): tstzrange + EXCLUDE USING gist,
-    исключающий пересечение периодов действия одного документа."""
+    исключающий пересечение периодов действия одного документа.
+
+    Гонка транзакций: EXCLUDE USING gist защищает целостность данных на
+    уровне БД — две параллельные транзакции никогда не закоммитят
+    пересекающиеся периоды одновременно, одна из них гарантированно
+    получит IntegrityError (см. ConcurrentStatusTransitionTests). Но сам
+    по себе constraint не даёт "плавной" семантики перехода: сервис,
+    который будет закрывать текущий период (valid_to) и открывать новый
+    при публикации документа (Этап 2, пока не реализован), должен
+    блокировать строку NormativeDocument через
+    `NormativeDocument.objects.select_for_update()` на время обеих
+    операций — иначе конкурентный переход просто упадёт с ошибкой вместо
+    корректной последовательной обработки, и вызывающему коду нужно будет
+    самому решать, ретраить или нет."""
 
     document = models.ForeignKey(
         NormativeDocument, on_delete=models.CASCADE, related_name="status_history"
