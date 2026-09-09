@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.postgres",
+    "rest_framework",
     "apps.core",
     "apps.iam",
     "apps.documents",
@@ -115,6 +116,20 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# API — сессионная аутентификация (cookie + CSRF), не токен/JWT: система
+# внутренняя (ТЗ 4.6 — «без AD/LDAP», не публичный сервис), уже опирается
+# на Django-сессии для admin и для force_logout_user() при блокировке —
+# токен/JWT потребовал бы отдельного механизма отзыва, который
+# дублировал бы уже работающий session-based.
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
 
 STORAGES = {
     "default": {
