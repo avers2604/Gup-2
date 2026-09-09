@@ -8,6 +8,14 @@ from apps.core.models import TimeStampedModel, UUIDPKModel
 from apps.core.storage import originals_storage, working_storage
 from apps.iam.models import Department
 
+from .retention import (
+    NORMATIVE_DOCUMENT_CATEGORIES,
+    RETENTION_MATRIX,
+    RetentionCategory,
+    RetentionMode,
+    resolve_retention_until,
+)
+
 
 class Tag(models.Model):
     """Справочник тематических тегов (ТЗ 4.2.1, category_tags) — например
@@ -82,6 +90,24 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         verbose_name="OCR Confidence Score",
     )
 
+    # Срок хранения и режим Object Locking (WORM) — apps/documents/retention.py.
+    # Категория указывается человеком при регистрации (юридическая
+    # классификация, не техническая эвристика); mode/until считаются
+    # автоматически из категории в save(), их нельзя выставить вручную.
+    retention_category = models.CharField(
+        max_length=32, choices=RetentionCategory.choices, verbose_name="Категория срока хранения",
+    )
+    retention_mode = models.CharField(
+        max_length=16, choices=RetentionMode.choices, editable=False, verbose_name="Режим WORM",
+    )
+    retention_until = models.DateField(
+        null=True, blank=True, editable=False, verbose_name="Хранить до (NULL = бессрочно/не определено)",
+    )
+    declassification_date = models.DateField(
+        null=True, blank=True, verbose_name="Дата рассекречивания",
+        help_text="Только для документов ДСП — срок хранения отсчитывается от неё, не от reg_date.",
+    )
+
     class Meta:
         verbose_name = "Нормативно-распорядительный документ"
         verbose_name_plural = "Нормативно-распорядительные документы"
@@ -93,6 +119,27 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
 
     def __str__(self):
         return f"{self.reg_number} — {self.title}"
+
+    def clean(self):
+        super().clean()
+        if self.retention_category and self.retention_category not in NORMATIVE_DOCUMENT_CATEGORIES:
+            raise ValidationError({
+                "retention_category": (
+                    "Эта категория срока хранения неприменима к карточке НРД "
+                    "(предназначена для бланков или ещё не реализованной модели актов)."
+                ),
+            })
+
+    def save(self, *args, **kwargs):
+        if self.retention_category:
+            policy = RETENTION_MATRIX[self.retention_category]
+            self.retention_mode = policy.mode
+            self.retention_until = resolve_retention_until(
+                self.retention_category,
+                reg_date=self.reg_date,
+                declassification_date=self.declassification_date,
+            )
+        super().save(*args, **kwargs)
 
 
 class DocumentRelation(models.Model):
