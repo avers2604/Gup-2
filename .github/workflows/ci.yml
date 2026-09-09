@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # postgres:16 — ближайшая версия, доступная как официальный образ на
+    # GitHub Actions без дополнительной настройки; целевая версия по
+    # STACK.md — 18.6. Схема не использует возможностей, специфичных для
+    # PostgreSQL 17/18 (tstzrange/EXCLUDE USING gist/btree_gist доступны
+    # с 9.2), поэтому расхождение не должно менять исход этих проверок,
+    # но не заменяет проверку на целевой версии перед вводом в ПЭ.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: bz_get
+          POSTGRES_USER: bz_get
+          POSTGRES_PASSWORD: bz_get
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bz_get"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+      SECRET_KEY: ci-secret-key
+      DEBUG: "0"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      POSTGRES_DB: bz_get
+      POSTGRES_USER: bz_get
+      POSTGRES_PASSWORD: bz_get
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.13 — текущий проверенный baseline (STACK.md → «Политика версий»).
+          python-version: "3.13"
+
+      - name: Установить зависимости
+        run: pip install -r requirements.txt
+
+      - name: manage.py check
+        run: python manage.py check
+
+      - name: Нет неучтённых изменений моделей
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Применить миграции
+        run: python manage.py migrate
+
+      - name: Тесты
+        run: python manage.py test
