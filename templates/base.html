@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}АИС «БЗ ГЭТ»{% endblock %}</title>
+  {% load static %}
+  <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
+  <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/components.css' %}">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <header class="app-header">
+    <div class="container">
+      <strong>АИС «БЗ ГЭТ»</strong>
+      <nav>
+        <a href="/">Поиск</a>
+        <a href="/">Бланки</a>
+        <a href="/admin/">Администрирование</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container" style="padding-top: var(--space-8); padding-bottom: var(--space-10);">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

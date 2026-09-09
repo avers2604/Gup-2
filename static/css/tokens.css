@@ -1,0 +1,80 @@
+/*
+  Веб-порт токенов DESIGN.md (Tkinter/ttk) для АИС «БЗ ГЭТ».
+  Значения цвета не подобраны заново — взяты из DESIGN.md дословно
+  (сам DESIGN.md берёт их из брендбука предприятия с CMYK).
+  Дополнение к ТЗ п.3.1 требует тех же цветов и той же семантики статусов
+  для веб- и терминальных сценариев — здесь она сохранена один в один.
+*/
+
+:root {
+  /* Фирменная палитра ГЭТ — одинакова в обеих темах, меняются только
+     нейтральные поверхности и текст (см. правило DESIGN.md о том, что
+     новый цвет вводится только из этой таблицы). */
+  --color-navy: #24305E;
+  --color-accent: #009CBC;       /* только для индикаторов/заливок без подписи — контраст 3.24 */
+  --color-accent-fill: #00809A;  /* для кнопок и заливок с текстом — контраст 4.61 */
+  --color-red: #E4032E;
+  --color-yellow: #FBBA00;
+  --color-lime: #AFCB37;
+  --color-mint: #8ACBC1;
+  --color-grey: #DADADA;
+
+  --text-on-navy: #FFFFFF;
+  --text-on-accent-fill: #FFFFFF;
+  --text-on-red: #FFFFFF;
+  --text-on-yellow: #3A2B00;
+  --text-on-lime: #243000;
+  --text-on-mint: #0C332C;
+
+  /* Нейтральные поверхности — светлая тема */
+  --bg: #F5F6FA;
+  --surface: #FFFFFF;
+  --surface-2: #EEF1F8;
+  --border: #D9DDEC;
+  --text: #1B2140;
+  --text-muted: #565C7B;
+
+  /* Сетка отступов, шаг 4px — DESIGN.md, шкала SPACE */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* Скругления — DESIGN.md: поле 8, кнопка 10, карточка 14 */
+  --radius-field: 8px;
+  --radius-button: 10px;
+  --radius-card: 14px;
+
+  /* Шрифт — DESIGN.md: Moscow Sans, далее Echoes Sans, Segoe UI.
+     Оба — корпоративные/системные шрифты, а не веб-шрифты; стек
+     сохранён как есть, браузер подберёт из того, что реально доступно. */
+  --font-family: "Moscow Sans", "Echoes Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --shadow-card: 0 1px 2px rgba(27, 33, 64, .05), 0 6px 20px -10px rgba(27, 33, 64, .18);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12172E;
+    --surface: #1B2140;
+    --surface-2: #222A4E;
+    --border: #333B63;
+    --text: #F1F2FA;
+    --text-muted: #AEB4D6;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 6px 20px -10px rgba(0, 0, 0, .55);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #12172E;
+  --surface: #1B2140;
+  --surface-2: #222A4E;
+  --border: #333B63;
+  --text: #F1F2FA;
+  --text-muted: #AEB4D6;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 6px 20px -10px rgba(0, 0, 0, .55);
+}
