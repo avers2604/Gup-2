@@ -1,0 +1,10 @@
+# Минимальная dev-конфигурация — самомониторинг Prometheus.
+# Реальные экспортёры (метрики очереди OCR, поисковых промахов, postgres_exporter
+# для кластера Patroni — ТЗ 4.8) добавляются как scrape-задания на Этапе 4.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
