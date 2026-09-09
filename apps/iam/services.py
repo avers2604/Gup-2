@@ -81,9 +81,26 @@ def _resolve_department(path: str) -> Department:
     parent = None
     department = None
     for segment in segments:
-        department = Department.objects.filter(name=segment, parent=parent).first()
-        if department is None:
+        try:
+            # .get(), не filter().first(): UniqueConstraint(name, parent)
+            # на Department (iam.0004) гарантирует не более одной строки
+            # для parent != NULL, так что MultipleObjectsReturned здесь —
+            # не гипотетический случай "на всякий", а сигнал реального
+            # повреждения данных в обход этого констрейнта (например,
+            # прямым SQL) — не должен тихо резолвиться в первую попавшуюся
+            # запись через first(). Для уровня 1 (parent=NULL) констрейнт
+            # НЕ защищает (см. Department.Meta) — MultipleObjectsReturned
+            # там всё ещё теоретически возможен и обрабатывается так же,
+            # явной ошибкой, а не first().
+            department = Department.objects.get(name=segment, parent=parent)
+        except Department.DoesNotExist:
             raise ValueError(f"Подразделение «{segment}» не найдено в пути «{path}».")
+        except Department.MultipleObjectsReturned:
+            raise ValueError(
+                f"Подразделение «{segment}» в пути «{path}» неоднозначно "
+                "(несколько узлов с одинаковым именем у одного родителя) — "
+                "требуется ручное исправление оргструктуры."
+            )
         parent = department
     return department
 
