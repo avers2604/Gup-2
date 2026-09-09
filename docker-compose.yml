@@ -52,12 +52,15 @@ services:
     volumes:
       - etcd_data:/etcd-data
 
+  # MinIO Community Edition (AGPLv3) — решение риск-ревью вместо коммерческой
+  # AIStor, см. STACK.md → «Лицензии». Distributed mode + Erasure Coding
+  # (ТЗ 4.9) здесь эмулированы на 4 локальных дисках одного узла — реальный
+  # многоузловой кластер настраивается на Этапе 4. Object Locking (WORM) и
+  # Versioning на бакете включаются отдельно при создании бакета
+  # (`--with-lock`), см. deploy/minio/init-bucket.sh.
   minio:
-    # Целевая версия — MinIO AIStor RELEASE.2026-09-07T08-39-31Z (см. STACK.md).
-    # Реестр/образ AIStor у поставщика может отличаться от community minio/minio —
-    # уточнить точный путь образа и лицензионные условия у DevOps перед прод-развёртыванием.
-    image: minio/minio:RELEASE.2026-09-07T08-39-31Z
-    command: server /data --console-address ":9001"
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data{1...4} --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-bz_get}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-bz_get_secret}
@@ -65,7 +68,24 @@ services:
       - "9000:9000"
       - "9001:9001"
     volumes:
-      - minio_data:/data
+      - minio_data1:/data1
+      - minio_data2:/data2
+      - minio_data3:/data3
+      - minio_data4:/data4
+
+  # Разовая утилита для настройки бакета MinIO (Object Locking/WORM,
+  # Versioning) — не запускается автоматически с `up`, см.
+  # deploy/minio/init-bucket.sh.
+  mc:
+    image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+    profiles: ["tools"]
+    entrypoint: ["/bin/sh", "-c", "sleep infinity"]
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-bz_get}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-bz_get_secret}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-bz-get-documents}
+    depends_on:
+      - minio
 
   redis:
     image: redis:8.10-alpine
@@ -106,7 +126,10 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
+  minio_data1:
+  minio_data2:
+  minio_data3:
+  minio_data4:
   redis_data:
   etcd_data:
   clamav_data:

@@ -12,11 +12,14 @@ Baseline) и дополнению к нему.
 
 Открытый вопрос №1 плана работ (выбор языка/фреймворка) закрыт Заказчиком:
 Python / Django, модульный монолит (DDD), границы доменов — отдельные
-Django-приложения без прямых импортов друг в друга. Точные версии всего
-стека (Python, Django, PostgreSQL, Patroni, MinIO AIStor, Redis, Celery,
-Tesseract, nginx, pgBackRest) зафиксированы в [`STACK.md`](STACK.md) — там
-же отмечено, где локальная среда разработки отличается от целевой
-(недоступность PostgreSQL 18 и Python 3.14 в песочнице сборки каркаса).
+Django-приложения без прямых импортов друг в друга. Framework
+зафиксирован как **Django 5.2 LTS** (только минорные/патч-обновления
+внутри ветки); Python — связка с ним, текущий базовый вариант **3.13.x**,
+3.14.7 остаётся candidate target до подтверждения совместимости на
+целевой ОС (детали и условия — в `STACK.md`). Точные версии всего
+остального стека (PostgreSQL, Patroni, MinIO, Redis, Celery, Tesseract,
+nginx, pgBackRest) и открытые лицензионные вопросы (Redis/MinIO — AGPLv3)
+зафиксированы в [`STACK.md`](STACK.md).
 
 ## Структура
 
@@ -52,8 +55,12 @@ python3 -m venv .venv
 cp .env.example .env
 # при необходимости отредактируйте параметры подключения к БД
 
-# поднять зависимости локально (Postgres, MinIO, Redis)
+# поднять зависимости локально (Postgres, MinIO, Redis и т.д.)
 docker compose up -d
+
+# один раз: включить Object Locking (WORM) и Versioning на бакете MinIO —
+# доступно только при создании бакета, см. deploy/minio/init-bucket.sh
+./deploy/minio/init-bucket.sh
 
 .venv/bin/python manage.py migrate
 .venv/bin/python manage.py createsuperuser
