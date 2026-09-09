@@ -6,26 +6,9 @@ from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
-from apps.iam.models import Department
-
-from .models import DocumentRelation, DocumentStatusHistory, NormativeDocument
-from .services import relation_would_create_cycle
-
-
-def _make_document(reg_number="142-п", **kwargs):
-    dept, _ = Department.objects.get_or_create(
-        name="Служба движения", defaults={"level": Department.Level.SERVICE}
-    )
-    defaults = dict(
-        reg_number=reg_number,
-        reg_date=datetime.date(2026, 1, 1),
-        effective_date=datetime.date(2026, 1, 2),
-        doc_type=NormativeDocument.DocType.ORDER,
-        title=f"Тестовый документ {reg_number}",
-        issuer_dept=dept,
-    )
-    defaults.update(kwargs)
-    return NormativeDocument.objects.create(**defaults)
+from ..models import DocumentRelation, DocumentStatusHistory, NormativeDocument
+from ..services import relation_would_create_cycle
+from .factories import make_document as _make_document
 
 
 def _dt(*args):
@@ -108,11 +91,15 @@ class DocumentStatusHistoryExclusionConstraintTests(TestCase):
 class DocumentRelationConstraintTests(TestCase):
     """Граф версионности DAG (ТЗ 4.2.2): без петель, дублей и циклов длиннее одного ребра.
 
-    Каждый инвариант проверен дважды — через обычный .save()/.create()
+    Самоссылка и дубль проверены дважды — через обычный .save()/.create()
     (ловит ValidationError на уровне Python, см. DocumentRelation.clean())
-    и через bulk_create() (обходит full_clean(), ловит настоящий
-    IntegrityError от ограничения в БД) — чтобы не полагаться только на
-    Python-валидацию там, где есть constraint в БД."""
+    и через сырой SQL в обход ORM целиком (ловит настоящий IntegrityError
+    от ограничения в БД) — чтобы не полагаться только на Python-валидацию
+    там, где есть constraint в БД. Раньше для DB-уровня использовался
+    bulk_create(), но теперь он сам запрещён (см.
+    DocumentRelationQuerySet.bulk_create в models.py) — сырой SQL здесь
+    даже честнее: проверяет constraint независимо от того, что вообще
+    умеет ORM."""
 
     def test_self_reference_rejected_via_save(self):
         doc = _make_document()
@@ -123,11 +110,14 @@ class DocumentRelationConstraintTests(TestCase):
 
     def test_self_reference_rejected_at_db_level(self):
         doc = _make_document()
-        relation = DocumentRelation(
-            from_document=doc, to_document=doc, relation_type=DocumentRelation.RelationType.CANCELS
-        )
         with self.assertRaises(IntegrityError), transaction.atomic():
-            DocumentRelation.objects.bulk_create([relation])
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO documents_documentrelation "
+                    "(from_document_id, to_document_id, relation_type, note, created_at) "
+                    "VALUES (%s, %s, %s, '', now())",
+                    [doc.pk, doc.pk, DocumentRelation.RelationType.CANCELS],
+                )
 
     def test_duplicate_relation_rejected_via_save(self):
         doc_a = _make_document(reg_number="142-п")
@@ -146,11 +136,27 @@ class DocumentRelationConstraintTests(TestCase):
         DocumentRelation.objects.create(
             from_document=doc_a, to_document=doc_b, relation_type=DocumentRelation.RelationType.CANCELS
         )
-        duplicate = DocumentRelation(
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO documents_documentrelation "
+                    "(from_document_id, to_document_id, relation_type, note, created_at) "
+                    "VALUES (%s, %s, %s, '', now())",
+                    [doc_a.pk, doc_b.pk, DocumentRelation.RelationType.CANCELS],
+                )
+
+    def test_bulk_create_is_blocked(self):
+        # Правило задания: связи создаются только через .save()/.create()
+        # (сервисный слой вызывает проверку цикличности) — прямой
+        # bulk_create() запрещён, а не «работает, но не проверяет».
+        doc_a = _make_document(reg_number="142-п")
+        doc_b = _make_document(reg_number="143-п")
+        relation = DocumentRelation(
             from_document=doc_a, to_document=doc_b, relation_type=DocumentRelation.RelationType.CANCELS
         )
-        with self.assertRaises(IntegrityError), transaction.atomic():
-            DocumentRelation.objects.bulk_create([duplicate])
+        with self.assertRaises(NotImplementedError):
+            DocumentRelation.objects.bulk_create([relation])
+        self.assertEqual(DocumentRelation.objects.count(), 0)
 
     def test_indirect_cycle_of_three_rejected(self):
         # A -> B -> C уже есть; замыкание C -> A создаёт цикл длиной 3,

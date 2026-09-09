@@ -16,10 +16,14 @@ class DocumentStatusHistoryInline(admin.TabularInline):
 
 @admin.register(NormativeDocument)
 class NormativeDocumentAdmin(admin.ModelAdmin):
-    list_display = ("reg_number", "title", "doc_type", "status", "access_level", "issuer_dept", "effective_date")
-    list_filter = ("status", "doc_type", "access_level", "issuer_dept")
+    list_display = (
+        "reg_number", "title", "doc_type", "status", "access_level", "issuer_dept", "effective_date",
+        "retention_category", "retention_mode", "retention_until",
+    )
+    list_filter = ("status", "doc_type", "access_level", "issuer_dept", "retention_category", "retention_mode")
     search_fields = ("reg_number", "title", "summary")
     filter_horizontal = ("applied_depts", "category_tags")
+    readonly_fields = ("retention_mode", "retention_until")
     inlines = [DocumentRelationInline, DocumentStatusHistoryInline]
 
 

@@ -1,7 +1,8 @@
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from .models import Department
+from ..models import Department
 
 
 class DepartmentTreeValidationTests(TestCase):
@@ -87,3 +88,39 @@ class DepartmentTreeValidationTests(TestCase):
         service.full_clean()  # имена никак не участвуют в проверке — не должно упасть
         service.save()
         self.assertEqual(service.parent, head_office)
+
+
+class DepartmentUniqueNamePerParentTests(TestCase):
+    """Неоднозначность путей department_path при импорте персонала:
+    без этого ограничения два узла с одинаковым именем под одним
+    родителем сделали бы department_path нерезолвируемым однозначно.
+    Зафиксировано на уровне БД сейчас, не отложено до появления
+    реальных уровней 3-4 (задание)."""
+
+    def test_duplicate_name_under_same_parent_rejected_at_db_level(self):
+        head = Department.objects.create(name="Аппарат управления", level=Department.Level.HEAD_OFFICE)
+        service = Department.objects.create(
+            name="Служба движения", level=Department.Level.SERVICE, parent=head
+        )
+        Department.objects.create(
+            name="Трамвайный парк №1", level=Department.Level.DEPOT, parent=service
+        )
+        duplicate = Department(name="Трамвайный парк №1", level=Department.Level.DEPOT, parent=service)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            duplicate.save()
+
+    def test_same_name_allowed_under_different_parents(self):
+        # «Нарядная» в разных парках — легитимный случай, не дубль.
+        head = Department.objects.create(name="Аппарат управления", level=Department.Level.HEAD_OFFICE)
+        service = Department.objects.create(
+            name="Служба движения", level=Department.Level.SERVICE, parent=head
+        )
+        depot_1 = Department.objects.create(
+            name="Трамвайный парк №1", level=Department.Level.DEPOT, parent=service
+        )
+        depot_2 = Department.objects.create(
+            name="Трамвайный парк №2", level=Department.Level.DEPOT, parent=service
+        )
+        Department.objects.create(name="Нарядная", level=Department.Level.SITE, parent=depot_1)
+        Department.objects.create(name="Нарядная", level=Department.Level.SITE, parent=depot_2)
+        self.assertEqual(Department.objects.filter(name="Нарядная").count(), 2)
