@@ -48,6 +48,7 @@ class AuditLog(models.Model):
         SESSION_LOGOUT = "session.logout", "Выход из системы"
         EXPORT_RESTRICTED = "export.restricted", "Выгрузка документа «ДСП»"
         ARCHIVE_DOWNLOAD = "archive.download", "Скачивание архивного бланка"
+        USER_ROLE_ELEVATED = "user.role_elevated", "Повышение роли пользователя"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.CharField(max_length=64, choices=EventType.choices)

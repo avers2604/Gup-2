@@ -12,3 +12,4 @@ venv/
 .vscode/
 .coverage
 htmlcov/
+/import_reports/
