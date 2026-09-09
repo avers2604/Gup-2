@@ -131,17 +131,21 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
     workbook = openpyxl.load_workbook(file_obj, data_only=True, read_only=True)
     sheet = workbook.active
 
-    rows = list(sheet.iter_rows(values_only=True))
-    if not rows:
+    row_iter = sheet.iter_rows(values_only=True)
+    try:
+        raw_header = next(row_iter)
+    except StopIteration:
         raise ValidationError("Файл пуст.")
 
-    header = [str(c).strip() if c is not None else "" for c in rows[0]]
-    data_rows = [r for r in rows[1:] if any(c is not None and str(c).strip() != "" for c in r)]
-
-    if len(data_rows) > MAX_ROWS:
-        raise ValidationError(
-            f"В файле {len(data_rows)} строк — максимум {MAX_ROWS} за одну операцию (ТЗ 4.6)."
-        )
+    header = [str(c).strip() if c is not None else "" for c in raw_header]
+    data_rows = []
+    for row in row_iter:
+        if any(c is not None and str(c).strip() != "" for c in row):
+            if len(data_rows) >= MAX_ROWS:
+                raise ValidationError(
+                    f"В файле больше {MAX_ROWS} строк — максимум за одну операцию (ТЗ 4.6)."
+                )
+            data_rows.append(row)
 
     missing_columns = REQUIRED_COLUMNS - set(header)
     if missing_columns:

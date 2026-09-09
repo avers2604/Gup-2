@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:18.6
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-bz_get}
-      POSTGRES_USER: ${POSTGRES_USER:-bz_get}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bz_get}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bz_get}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER must be set in .env}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -24,14 +24,14 @@ services:
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
-      DB_USER: ${POSTGRES_USER:-bz_get}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-bz_get}
-      DB_NAME: ${POSTGRES_DB:-bz_get}
+      DB_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      DB_NAME: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
       POOL_MODE: transaction
       AUTH_TYPE: scram-sha-256
-      ADMIN_USERS: ${POSTGRES_USER:-bz_get}
+      ADMIN_USERS: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
     ports:
-      - "6432:6432"
+      - "127.0.0.1:6432:6432"
     depends_on:
       - postgres
 
@@ -48,7 +48,7 @@ services:
       ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
       ETCD_INITIAL_CLUSTER: etcd0=http://etcd:2380
     ports:
-      - "2379:2379"
+      - "127.0.0.1:2379:2379"
     volumes:
       - etcd_data:/etcd-data
 
@@ -63,11 +63,11 @@ services:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: server /data{1...4} --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-bz_get}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-bz_get_secret}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data1:/data1
       - minio_data2:/data2
@@ -82,17 +82,17 @@ services:
     profiles: ["tools"]
     entrypoint: ["/bin/sh", "-c", "sleep infinity"]
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-bz_get}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-bz_get_secret}
-      MINIO_BUCKET_ORIGINALS: ${MINIO_BUCKET_ORIGINALS:-bz-get-originals}
-      MINIO_BUCKET_WORKING: ${MINIO_BUCKET_WORKING:-bz-get-working}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
+      MINIO_BUCKET_ORIGINALS: ${MINIO_BUCKET_ORIGINALS:?MINIO_BUCKET_ORIGINALS must be set in .env}
+      MINIO_BUCKET_WORKING: ${MINIO_BUCKET_WORKING:?MINIO_BUCKET_WORKING must be set in .env}
     depends_on:
       - minio
 
   redis:
     image: redis:8.10-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
 
@@ -103,7 +103,7 @@ services:
   clamav:
     image: clamav/clamav:1.4
     ports:
-      - "3310:3310"
+      - "127.0.0.1:3310:3310"
     volumes:
       - clamav_data:/var/lib/clamav
 
@@ -113,14 +113,14 @@ services:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
 
   grafana:
     image: grafana/grafana:11.3.0
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-bz_get}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
     depends_on:

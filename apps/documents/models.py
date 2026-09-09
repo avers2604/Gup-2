@@ -2,7 +2,7 @@ from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.db import models
+from django.db import models, transaction
 
 from apps.core.models import TimeStampedModel, UUIDPKModel
 from apps.core.storage import originals_storage, working_storage
@@ -156,43 +156,47 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 reg_date=self.reg_date,
                 declassification_date=self.declassification_date,
             )
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {
+                    "retention_mode", "retention_until",
+                }
 
-        super().save(*args, **kwargs)
+        with transaction.atomic():
+            super().save(*args, **kwargs)
 
-        if not category_changed:
-            return
+            if not category_changed:
+                return
 
-        if is_new:
-            # Обратная загрузка старого документа с уже истёкшим по матрице
-            # сроком хранения — не ошибка данных (см. retention.is_expired_at_intake),
-            # но и не то, что должно пройти незамеченным: пишем
-            # предупреждающую запись в журнал аудита, чтобы Куратор/Контролёр
-            # приняли осознанное решение, а не узнали об этом случайно.
-            if is_expired_at_intake(self.retention_until):
-                from apps.audit.models import AuditLog
+            if is_new:
+                # Обратная загрузка старого документа с уже истёкшим по матрице
+                # сроком хранения — не ошибка данных (см. retention.is_expired_at_intake),
+                # но и не то, что должно пройти незамеченным: пишем
+                # предупреждающую запись в журнал аудита.
+                if is_expired_at_intake(self.retention_until):
+                    from apps.audit.models import AuditLog
 
-                AuditLog.objects.create(
-                    event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
-                    object_type="NormativeDocument",
-                    object_id=self.reg_number,
-                    details={
-                        "retention_category": self.retention_category,
-                        "retention_until": self.retention_until.isoformat(),
-                    },
-                )
-            return
+                    AuditLog.objects.create(
+                        event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
+                        object_type="NormativeDocument",
+                        object_id=self.reg_number,
+                        details={
+                            "retention_category": self.retention_category,
+                            "retention_until": self.retention_until.isoformat(),
+                        },
+                    )
+                return
 
-        from apps.audit.models import AuditLog
+            from apps.audit.models import AuditLog
 
-        AuditLog.objects.create(
-            event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
-            object_type="NormativeDocument",
-            object_id=self.reg_number,
-            details={
-                "old_category": previous_category,
-                "new_category": self.retention_category,
-            },
-        )
+            AuditLog.objects.create(
+                event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
+                object_type="NormativeDocument",
+                object_id=self.reg_number,
+                details={
+                    "old_category": previous_category,
+                    "new_category": self.retention_category,
+                },
+            )
 
 
 class DocumentRelationQuerySet(models.QuerySet):
@@ -268,8 +272,16 @@ class DocumentRelation(models.Model):
                 )
 
     def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
+        document_ids = {self.from_document_id, self.to_document_id} - {None}
+        with transaction.atomic():
+            if document_ids:
+                list(
+                    NormativeDocument.objects.select_for_update()
+                    .filter(pk__in=document_ids)
+                    .order_by("pk")
+                )
+            self.full_clean()
+            super().save(*args, **kwargs)
 
 
 class DocumentStatusHistory(models.Model):
@@ -308,6 +320,12 @@ class DocumentStatusHistory(models.Model):
                 ],
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            if self.document_id:
+                NormativeDocument.objects.select_for_update().get(pk=self.document_id)
+            super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.document.reg_number}: {self.status} {self.period}"

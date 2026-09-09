@@ -1,4 +1,5 @@
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 
 from .models import Template, TemplateFamily
 
@@ -7,6 +8,15 @@ class TemplateInline(admin.TabularInline):
     model = Template
     extra = 0
     fields = ("version", "change_type", "status", "download_count", "last_reviewed_at")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(TemplateFamily)
@@ -21,3 +31,26 @@ class TemplateAdmin(admin.ModelAdmin):
     list_display = ("family", "version", "change_type", "status", "download_count", "last_reviewed_at")
     list_filter = ("status", "change_type")
     search_fields = ("family__name", "version")
+
+    @staticmethod
+    def _can_manage(request):
+        return request.user.is_superuser or request.user.role in {
+            request.user.Role.CURATOR,
+            request.user.Role.ADMINISTRATOR,
+        }
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and self._can_manage(request)
+
+    def has_change_permission(self, request, obj=None):
+        if obj is not None:
+            return False
+        return super().has_change_permission(request, obj) and self._can_manage(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if change or not self._can_manage(request):
+            raise PermissionDenied("Опубликованную версию шаблона нельзя изменять.")
+        super().save_model(request, obj, form, change)

@@ -35,6 +35,9 @@ _ENTRY_FIELD_DEFAULTS = {
     "status": ThesaurusStatus.DRAFT,
 }
 
+MAX_THESAURUS_FILE_BYTES = 10 * 1024 * 1024
+MAX_THESAURUS_ENTRIES = 10_000
+
 
 @dataclass
 class ThesaurusImportReport:
@@ -107,15 +110,22 @@ def _check_file_level_rules(data: dict, report: ThesaurusImportReport) -> None:
 def import_thesaurus(file_obj, *, actor: User | None = None) -> ThesaurusImportReport:
     """file_obj — путь (str/Path) или файлоподобный объект с JSON тезауруса."""
     if hasattr(file_obj, "read"):
-        raw = file_obj.read()
+        raw = file_obj.read(MAX_THESAURUS_FILE_BYTES + 1)
+        if len(raw) > MAX_THESAURUS_FILE_BYTES:
+            raise ValidationError("Файл тезауруса слишком большой (максимум 10 МБ).")
         text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
     else:
-        text = Path(file_obj).read_text(encoding="utf-8")
+        path = Path(file_obj)
+        if path.stat().st_size > MAX_THESAURUS_FILE_BYTES:
+            raise ValidationError("Файл тезауруса слишком большой (максимум 10 МБ).")
+        text = path.read_text(encoding="utf-8")
 
     data = json.loads(text)
     entries = data.get("entries", [])
     if not entries:
         raise ValidationError("Файл не содержит записей (entries).")
+    if len(entries) > MAX_THESAURUS_ENTRIES:
+        raise ValidationError(f"В файле слишком много записей (максимум {MAX_THESAURUS_ENTRIES}).")
 
     report = ThesaurusImportReport()
     _check_file_level_rules(data, report)
