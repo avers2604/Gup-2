@@ -98,6 +98,15 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.ACTIVE)
 
     totp_enabled = models.BooleanField(default=False, verbose_name="2FA (TOTP) включена")
+    # base32-секрет TOTP (RFC 6238). editable=False — не должен появляться
+    # ни в форме админки, ни в сериализаторе API случайно; читается и
+    # пишется только через apps.iam.totp и вьюхи enroll/confirm.
+    # Заведомо честная граница: хранится в открытом виде в колонке БД, не
+    # зашифрован отдельным ключом — тот же уровень защиты, что у остальных
+    # данных этой таблицы (защита на уровне БД/бэкапов, не колонки).
+    # Шифрование секрета отдельным KMS-ключом — усиление для Этапа 3,
+    # не блокирует включение 2FA сейчас.
+    totp_secret = models.CharField(max_length=64, blank=True, editable=False, verbose_name="Секрет TOTP")
 
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
