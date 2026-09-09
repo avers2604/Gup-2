@@ -56,7 +56,7 @@
       "IB": "Служба информационной безопасности",
       "APPARAT": "Аппарат управления",
       "YUR": "Юридический отдел",
-      null: "Общепредприятийский термин"
+      "null": "Общепредприятийский термин"
     },
     "abbrev_conventions": {
       "ТМ": "Трамвайный парк. Введено решением Заказчика. В ТЗ 2.2 §4.4.1 использовалось «ТП-1» — сохранено в synonyms_legacy.",
@@ -180,7 +180,7 @@
     {"id":"tyagovaya_batareya","canonical":"Тяговая аккумуляторная батарея","category":"tech.vehicle","service":"SPS","short_forms":["Тяговая АКБ"],"synonyms":["тяговая батарея","батарея автономного хода","АКБ автономного хода"],"source":"экспертная оценка","status":"draft"},
     {"id":"avtonomnyy_hod","canonical":"Автономный ход","category":"tech.vehicle","service":"SPS","short_forms":["АХ"],"synonyms":["режим автономного хода","автономный ход троллейбуса","движение без контактной сети"],"source":"экспертная оценка","status":"draft"},
     {"id":"specialnyy_vagon","canonical":"Специальный вагон","category":"tech.vehicle","service":"SPS","short_forms":["спецвагон"],"synonyms":["специальный подвижной состав","хозяйственный вагон","служебный вагон"],"source":"экспертная оценка","status":"draft"},
-    {"id":"snegoуборочный_vagon","canonical":"Снегоуборочный вагон","category":"tech.vehicle","service":"SPS","short_forms":["снегоочиститель"],"synonyms":["снегоуборщик","путевой снегоочиститель","вагон-снегоочиститель"],"source":"экспертная оценка","status":"draft"},
+    {"id":"snegouborochnyy_vagon","canonical":"Снегоуборочный вагон","category":"tech.vehicle","service":"SPS","short_forms":["снегоочиститель"],"synonyms":["снегоуборщик","путевой снегоочиститель","вагон-снегоочиститель"],"source":"экспертная оценка","status":"draft"},
     {"id":"vagon_laboratoriya","canonical":"Вагон-лаборатория","category":"tech.vehicle","service":"SPUT","short_forms":["дефектоскоп"],"synonyms":["путеизмерительный вагон","вагон-дефектоскоп","измерительная лаборатория"],"source":"экспертная оценка","status":"draft"},
     {"id":"zavod_pk_ts","canonical":"Петербургский трамвайно-механический завод","category":"tech.vehicle","service":"SPS","short_forms":["ПК ТС"],"synonyms":["завод ПК ТС","изготовитель ПК ТС","Петербургский трамвайно-механический завод"],"source":"ТЗ 2.2 §3","status":"draft"},
     {"id":"zavod_bkm","canonical":"Белкоммунмаш","category":"tech.vehicle","service":"SPS","short_forms":["БКМ"],"synonyms":["завод БКМ","изготовитель БКМ","ОАО Белкоммунмаш"],"source":"ТЗ 2.2 §3","status":"draft"},
@@ -215,7 +215,7 @@
     {"id":"specialnaya_chast_puti","canonical":"Специальная часть пути","category":"tech.track","service":"SPUT","short_forms":["СЧП","спецчасть"],"synonyms":["спецчасть пути","специальная часть","спецчастей"],"source":"ТЗ 2.2 §3","status":"draft"},
     {"id":"shpala","canonical":"Шпала","category":"tech.track","service":"SPUT","short_forms":[],"synonyms":["рельсовая опора","лежень","шпальная решётка"],"source":"экспертная оценка","status":"draft"},
     {"id":"ballastnyy_sloy","canonical":"Балластный слой","category":"tech.track","service":"SPUT","short_forms":["балласт"],"synonyms":["балластная призма","щебёночный балласт","балластное основание"],"source":"экспертная оценка","status":"draft"},
-    {"id":"стык_relsov","canonical":"Стык рельсов","category":"tech.track","service":"SPUT","short_forms":["стык"],"synonyms":["стыковое соединение","стыковой зазор","рельсовый стык"],"source":"экспертная оценка","status":"draft"},
+    {"id":"styk_relsov","canonical":"Стык рельсов","category":"tech.track","service":"SPUT","short_forms":["стык"],"synonyms":["стыковое соединение","стыковой зазор","рельсовый стык"],"source":"экспертная оценка","status":"draft"},
     {"id":"temperaturnyy_rezhim_relsov","canonical":"Температурный режим рельсов","category":"tech.track","service":"SPUT","short_forms":["температурный режим"],"synonyms":["температурный зазор","температурные напряжения в рельсах","режим закрепления рельсов"],"source":"ТЗ 2.2 §3","status":"draft"},
     {"id":"defekt_relsa","canonical":"Дефект рельса","category":"tech.track","service":"SPUT","short_forms":["дефект"],"synonyms":["трещина в рельсе","повреждение рельса","выбоина в рельсе"],"source":"ТЗ 2.2 §3","status":"draft"},
     {"id":"iznos_golovki_relsa","canonical":"Износ головки рельса","category":"tech.track","service":"SPUT","short_forms":["износ"],"synonyms":["вертикальный износ","боковой износ","предельный износ головки рельса"],"source":"экспертная оценка","status":"draft"},

@@ -3,6 +3,7 @@ import datetime
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
+from apps.audit.models import AuditLog
 from apps.iam.models import Department
 
 from ..models import NormativeDocument
@@ -10,6 +11,9 @@ from ..retention import (
     RETENTION_MATRIX,
     RetentionCategory,
     RetentionMode,
+    is_expired_at_intake,
+    is_retention_still_binding,
+    object_lock_params_for,
     resolve_retention_until,
     suggest_retention_category,
 )
@@ -148,3 +152,192 @@ class NormativeDocumentRetentionFieldTests(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.retention_mode, RetentionMode.COMPLIANCE)
         self.assertIsNone(doc.retention_until)
+
+    def test_resaving_without_category_change_does_not_recompute_retention_until(self):
+        # Раньше retention_until пересчитывался на КАЖДЫЙ save() — дата могла
+        # "уехать", если карточку просто пересохранили спустя время с уже
+        # изменившимся reg_date. Теперь пересчёт — только при первом
+        # сохранении или реальной смене категории.
+        doc = make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+        original_until = doc.retention_until
+        self.assertEqual(original_until, datetime.date(2031, 1, 1))
+
+        doc.reg_date = datetime.date(2000, 1, 1)  # если бы пересчитывалось — дало бы 2005-01-01
+        doc.save()
+        doc.refresh_from_db()
+        self.assertEqual(doc.retention_until, original_until)
+
+    def test_category_change_after_creation_is_audited(self):
+        doc = make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+
+        doc.retention_category = RetentionCategory.ORDERS_CORE
+        doc.save()
+
+        entries = AuditLog.objects.filter(
+            event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
+            object_id=doc.reg_number,
+        )
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().details["old_category"], RetentionCategory.DIRECTIVES_OPERATIONAL)
+        self.assertEqual(entries.first().details["new_category"], RetentionCategory.ORDERS_CORE)
+
+    def test_initial_creation_does_not_log_category_changed(self):
+        # Первое присвоение категории — не "смена", это классификация с нуля.
+        make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED
+            ).exists()
+        )
+
+    def test_resaving_same_category_does_not_log_category_changed(self):
+        doc = make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+        doc.title = "Обновлённое наименование"
+        doc.save()
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED
+            ).exists()
+        )
+
+    def test_expired_at_intake_logs_audit_warning(self):
+        # DIRECTIVES_OPERATIONAL — 5 лет; регистрация "задним числом" с
+        # 2000 годом даёт retention_until=2005-01-01, что уже в прошлом.
+        doc = make_document(
+            reg_number="старый-142",
+            reg_date=datetime.date(2000, 1, 1),
+            retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL,
+        )
+        self.assertEqual(doc.retention_until, datetime.date(2005, 1, 1))
+
+        entries = AuditLog.objects.filter(
+            event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
+            object_id=doc.reg_number,
+        )
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().details["retention_until"], "2005-01-01")
+
+    def test_not_expired_at_intake_does_not_log_warning(self):
+        make_document(retention_category=RetentionCategory.DIRECTIVES_OPERATIONAL)
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE
+            ).exists()
+        )
+
+    def test_permanent_category_never_logs_expired_at_intake(self):
+        # retention_until=None ("постоянно") никогда не может быть "уже
+        # истёкшим" — is_expired_at_intake(None) всегда False.
+        make_document(
+            reg_number="старый-permanent",
+            reg_date=datetime.date(1990, 1, 1),
+            retention_category=RetentionCategory.ORDERS_CORE,
+        )
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE
+            ).exists()
+        )
+
+
+class IsRetentionStillBindingTests(TestCase):
+    """None должен всегда означать «блокировка ещё действует» — не
+    «ограничений нет» (постоянное хранение ИЛИ срок ещё не посчитан, см.
+    docstring функции)."""
+
+    def test_none_is_always_binding(self):
+        self.assertTrue(is_retention_still_binding(None))
+        self.assertTrue(
+            is_retention_still_binding(None, as_of=datetime.date(2200, 1, 1))
+        )
+
+    def test_future_date_is_binding(self):
+        self.assertTrue(
+            is_retention_still_binding(
+                datetime.date(2030, 1, 1), as_of=datetime.date(2026, 1, 1)
+            )
+        )
+
+    def test_past_date_is_not_binding(self):
+        self.assertFalse(
+            is_retention_still_binding(
+                datetime.date(2020, 1, 1), as_of=datetime.date(2026, 1, 1)
+            )
+        )
+
+    def test_exact_date_is_still_binding(self):
+        # Дата истечения — последний день, когда блокировка ещё действует.
+        d = datetime.date(2026, 1, 1)
+        self.assertTrue(is_retention_still_binding(d, as_of=d))
+
+
+class IsExpiredAtIntakeTests(TestCase):
+    def test_none_is_never_expired(self):
+        self.assertFalse(is_expired_at_intake(None))
+        self.assertFalse(is_expired_at_intake(None, as_of=datetime.date(2200, 1, 1)))
+
+    def test_past_date_is_expired(self):
+        self.assertTrue(
+            is_expired_at_intake(datetime.date(2020, 1, 1), as_of=datetime.date(2026, 1, 1))
+        )
+
+    def test_future_date_is_not_expired(self):
+        self.assertFalse(
+            is_expired_at_intake(datetime.date(2030, 1, 1), as_of=datetime.date(2026, 1, 1))
+        )
+
+    def test_exact_date_is_not_yet_expired(self):
+        d = datetime.date(2026, 1, 1)
+        self.assertFalse(is_expired_at_intake(d, as_of=d))
+
+
+class ObjectLockParamsForTests(TestCase):
+    """Чистая функция-подготовка параметров S3 Object Lock — сам MinIO-клиент
+    ещё не реализован (см. docstring), но контракт значений фиксируется
+    тестами уже сейчас."""
+
+    def test_permanent_retention_uses_legal_hold_not_far_future_date(self):
+        policy = RETENTION_MATRIX[RetentionCategory.ORDERS_CORE]
+        params = object_lock_params_for(policy, None)
+        self.assertEqual(params["ObjectLockLegalHoldStatus"], "ON")
+        self.assertIsNone(params["ObjectLockRetainUntilDate"])
+        self.assertIsNone(params["ObjectLockMode"])
+
+    def test_governance_dated_retention(self):
+        policy = RETENTION_MATRIX[RetentionCategory.DIRECTIVES_OPERATIONAL]
+        self.assertEqual(policy.mode, RetentionMode.GOVERNANCE)
+        params = object_lock_params_for(policy, datetime.date(2031, 1, 1))
+        self.assertEqual(params["ObjectLockMode"], "GOVERNANCE")
+        self.assertEqual(params["ObjectLockLegalHoldStatus"], "OFF")
+        self.assertEqual(params["ObjectLockRetainUntilDate"], "2031-01-01")
+
+    def test_compliance_dated_retention(self):
+        policy = RETENTION_MATRIX[RetentionCategory.ORDERS_PERSONNEL]
+        self.assertEqual(policy.mode, RetentionMode.COMPLIANCE)
+        params = object_lock_params_for(policy, datetime.date(2070, 5, 10))
+        self.assertEqual(params["ObjectLockMode"], "COMPLIANCE")
+        self.assertEqual(params["ObjectLockLegalHoldStatus"], "OFF")
+        self.assertEqual(params["ObjectLockRetainUntilDate"], "2070-05-10")
+
+
+class RetentionMatrixStageFlagsTests(TestCase):
+    """Категории для ещё не реализованной модели актов (Этап 2) должны
+    быть явно помечены неактивными, чтобы их нельзя было присвоить
+    документу «случайно» до появления самой карточки."""
+
+    def test_acts_investigation_and_permits_eh_are_inactive(self):
+        for category in (RetentionCategory.ACTS_INVESTIGATION, RetentionCategory.PERMITS_EH):
+            policy = RETENTION_MATRIX[category]
+            self.assertFalse(policy.is_active)
+            self.assertIsNotNone(policy.stage)
+
+    def test_categories_in_use_are_active(self):
+        for category in (
+            RetentionCategory.ORDERS_CORE,
+            RetentionCategory.ORDERS_PERSONNEL,
+            RetentionCategory.DIRECTIVES_OPERATIONAL,
+            RetentionCategory.ARCHIVAL_SCANS,
+            RetentionCategory.DSP,
+            RetentionCategory.TEMPLATES_APPROVED,
+        ):
+            self.assertTrue(RETENTION_MATRIX[category].is_active)
