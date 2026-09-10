@@ -36,10 +36,10 @@ for cmd in patronictl python3 "$PGBACKREST_BIN"; do
   }
 done
 [[ -r "$PATRONI_CONFIG" ]] || { echo "ERROR: cannot read $PATRONI_CONFIG" >&2; exit 66; }
-[[ -f "$APPROVAL_FILE" ]] || {
-  echo "ERROR: pgBackRest rebuild is not approved; missing $APPROVAL_FILE" >&2
+if [[ ! -r "$APPROVAL_FILE" ]] || ! grep -Fxq 'status=approved' "$APPROVAL_FILE"; then
+  echo "ERROR: pgBackRest rebuild is not approved; missing/unapproved $APPROVAL_FILE" >&2
   exit 78
-}
+fi
 
 cluster_json="$(patronictl -c "$PATRONI_CONFIG" list "$PATRONI_SCOPE" --format=json)"
 python3 -c '
@@ -59,7 +59,8 @@ if "replica" not in role and "standby" not in role:
 leaders = [r for r in normalized if str(r.get("role", "")).strip().lower() in {"leader", "primary"}]
 if len(leaders) != 1:
     raise SystemExit(f"expected exactly one writable leader before replica rebuild, found {len(leaders)}")
-print(f"Preflight Patroni: target={member} role={role} state={state}; leader={leaders[0].get(chr(109)+chr(101)+chr(109)+chr(98)+chr(101)+chr(114))}")
+leader_name = leaders[0].get("member")
+print(f"Preflight Patroni: target={member} role={role} state={state}; leader={leader_name}")
 ' "$member" <<<"$cluster_json"
 
 info_json="$("$PGBACKREST_BIN" --stanza="$PATRONI_SCOPE" info --output=json)"
@@ -69,8 +70,9 @@ payload = json.load(sys.stdin)
 if not payload:
     raise SystemExit("pgBackRest info returned no stanza")
 stanza = payload[0]
-if stanza.get("status", {}).get("code") not in (0, None):
-    raise SystemExit(f"pgBackRest stanza unhealthy: {stanza.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115))}")
+status = stanza.get("status", {})
+if status.get("code") not in (0, None):
+    raise SystemExit(f"pgBackRest stanza unhealthy: {status}")
 backups = stanza.get("backup") or []
 if not backups:
     raise SystemExit("pgBackRest repository has no backup sets")
