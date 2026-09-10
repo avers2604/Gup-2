@@ -55,7 +55,7 @@ grep -q 'CHANGE_ME_REPLICATION_ADMIN_ACCESS_KEY' dr.env.example
 grep -q 'CHANGE_ME_REPLICATION_TARGET_ACCESS_KEY' dr.env.example
 
 # Functional smoke-test of the hash comparer with a fake mc. The real
-# acceptance wrapper forces MINIO_HASH_SAMPLE_SIZE=500; using 7 here keeps CI
+# acceptance wrapper passes MINIO_HASH_SAMPLE_SIZE (default 500); using 7 keeps CI
 # fast while still exercising random selection, download and SHA comparison.
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

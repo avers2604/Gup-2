@@ -73,13 +73,15 @@ record_checkpoint() {
 
 init_extended_results() {
   [[ -f "$extended_results" ]] && return
-  cat >"$extended_results" <<'EOF'
+  cat >"$extended_results" <<EOF
+search_reindex_required_documents=${SEARCH_REINDEX_DOCUMENTS:-10000}
 search_reindex_documents=0
 search_reindex_seconds=0
-search_reindex_limit_seconds=3600
+search_reindex_limit_seconds=${SEARCH_REINDEX_MAX_SECONDS:-3600}
 search_reindex_result=NOT_RUN
 queue_worker_kill_result=NOT_RUN
 queue_redis_kill_result=NOT_RUN
+minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
 minio_hash_result=NOT_RUN
@@ -278,22 +280,71 @@ PY
   # shellcheck disable=SC1090
   . "$extended_results"
 
-  local search_effective=FAIL
-  if [[ "$search_reindex_result" == PASS ]] \
-    && [[ "$search_reindex_documents" == "10000" ]] \
-    && python3 - "$search_reindex_seconds" "$search_reindex_limit_seconds" <<'PY'
+  # Acceptance volumes come from the inventory and are recorded by
+  # extended-checks.sh, so the criterion here is the volume the run was actually
+  # required to prove — never a number hardcoded in this script.
+  local search_required="${search_reindex_required_documents:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
+  local minio_required="${minio_hash_required_count:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
+
+  local -a discrepancies=()
+
+  local search_effective=PASS
+  if [[ "$search_reindex_result" != PASS ]]; then
+    search_effective=FAIL
+    discrepancies+=("cold reindex measurement is not PASS (result=$search_reindex_result). Run extended-checks.sh RUN_ID cold-reindex and attach the measurement before acceptance.")
+  fi
+  if [[ "$search_reindex_documents" != "$search_required" ]]; then
+    search_effective=FAIL
+    discrepancies+=("cold reindex covered $search_reindex_documents documents instead of the required $search_required. Load the agreed acceptance corpus (SEARCH_REINDEX_DOCUMENTS) and repeat the run.")
+  fi
+  local timing_rc=0
+  python3 - "$search_reindex_seconds" "$search_reindex_limit_seconds" <<'PY' || timing_rc=$?
 import sys
-raise SystemExit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)
+try:
+    elapsed, limit = float(sys.argv[1]), float(sys.argv[2])
+except ValueError:
+    raise SystemExit(2)
+raise SystemExit(0 if elapsed <= limit else 1)
 PY
-  then
-    search_effective=PASS
+  if (( timing_rc == 2 )); then
+    search_effective=FAIL
+    discrepancies+=("cold reindex timing is not numeric (elapsed=${search_reindex_seconds:-unset}, criterion=${search_reindex_limit_seconds:-unset}). The measurement file is unusable as evidence.")
+  elif (( timing_rc != 0 )); then
+    search_effective=FAIL
+    discrepancies+=("cold reindex took ${search_reindex_seconds}s against the ${search_reindex_limit_seconds}s criterion. Optimize batching/workers/read-model or obtain a customer-approved threshold change before acceptance.")
+  fi
+
+  local queue_effective=PASS
+  if [[ "$queue_worker_kill_result" != PASS || "$queue_redis_kill_result" != PASS ]]; then
+    queue_effective=FAIL
+    discrepancies+=("queue resilience drills are not both PASS (worker=$queue_worker_kill_result, redis=$queue_redis_kill_result). Repeat queue-start/queue-verify for the failing component.")
+  fi
+
+  local minio_hash_effective=PASS
+  if [[ "$minio_hash_result" != PASS ]]; then
+    minio_hash_effective=FAIL
+    discrepancies+=("MinIO hash verification is not PASS (result=$minio_hash_result). Run extended-checks.sh RUN_ID minio-hash and attach the sample evidence.")
+  fi
+  if [[ "$minio_hash_sample_count" != "$minio_required" ]]; then
+    minio_hash_effective=FAIL
+    discrepancies+=("MinIO hash sample covered $minio_hash_sample_count objects instead of the required $minio_required. Either replicate enough objects to the DR site or agree a different MINIO_HASH_SAMPLE_SIZE with the customer.")
+  fi
+  if [[ "$minio_hash_mismatches" != "0" ]]; then
+    minio_hash_effective=FAIL
+    discrepancies+=("MinIO hash sample found $minio_hash_mismatches checksum mismatches. Replication integrity is not proven; investigate before acceptance.")
+  fi
+
+  local legacy_effective=PASS
+  if [[ "$db_result" != PASS || "$minio_result" != PASS || "$alert_result" != PASS || "$app_result" != PASS ]]; then
+    legacy_effective=FAIL
+    discrepancies+=("operator-declared results are not all PASS (db=$db_result, minio=$minio_result, alerting=$alert_result, application=$app_result). The failing area must be re-run on the stand.")
   fi
 
   local overall=PASS
-  [[ "$db_result" == PASS && "$minio_result" == PASS && "$alert_result" == PASS && "$app_result" == PASS ]] || overall=FAIL
+  [[ "$legacy_effective" == PASS ]] || overall=FAIL
   [[ "$search_effective" == PASS ]] || overall=FAIL
-  [[ "$queue_worker_kill_result" == PASS && "$queue_redis_kill_result" == PASS ]] || overall=FAIL
-  [[ "$minio_hash_result" == PASS && "$minio_hash_sample_count" == "500" && "$minio_hash_mismatches" == "0" ]] || overall=FAIL
+  [[ "$queue_effective" == PASS ]] || overall=FAIL
+  [[ "$minio_hash_effective" == PASS ]] || overall=FAIL
 
   {
     echo "# Stage 4 acceptance result — $run_id"
@@ -315,18 +366,23 @@ PY
     echo "## Additional acceptance measurements"
     echo
     echo "- Cold search reindex documents: $search_reindex_documents"
+    echo "- Cold search reindex required documents: $search_required"
     echo "- Cold search reindex seconds: $search_reindex_seconds"
     echo "- Cold search reindex criterion seconds: $search_reindex_limit_seconds"
     echo "- Cold search reindex: **$search_effective**"
     echo "- Celery worker kill -9 / redelivery: **$queue_worker_kill_result**"
     echo "- Redis kill -9 / recovery: **$queue_redis_kill_result**"
     echo "- MinIO SHA-256 sample files: $minio_hash_sample_count"
+    echo "- MinIO SHA-256 required sample files: $minio_required"
     echo "- MinIO SHA-256 mismatches: $minio_hash_mismatches"
-    echo "- MinIO 500-file hash verification: **$minio_hash_result**"
+    echo "- MinIO sample hash verification: **$minio_hash_effective**"
     echo
-    if [[ "$search_effective" != PASS ]]; then
-      echo "> DISCREPANCY: cold reindex of exactly 10,000 documents did not meet the <= 60 minute acceptance criterion. Optimize batching/workers/read-model or obtain a customer-approved threshold change before acceptance."
-      echo
+    if (( ${#discrepancies[@]} > 0 )); then
+      local item
+      for item in "${discrepancies[@]}"; do
+        echo "> DISCREPANCY: $item"
+        echo
+      done
     fi
     echo "## Evidence"
     echo

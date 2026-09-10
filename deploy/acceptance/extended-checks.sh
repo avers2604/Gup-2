@@ -12,7 +12,12 @@ Usage:
   extended-checks.sh RUN_ID cold-reindex
   extended-checks.sh RUN_ID queue-start worker|redis
   extended-checks.sh RUN_ID queue-verify worker|redis
-  extended-checks.sh RUN_ID minio-hash-500
+  extended-checks.sh RUN_ID minio-hash          (alias: minio-hash-500)
+
+Sample volumes come from the acceptance inventory: SEARCH_REINDEX_DOCUMENTS
+(default 10000) and MINIO_HASH_SAMPLE_SIZE (default 500). Both are written to
+extended-results.env so that finalize checks the run against the volume that
+was actually required, not against a hardcoded number.
 EOF
 }
 
@@ -33,13 +38,15 @@ results="$run_dir/extended-results.env"
 
 ensure_results() {
   [[ -f "$results" ]] && return
-  cat >"$results" <<'EOF'
+  cat >"$results" <<EOF
+search_reindex_required_documents=${SEARCH_REINDEX_DOCUMENTS:-10000}
 search_reindex_documents=0
 search_reindex_seconds=0
-search_reindex_limit_seconds=3600
+search_reindex_limit_seconds=${SEARCH_REINDEX_MAX_SECONDS:-3600}
 search_reindex_result=NOT_RUN
 queue_worker_kill_result=NOT_RUN
 queue_redis_kill_result=NOT_RUN
+minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
 minio_hash_result=NOT_RUN
@@ -76,6 +83,7 @@ case "$action" in
     batch="${SEARCH_REINDEX_BATCH_SIZE:-1000}"
     out="$run_dir/search-reindex.json"
     err="$run_dir/search-reindex.stderr"
+    set_result search_reindex_required_documents "$count"
     set +e
     bash -lc "cd '$REPO_ROOT' && $manage rebuild_search_index --batch-size '$batch' --require-count '$count' --max-seconds '$limit' --json" >"$out" 2>"$err"
     rc=$?
@@ -146,7 +154,15 @@ PY
     fi
     ;;
 
-  minio-hash-500)
+  minio-hash-500|minio-hash)
+    # Resolved before MINIO_DR_ENV is sourced: the acceptance inventory owns the
+    # sample volume, the MinIO helper env must not silently change it.
+    sample_size="${MINIO_HASH_SAMPLE_SIZE:-500}"
+    [[ "$sample_size" =~ ^[0-9]+$ ]] && (( sample_size > 0 )) || {
+      echo "ERROR: MINIO_HASH_SAMPLE_SIZE must be a positive integer" >&2
+      exit 64
+    }
+    set_result minio_hash_required_count "$sample_size"
     : "${MINIO_DR_ENV:?MINIO_DR_ENV is required}"
     [[ -r "$MINIO_DR_ENV" ]] || { echo "ERROR: unreadable $MINIO_DR_ENV" >&2; exit 66; }
     set -a
@@ -155,7 +171,7 @@ PY
     set +a
     evidence="$run_dir/minio-hash-sample.csv"
     set +e
-    MINIO_HASH_SAMPLE_SIZE=500 \
+    MINIO_HASH_SAMPLE_SIZE="$sample_size" \
     MINIO_HASH_SAMPLE_SEED="$run_id" \
     MINIO_HASH_EVIDENCE_FILE="$evidence" \
       bash "$REPO_ROOT/deploy/minio/dr/verify-500-hashes.sh" \
@@ -170,7 +186,7 @@ PY
     fi
     set_result minio_hash_sample_count "$checked"
     set_result minio_hash_mismatches "$mismatches"
-    if (( rc == 0 && checked == 500 && mismatches == 0 )); then
+    if (( rc == 0 && checked == sample_size && mismatches == 0 )); then
       set_result minio_hash_result PASS
       checkpoint minio-hash-500-passed
       cat "$run_dir/minio-hash-500.txt"
