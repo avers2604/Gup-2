@@ -34,9 +34,15 @@ from .personnel_service import (
     _is_role_elevated,
     _parse_bool,
     _resolve_department,
-    import_personnel,
+    import_personnel as _import_personnel,
     write_report_csv,
 )
+
+
+def import_personnel(file_obj, *, actor=None):
+    """Compatibility wrapper; keeps ``services.MAX_ROWS`` patchable."""
+    return _import_personnel(file_obj, actor=actor, max_rows=MAX_ROWS)
+
 
 __all__ = [
     "LOCKOUT_MAX_ATTEMPTS",
