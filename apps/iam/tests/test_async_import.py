@@ -12,13 +12,15 @@ from apps.iam.services import HEADER
 from ..async_import import stage_personnel_import
 from ..tasks import run_personnel_import_task
 
+TEST_PERSONNEL_NUMBER = "909001"
+
 
 def _xlsx_bytes(department_path: str) -> io.BytesIO:
     workbook = openpyxl.Workbook()
     sheet = workbook.active
     sheet.append(HEADER)
     values = {
-        "tab_number": "async-001",
+        "tab_number": TEST_PERSONNEL_NUMBER,
         "last_name": "Иванов",
         "first_name": "Пётр",
         "middle_name": "",
@@ -68,5 +70,7 @@ class AsyncPersonnelImportTests(TestCase):
 
             self.assertEqual(result["created"], 1)
             self.assertEqual(result["errors"], 0)
-            self.assertTrue(User.objects.filter(personnel_number="async-001").exists())
+            self.assertTrue(
+                User.objects.filter(personnel_number=TEST_PERSONNEL_NUMBER).exists()
+            )
             self.assertFalse(storage.exists(storage_name))
