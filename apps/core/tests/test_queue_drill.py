@@ -1,5 +1,6 @@
 from django.core.management import call_command
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.core.models import QueueDrillProbe
 from apps.core.tasks import queue_acceptance_probe
@@ -23,19 +24,20 @@ class QueueAcceptanceProbeTests(TestCase):
         self.assertTrue(queue_acceptance_probe.track_started)
 
     def test_verify_accepts_redelivery_without_duplicate_business_effect(self):
+        completed_at = timezone.now()
         QueueDrillProbe.objects.create(
             run_id="ci-verify",
             sequence=1,
             delivery_count=2,
             completion_count=1,
-            completed_at="2026-09-10T20:00:00Z",
+            completed_at=completed_at,
         )
         QueueDrillProbe.objects.create(
             run_id="ci-verify",
             sequence=2,
             delivery_count=1,
             completion_count=1,
-            completed_at="2026-09-10T20:00:01Z",
+            completed_at=completed_at,
         )
 
         call_command("queue_drill", "verify", "--run-id", "ci-verify", "--expected-count", "2")
