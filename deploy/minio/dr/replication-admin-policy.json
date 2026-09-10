@@ -19,7 +19,9 @@
         "s3:ListBucket",
         "s3:ListBucketMultipartUploads",
         "s3:GetBucketLocation",
-        "s3:GetBucketVersioning"
+        "s3:GetBucketVersioning",
+        "s3:GetObjectRetention",
+        "s3:GetObjectLegalHold"
       ],
       "Resource": [
         "arn:aws:s3:::bz-get-originals",
