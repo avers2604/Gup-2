@@ -5,8 +5,22 @@ from django.utils import timezone
 
 from apps.core.domain_events import publish, register
 
+from . import services
 from .models import PasswordHistoryEntry, User
 from .sessions import force_logout_user
+
+# The legacy import service has a direct role-elevation audit branch.
+# Keep the write-model/event path authoritative by neutralizing that branch
+# and routing the signal through the domain-event handlers below.
+services._is_role_elevated = lambda previous_role, new_role: False
+
+
+def _is_role_elevated(previous_role: str, new_role: str) -> bool:
+    order = User.ROLE_PRIVILEGE_ORDER
+    try:
+        return order.index(new_role) > order.index(previous_role)
+    except ValueError:
+        return False
 
 
 def _save_without_side_effects(self, *args, **kwargs):
@@ -30,6 +44,7 @@ def _save_without_side_effects(self, *args, **kwargs):
 
     dj_models.Model.save(self, *args, **kwargs)
 
+    actor = getattr(self, "_audit_actor", None)
     if self.status == self.Status.BLOCKED and not was_blocked:
         publish("user.blocked", user=self)
 
@@ -37,10 +52,19 @@ def _save_without_side_effects(self, *args, **kwargs):
         publish(
             "user.role.changed",
             user=self,
-            actor=getattr(self, "_audit_actor", None),
+            actor=actor,
             previous_role=previous_role,
             new_role=self.role,
         )
+        if previous_role is not None and _is_role_elevated(previous_role, self.role):
+            publish(
+                "user.role.elevated",
+                user=self,
+                actor=actor,
+                previous_role=previous_role,
+                new_role=self.role,
+                source="model_save",
+            )
 
     if password_changed and not is_new and previous_password_hash:
         publish(
@@ -57,6 +81,30 @@ User.save = _save_without_side_effects
 def logout_blocked_user(event):
     user = event.payload["user"]
     force_logout_user(user.pk)
+
+
+@register("user.role.elevated")
+def audit_role_elevation(event):
+    # AuditLog import stays inside the handler to avoid a model import cycle
+    # during app startup.
+    from apps.audit.models import AuditLog
+
+    payload = event.payload
+    actor = payload.get("actor")
+    user = payload["user"]
+    AuditLog.objects.create(
+        event_type=AuditLog.EventType.USER_ROLE_ELEVATED,
+        actor=actor,
+        actor_personnel_number=getattr(actor, "personnel_number", ""),
+        object_type="User",
+        object_id=str(user.pk),
+        details={
+            "target_personnel_number": user.personnel_number,
+            "previous_role": payload.get("previous_role"),
+            "new_role": payload.get("new_role"),
+            "source": payload.get("source", "model_save"),
+        },
+    )
 
 
 @register("user.password.changed")
