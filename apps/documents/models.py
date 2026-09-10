@@ -90,14 +90,13 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         verbose_name="OCR Confidence Score",
     )
-    # Извлечённый текст скана и вложений — под FTS(ocr_body) из формулы
-    # ранжирования Smart Search (ТЗ 2.2 §4.4.1, apps/search_ocr/search.py).
-    # ЧЕСТНАЯ ГРАНИЦА: конвейер OCR (Этап 3, README «Дальше по плану») в
-    # проекте ещё не реализован — это поле заведено СЕЙЧАС, под формулу,
-    # но реально заполняться начнёт только когда появится сам конвейер
-    # (Tesseract подключён в docker-compose.yml, но никуда не вызывается).
-    # Пока всегда пусто у всех документов — безопасно: пустое поле просто
-    # не даёт вклада в полнотекстовый поиск, не создаёт ложных совпадений.
+    # Извлечённый текст скана — под FTS(ocr_body) из формулы ранжирования
+    # Smart Search (ТЗ 2.2 §4.4.1, apps/search_ocr/search.py). Заполняется
+    # асинхронно конвейером OCR (apps/documents/tasks.py,
+    # run_ocr_for_document) при первой загрузке/замене files_original —
+    # см. save() ниже. До завершения задачи (или для документов, ещё не
+    # прошедших конвейер) поле пусто — безопасно: пустое поле просто не
+    # даёт вклада в полнотекстовый поиск, не создаёт ложных совпадений.
     ocr_body = models.TextField(blank=True, verbose_name="Извлечённый текст скана (OCR)")
 
     # Срок хранения и режим Object Locking (WORM) — apps/documents/retention.py.
@@ -152,10 +151,14 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # классификации и обязана попасть в WORM-журнал аудита (старое и
         # новое значение), а не пройти тихо.
         previous = (
-            type(self).objects.filter(pk=self.pk).values_list("retention_category", "status").first()
+            type(self)
+            .objects.filter(pk=self.pk)
+            .values_list("retention_category", "status", "files_original")
+            .first()
         )
         previous_category = previous[0] if previous is not None else None
         previous_status = previous[1] if previous is not None else None
+        previous_files_original = previous[2] if previous is not None else None
         is_new = previous is None
         category_changed = is_new or previous_category != self.retention_category
         # Усиление аудита (решение Заказчика: «фиксировать все изменения
@@ -163,6 +166,14 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # реальном изменении (не на первом сохранении — создание карточки
         # не «изменение статуса», это его первое присвоение).
         status_changed = not is_new and previous_status != self.status
+        # Запуск конвейера OCR (Этап 3) — при первой загрузке скана и при
+        # каждой его замене (files_original.name — имя файла в БД, то же
+        # сравнение "до/после super().save()", что и выше для остальных
+        # полей). bool(self.files_original) отсекает карточки без файла —
+        # files_original обязателен по ТЗ, но в тестах/фикстурах нередко не
+        # заполняется, и пустое имя не должно ставить задачу распознавания
+        # несуществующего файла в очередь.
+        files_original_changed = bool(self.files_original) and previous_files_original != self.files_original.name
 
         if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
@@ -235,6 +246,17 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                     object_id=self.reg_number,
                     details={"old_status": previous_status, "new_status": self.status},
                 )
+
+            if files_original_changed:
+                # on_commit — воркер Celery читает файл отдельным
+                # соединением/процессом; если поставить задачу в очередь
+                # до коммита, она может стартовать раньше, чем строка (и
+                # сам файл в originals-бакете) станут видны снаружи текущей
+                # транзакции.
+                from .tasks import run_ocr_for_document
+
+                pk = self.pk
+                transaction.on_commit(lambda: run_ocr_for_document.delay(str(pk)))
 
 
 class DocumentRelationQuerySet(models.QuerySet):

@@ -5,6 +5,7 @@
 плана работ по ТЗ-БЗ-ГЭТ-2026-V2.2) и требует утверждения Заказчиком —
 см. открытый вопрос №1 плана.
 """
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -186,6 +187,29 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+
+# Celery — очередь асинхронных задач конвейера OCR (Этап 3). Брокер — Redis
+# (REDIS_URL, тот же .env/docker-compose.yml, что был предусмотрен в стеке
+# заранее, см. STACK.md, но не использовался кодом до этой партии).
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+# Результаты задач не персистим отдельным backend'ом — воркер сам пишет
+# прогресс в NormativeDocument.ocr_body/.ocr_confidence и в WORM-аудит
+# (apps/documents/tasks.py), внешнего synchronous task.get() в проекте нет.
+CELERY_RESULT_BACKEND = None
+CELERY_TASK_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+
+# Тесты выполняют задачи синхронно в том же процессе — CI и локальный
+# прогон manage.py test не поднимают реальный брокер Redis для этого.
+if "test" in sys.argv:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
+
+# Язык распознавания OCR (Этап 3) — только русский: весь корпус НРД ГЭТ на
+# русском, домен-специфичные сокращения/термины уже разбирает тезаурус
+# Smart Search (apps/search_ocr), а не сам OCR. Честная граница:
+# многоязычные документы/сканы не поддерживаются.
+OCR_LANGUAGE = os.environ.get("OCR_LANGUAGE", "rus")
 
 STORAGES = {
     "default": {

@@ -89,6 +89,12 @@ services:
     depends_on:
       - minio
 
+  # Брокер очереди Celery — конвейер OCR (Этап 3, apps/documents/tasks.py).
+  # Само приложение (веб + воркер Celery) в этом docker-compose не
+  # контейнеризовано (см. README «Запуск») — воркер запускается локально:
+  #   celery -A config worker -l info
+  # (тем же .env/REDIS_URL, что и здесь; для тестов брокер не нужен —
+  # CELERY_TASK_ALWAYS_EAGER=True, config/settings/base.py).
   redis:
     image: redis:8.10-alpine
     ports:
