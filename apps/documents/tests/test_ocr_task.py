@@ -49,7 +49,7 @@ class RunOcrForDocumentSuccessTests(TestCase):
             run_ocr_for_document.delay(str(doc.pk))
 
         entry = AuditLog.objects.get(
-            event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-2",
+            event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id=str(doc.pk),
         )
         self.assertEqual(entry.details["confidence"], 90.0)
 
@@ -68,7 +68,7 @@ class RunOcrForDocumentSuccessTests(TestCase):
         self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.NEEDS_REVIEW)
         self.assertTrue(
             AuditLog.objects.filter(
-                event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-BLANK",
+                event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id=str(doc.pk),
             ).exists()
         )
 
@@ -143,7 +143,7 @@ class RunOcrForDocumentThresholdTests(TestCase):
             run_ocr_for_document.delay(str(doc.pk))
 
         entry = AuditLog.objects.get(
-            event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-THR-5",
+            event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id=str(doc.pk),
         )
         self.assertEqual(entry.details["review_threshold"], 75)
         self.assertEqual(entry.details["ocr_status"], NormativeDocument.OcrStatus.NEEDS_REVIEW)
@@ -193,7 +193,7 @@ class RunOcrForDocumentFailureTests(TestCase):
             run_ocr_for_document.pop_request()
 
         entries = AuditLog.objects.filter(
-            event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED, object_id="OCR-FAIL",
+            event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED, object_id=str(doc.pk),
         )
         self.assertEqual(entries.count(), 1)
         self.assertIn("распознавание не удалось", entries.first().details["error"])
@@ -236,7 +236,7 @@ class RunOcrForDocumentFailureTests(TestCase):
 
         self.assertFalse(
             AuditLog.objects.filter(
-                event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-FAIL-2",
+                event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id=str(doc.pk),
             ).exists()
         )
 
@@ -267,7 +267,7 @@ class RunOcrForDocumentTimeLimitTests(TestCase):
 
         self.assertTrue(
             AuditLog.objects.filter(
-                event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED, object_id="OCR-TIMEOUT",
+                event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED, object_id=str(doc.pk),
             ).exists()
         )
 

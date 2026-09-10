@@ -8,7 +8,12 @@ from .factories import make_document
 
 
 class NormativeDocumentStatusChangeAuditTests(TestCase):
-    """Усиление аудита (решение Заказчика: «фиксировать все изменения
+    """Реквизиты проверяются по ключам, а не сравнением словаря целиком:
+    состав details расширяется (например, рег. номером после перевода
+    object_id на UUID), и такое сравнение падало бы на каждом дополнении,
+    ничего не говоря о самом проверяемом поведении.
+
+    Усиление аудита (решение Заказчика: «фиксировать все изменения
     документов — кто, что изменил, старый/новый статус»). Тот же паттерн
     save(), что и у retention_category (см. test_retention.py)."""
 
@@ -31,7 +36,8 @@ class NormativeDocumentStatusChangeAuditTests(TestCase):
 
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.DOCUMENT_PUBLISHED)
         self.assertEqual(entries.count(), 1)
-        self.assertEqual(entries.first().details, {"old_status": "draft", "new_status": "active"})
+        self.assertEqual(entries.first().details["old_status"], "draft")
+        self.assertEqual(entries.first().details["new_status"], "active")
 
     def test_active_to_revoked_writes_document_revoked(self):
         doc = make_document(status=NormativeDocument.Status.ACTIVE)
@@ -40,7 +46,8 @@ class NormativeDocumentStatusChangeAuditTests(TestCase):
 
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.DOCUMENT_REVOKED)
         self.assertEqual(entries.count(), 1)
-        self.assertEqual(entries.first().details, {"old_status": "active", "new_status": "revoked"})
+        self.assertEqual(entries.first().details["old_status"], "active")
+        self.assertEqual(entries.first().details["new_status"], "revoked")
 
     def test_other_transition_writes_generic_document_status_changed(self):
         doc = make_document(status=NormativeDocument.Status.ACTIVE)
@@ -49,7 +56,8 @@ class NormativeDocumentStatusChangeAuditTests(TestCase):
 
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.DOCUMENT_STATUS_CHANGED)
         self.assertEqual(entries.count(), 1)
-        self.assertEqual(entries.first().details, {"old_status": "active", "new_status": "archived"})
+        self.assertEqual(entries.first().details["old_status"], "active")
+        self.assertEqual(entries.first().details["new_status"], "archived")
 
     def test_resaving_same_status_writes_no_audit_entry(self):
         doc = make_document(status=NormativeDocument.Status.ACTIVE)

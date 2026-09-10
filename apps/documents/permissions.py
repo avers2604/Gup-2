@@ -48,6 +48,12 @@ def _publisher_roles():
     return {User.Role.CONTROLLER_LAWYER, User.Role.ADMINISTRATOR}
 
 
+def _administrator_roles():
+    from apps.iam.models import User
+
+    return {User.Role.ADMINISTRATOR}
+
+
 def _has_role(user, allowed):
     if not getattr(user, "is_authenticated", False):
         return False
@@ -90,13 +96,25 @@ def can_edit_document(user, document=None) -> bool:
     return True
 
 
-def can_change_status(user, document=None) -> bool:
+def can_change_status(user, document=None, new_status=None) -> bool:
     """Публикация, отмена, перевод в архив — юридически значимое действие
-    (см. STACK.md: решение остаётся за Контролёром/Юристом)."""
+    (см. STACK.md: решение остаётся за Контролёром/Юристом).
+
+    Без `new_status` отвечает на вопрос «может ли пользователь менять
+    статус в принципе» — этого достаточно, чтобы решить, показывать ли
+    кнопку. С указанным `new_status` проверяется конкретный переход:
+    исправление ошибки публикации (откат в черновик и аннулирование)
+    оставлено Администратору, см. `transitions.ADMINISTRATOR_ONLY_TARGETS`.
+    """
     if not _has_role(user, _publisher_roles()):
         return False
     if document is not None and not can_view_document(user, document):
         return False
+    if new_status is not None:
+        from . import transitions
+
+        if transitions.requires_administrator(new_status):
+            return _has_role(user, _administrator_roles())
     return True
 
 

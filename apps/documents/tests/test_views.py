@@ -10,7 +10,7 @@ from apps.iam.models import User
 
 from ..models import DocumentRelation, NormativeDocument
 from .factories import make_document
-from .test_permissions import make_user
+from .test_permissions import login_client, make_user
 
 PASSWORD = "Sup3r$ecret!Pass"
 
@@ -358,3 +358,112 @@ class DocumentCreationUploadTests(_WriteTestSetup, ClamdTestCase):
         self.assertEqual(created.status_history.count(), 1)
         self.assertEqual(created.status_history.first().status, NormativeDocument.Status.DRAFT)
         created.files_original.delete(save=False)
+
+
+class StatusChangeRoleAndReasonViewTests(TestCase):
+    """Web GUI отката публикации и аннулирования (решение Заказчика)."""
+
+    def setUp(self):
+        self.controller = make_user(personnel_number="0600", role=User.Role.CONTROLLER_LAWYER)
+        self.administrator = make_user(personnel_number="0601", role=User.Role.ADMINISTRATOR)
+        self.document = make_document(
+            reg_number="700-п", status=NormativeDocument.Status.ACTIVE,
+            files_original="documents/originals/2026/01/scan.pdf",
+        )
+
+    def _client(self, user):
+        return login_client(user)
+
+    def _url(self):
+        return reverse("documents:status", args=[self.document.pk])
+
+    def test_controller_is_not_offered_rollback_or_annulment(self):
+        # Предлагать переход, который заведомо отклонят, — плохой
+        # интерфейс: список вариантов фильтруется по роли.
+        response = self._client(self.controller).get(self._url())
+        values = [value for value, _ in response.context["form"].fields["new_status"].choices]
+        self.assertNotIn(NormativeDocument.Status.DRAFT, values)
+        self.assertNotIn(NormativeDocument.Status.ANNULLED, values)
+        self.assertIn(NormativeDocument.Status.REVOKED, values)
+
+    def test_administrator_is_offered_rollback_and_annulment(self):
+        response = self._client(self.administrator).get(self._url())
+        values = [value for value, _ in response.context["form"].fields["new_status"].choices]
+        self.assertIn(NormativeDocument.Status.DRAFT, values)
+        self.assertIn(NormativeDocument.Status.ANNULLED, values)
+
+    def test_controller_posting_rollback_directly_is_rejected(self):
+        # Форму можно обойти — сервис проверяет роль заново.
+        response = self._client(self.controller).post(
+            self._url(),
+            {"new_status": NormativeDocument.Status.DRAFT, "comment": "Ошибка"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, NormativeDocument.Status.ACTIVE)
+
+    def test_rollback_without_reason_is_rejected_by_the_form(self):
+        response = self._client(self.administrator).post(
+            self._url(), {"new_status": NormativeDocument.Status.DRAFT, "comment": ""}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "основание обязательно")
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, NormativeDocument.Status.ACTIVE)
+
+    def test_administrator_rolls_back_with_reason(self):
+        response = self._client(self.administrator).post(
+            self._url(),
+            {"new_status": NormativeDocument.Status.DRAFT, "comment": "Ушёл не тот файл"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, NormativeDocument.Status.DRAFT)
+
+
+class DocumentActivityOnCardTests(TestCase):
+    """История действий по документу на карточке (решение Заказчика).
+
+    Видна всем, у кого есть доступ к карточке: до этого Методист не мог
+    узнать, кто опубликовал его же приказ, иначе как через Офицера ИБ.
+    """
+
+    def setUp(self):
+        self.reader = make_user(personnel_number="0610")
+        self.controller = make_user(personnel_number="0611", role=User.Role.CONTROLLER_LAWYER)
+        self.document = make_document(
+            reg_number="710-п", files_original="documents/originals/2026/01/scan.pdf",
+        )
+
+    def _get(self, user):
+        return login_client(user).get(reverse("documents:detail", args=[self.document.pk]))
+
+    def test_section_is_visible_to_a_plain_reader(self):
+        response = self._get(self.reader)
+        self.assertContains(response, "История действий по документу")
+
+    def test_shows_who_published_and_why(self):
+        from .. import services
+
+        services.change_document_status(
+            actor=self.controller, document=self.document,
+            new_status=NormativeDocument.Status.ACTIVE, comment="Приказ подписан",
+        )
+        response = self._get(self.reader)
+        self.assertContains(response, "Документ опубликован")
+        self.assertContains(response, "Приказ подписан")
+
+    def test_does_not_show_records_of_another_document(self):
+        # Записи ключуются UUID, а не рег. номером: раньше карточка
+        # показала бы события однофамильца с тем же номером.
+        other = make_document(
+            reg_number="710-п", files_original="documents/originals/2026/01/scan.pdf",
+        )
+        from .. import services
+
+        services.change_document_status(
+            actor=self.controller, document=other,
+            new_status=NormativeDocument.Status.ACTIVE, comment="Чужое основание",
+        )
+        response = self._get(self.reader)
+        self.assertNotContains(response, "Чужое основание")

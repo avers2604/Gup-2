@@ -79,7 +79,7 @@
                   <span class="status-pill
                     {% if doc.status == 'active' %}status-pill--active
                     {% elif doc.status == 'active_amended' %}status-pill--amended
-                    {% elif doc.status == 'revoked' %}status-pill--revoked
+                    {% elif doc.status == 'revoked' or doc.status == 'annulled' %}status-pill--revoked
                     {% else %}status-pill--draft{% endif %}">
                     {{ doc.get_status_display }}
                   </span>

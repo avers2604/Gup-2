@@ -5,13 +5,45 @@ STACK.md — см. docstring модуля прав. Тесты фиксирую�
 если Заказчик уточнит полномочия, эти проверки — первое, что должно
 измениться вместе с матрицей.
 """
-from django.test import TestCase
+from django.test import Client, TestCase
 
 from apps.iam.models import Department, User
 
 from .. import permissions
 from ..models import NormativeDocument
 from .factories import make_document
+
+
+PASSWORD = "Sup3r$ecret!Pass"
+
+
+def login_client(user, password=PASSWORD):
+    """Клиент с выполненным входом, готовый к запросам.
+
+    Администратору 2FA обязательна (`User.requires_totp`), и middleware
+    политики учётной записи уводит его на подключение фактора с любой
+    страницы, пока фактор не подтверждён в сессии. Поэтому для таких
+    ролей помощник доводит учётную запись до рабочего состояния ровно
+    так, как это сделал бы живой вход, — иначе тест на действие
+    Администратора проверял бы редирект на страницу 2FA, а не само
+    действие.
+    """
+    if user.requires_totp and not user.totp_enabled:
+        from apps.iam.totp import generate_totp_secret
+
+        user.totp_secret = generate_totp_secret()
+        user.totp_enabled = True
+        user.save()
+
+    client = Client()
+    client.login(personnel_number=user.personnel_number, password=password)
+    if user.totp_enabled:
+        from apps.iam.security import totp_stamp
+
+        session = client.session
+        session["totp_verified"] = totp_stamp(user)
+        session.save()
+    return client
 
 
 def make_user(personnel_number="0001", role=User.Role.READER, **kwargs):
@@ -25,7 +57,7 @@ def make_user(personnel_number="0001", role=User.Role.READER, **kwargs):
     )
     defaults.update(kwargs)
     user = User(**defaults)
-    user.set_password("Sup3r$ecret!Pass")
+    user.set_password(PASSWORD)
     user.save()
     return user
 

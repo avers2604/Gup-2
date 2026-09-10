@@ -185,7 +185,7 @@ class NormativeDocumentRetentionFieldTests(TestCase):
 
         entries = AuditLog.objects.filter(
             event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
-            object_id=doc.reg_number,
+            object_id=str(doc.pk),
         )
         self.assertEqual(entries.count(), 1)
         self.assertEqual(entries.first().details["old_category"], RetentionCategory.DIRECTIVES_OPERATIONAL)
@@ -222,7 +222,7 @@ class NormativeDocumentRetentionFieldTests(TestCase):
 
         entries = AuditLog.objects.filter(
             event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
-            object_id=doc.reg_number,
+            object_id=str(doc.pk),
         )
         self.assertEqual(entries.count(), 1)
         self.assertEqual(entries.first().details["retention_until"], "2005-01-01")

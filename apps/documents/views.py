@@ -129,6 +129,7 @@ class DocumentDetailView(LoginRequiredMixin, View):
             "can_edit": permissions.can_edit_document(request.user, document),
             "can_change_status": permissions.can_change_status(request.user, document),
             "can_manage_relations": permissions.can_manage_relations(request.user, document),
+            "activity": _document_activity(document),
         })
 
 
@@ -229,15 +230,15 @@ class DocumentStatusChangeView(_DocumentWriteMixin, View):
             raise Http404
         return render(request, self.template_name, {
             "document": document,
-            "form": StatusChangeForm(document=document),
-            "allowed": transitions.target_choices(document.status),
+            "form": StatusChangeForm(document=document, user=request.user),
+            "allowed": _allowed_for(request.user, document),
         })
 
     def post(self, request, pk):
         document = self.get_document(request, pk)
         if not permissions.can_change_status(request.user, document):
             raise Http404
-        form = StatusChangeForm(request.POST, document=document)
+        form = StatusChangeForm(request.POST, document=document, user=request.user)
         if form.is_valid():
             try:
                 _, previous = services.change_document_status(
@@ -263,7 +264,7 @@ class DocumentStatusChangeView(_DocumentWriteMixin, View):
                 return HttpResponseRedirect(reverse("documents:detail", args=[document.pk]))
         return render(request, self.template_name, {
             "document": document, "form": form,
-            "allowed": transitions.target_choices(document.status),
+            "allowed": _allowed_for(request.user, document),
         })
 
 
@@ -347,3 +348,51 @@ def _relation_error_message(error):
     if isinstance(error, IntegrityError):
         return "Такая связь между этими документами уже заведена."
     return error
+
+
+def _allowed_for(user, document):
+    """Переходы, доступные именно этому пользователю на этом документе.
+
+    Шаблон по этому списку решает, показывать ли форму или сообщение
+    «переходов не предусмотрено», — и для Контролёра/Юриста на
+    действующем документе список не должен включать откат и
+    аннулирование, оставленные Администратору.
+    """
+    return [
+        (value, label)
+        for value, label in transitions.target_choices(document.status)
+        if permissions.can_change_status(user, document, value)
+    ]
+
+
+ACTIVITY_LIMIT = 20
+
+
+def _document_activity(document):
+    """Записи WORM-журнала по этому документу — «кто опубликовал, кто
+    отменил, кто менял связи» (решение Заказчика по доступу к журналу).
+
+    Видна всем, у кого есть доступ к карточке: это не контроль
+    безопасности, а обычная работа — до этого Методист не мог узнать, кто
+    опубликовал его же приказ, иначе как через Офицера ИБ. Полный журнал
+    по-прежнему закрыт (`apps/audit/permissions.py`).
+
+    Записи ищутся и по UUID, и по регистрационному номеру: с этой партии
+    журнал по НРД ключуется UUID (как бланки и пользователи), но записи,
+    сделанные раньше, привязаны к рег. номеру, а журнал WORM — переписать
+    их нельзя. Совпадение по номеру может принадлежать другой карточке с
+    тем же номером (он не уникален) — цена обратной совместимости, и она
+    уменьшается сама по мере накопления новых записей.
+    """
+    from django.db.models import Q
+
+    from apps.audit.models import AuditLog
+
+    return (
+        AuditLog.objects.filter(
+            Q(object_id=str(document.pk)) | Q(object_id=document.reg_number),
+            object_type="NormativeDocument",
+        )
+        .select_related("actor")
+        .order_by("-created_at")[:ACTIVITY_LIMIT]
+    )
