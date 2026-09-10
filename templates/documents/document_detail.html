@@ -101,12 +101,20 @@
   </div>
 
   <div class="card" style="margin-top: var(--space-6);">
-    <p class="label">Связи версионности</p>
+    <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+      <p class="label" style="margin:0;">Связи версионности</p>
+      {% if can_manage_relations %}
+        <a class="btn btn--ghost" href="{% url 'documents:relation_create' document.pk %}">Добавить связь</a>
+      {% endif %}
+    </div>
     {% if relations_out or relations_in %}
       <div class="table-scroll">
         <table class="table">
           <thead>
-            <tr><th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th></tr>
+            <tr>
+              <th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th>
+              {% if can_manage_relations %}<th></th>{% endif %}
+            </tr>
           </thead>
           <tbody>
             {% for relation in relations_out %}
@@ -120,6 +128,15 @@
                   — {{ relation.to_document.title }}
                 </td>
                 <td>{{ relation.note|default:"—" }}</td>
+                {% if can_manage_relations %}
+                  <td>
+                    <form method="post"
+                          action="{% url 'documents:relation_delete' document.pk relation.pk %}">
+                      {% csrf_token %}
+                      <button class="btn btn--danger" type="submit">Снять</button>
+                    </form>
+                  </td>
+                {% endif %}
               </tr>
             {% endfor %}
             {% for relation in relations_in %}
@@ -133,6 +150,14 @@
                   — {{ relation.from_document.title }}
                 </td>
                 <td>{{ relation.note|default:"—" }}</td>
+                {% if can_manage_relations %}
+                  {% comment %}
+                    Входящую связь снимают из карточки её источника — там,
+                    где она заведена и где видно, зачем. Кнопка здесь
+                    удаляла бы чужое ребро из чужого графа.
+                  {% endcomment %}
+                  <td class="caption">из карточки источника</td>
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>
@@ -168,13 +193,22 @@
   </div>
 
   {% if can_edit or can_change_status %}
-    <p class="caption" style="margin-top: var(--space-6);">
-      {% comment %}
-        Редактирование и смена статуса — следующая партия Этапа 2; здесь
-        показано только наличие права, чтобы кнопки появились ровно там,
-        где они и должны быть, а не в неожиданном месте.
-      {% endcomment %}
-      Доступные действия: {% if can_edit %}редактирование черновика{% endif %}{% if can_edit and can_change_status %}, {% endif %}{% if can_change_status %}смена статуса{% endif %} — интерфейс в следующей партии, пока через <a href="/admin/documents/normativedocument/{{ document.pk }}/change/">админку</a>.
-    </p>
+    <div class="card" style="margin-top: var(--space-6);">
+      <p class="label">Доступные действия</p>
+      <div style="display:flex; gap: var(--space-3); flex-wrap: wrap;">
+        {% if can_edit %}
+          <a class="btn btn--primary" href="{% url 'documents:edit' document.pk %}">Править черновик</a>
+        {% endif %}
+        {% if can_change_status %}
+          <a class="btn btn--accent" href="{% url 'documents:status' document.pk %}">Изменить статус</a>
+        {% endif %}
+      </div>
+      {% if can_change_status and not can_edit and document.status != 'draft' %}
+        <p class="caption" style="margin-top: var(--space-3);">
+          Правка недоступна: документ уже имеет силу и изменяется новой
+          редакцией со связью версионности (ТЗ 4.2.2), а не на месте.
+        </p>
+      {% endif %}
+    </div>
   {% endif %}
 {% endblock %}

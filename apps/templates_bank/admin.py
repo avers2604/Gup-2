@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 
+from . import permissions
 from .models import Template, TemplateFamily
 
 
@@ -34,12 +35,9 @@ class TemplateAdmin(admin.ModelAdmin):
 
     @staticmethod
     def _can_manage(request):
-        # Роль «Куратор службы» упразднена — функционал унаследован
-        # CONTROLLER_LAWYER (решение Заказчика, см. apps/iam/models.py).
-        return request.user.is_superuser or request.user.role in {
-            request.user.Role.CONTROLLER_LAWYER,
-            request.user.Role.ADMINISTRATOR,
-        }
+        # Те же правила, что и в рабочем месте банка бланков (ТЗ 4.3) —
+        # apps/templates_bank/permissions.py единственный их источник.
+        return permissions.can_manage_templates(request.user)
 
     def has_add_permission(self, request):
         return super().has_add_permission(request) and self._can_manage(request)

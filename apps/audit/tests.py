@@ -122,3 +122,172 @@ class AuditLogDatabaseLevelWormTests(TestCase):
         self.assertEqual(AuditLog.objects.count(), 0)
         with connection.cursor() as cursor:
             cursor.execute("TRUNCATE audit_auditlog")  # не должно бросать исключение
+
+
+# ---------------------------------------------------------------------------
+# Web GUI журнала аудита и личный кабинет (ТЗ 4.7, п.8.2) — партия 5 Этапа 2.
+#
+# Журнал вёлся с Этапа 1, но прочитать его можно было только в Django
+# admin: Офицеру ИБ требовался is_staff, а сама роль на доступ к журналу
+# не влияла никак.
+# ---------------------------------------------------------------------------
+from django.test import Client  # noqa: E402
+from django.urls import reverse  # noqa: E402
+
+from apps.documents.tests.test_permissions import make_user  # noqa: E402
+from apps.iam.models import User  # noqa: E402
+
+from . import permissions as audit_permissions  # noqa: E402
+
+PASSWORD = "Sup3r$ecret!Pass"
+
+
+class AuditPermissionTests(TestCase):
+    def test_reader_has_no_access(self):
+        self.assertFalse(audit_permissions.can_view_audit_log(make_user()))
+
+    def test_security_officer_has_access(self):
+        user = make_user(personnel_number="0400", role=User.Role.SECURITY_OFFICER)
+        self.assertTrue(audit_permissions.can_view_audit_log(user))
+
+    def test_administrator_has_access(self):
+        user = make_user(personnel_number="0401", role=User.Role.ADMINISTRATOR)
+        self.assertTrue(audit_permissions.can_view_audit_log(user))
+
+    def test_controller_lawyer_has_no_access(self):
+        # Намеренно: журнал показывает в том числе его собственные
+        # действия, и «проверяющий, читающий журнал своих действий» —
+        # это не разделение обязанностей.
+        user = make_user(personnel_number="0402", role=User.Role.CONTROLLER_LAWYER)
+        self.assertFalse(audit_permissions.can_view_audit_log(user))
+
+
+class AuditLogViewTests(TestCase):
+    def setUp(self):
+        self.officer = make_user(personnel_number="0410", role=User.Role.SECURITY_OFFICER)
+        self.reader = make_user(personnel_number="0411")
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.DOCUMENT_PUBLISHED,
+            actor_personnel_number="0999", object_type="NormativeDocument",
+            object_id="A1-п", details={"old_status": "draft", "new_status": "active"},
+        )
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN,
+            actor_personnel_number="0888", object_type="User", object_id="u1",
+        )
+
+    def _client(self, user):
+        client = Client()
+        client.login(personnel_number=user.personnel_number, password=PASSWORD)
+        return client
+
+    def test_requires_login(self):
+        self.assertEqual(Client().get(reverse("audit:list")).status_code, 302)
+
+    def test_reader_gets_404(self):
+        self.assertEqual(self._client(self.reader).get(reverse("audit:list")).status_code, 404)
+
+    def test_officer_sees_entries(self):
+        response = self._client(self.officer).get(reverse("audit:list"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "A1-п")
+        self.assertContains(response, "Документ опубликован")
+
+    def test_filter_by_event_type(self):
+        response = self._client(self.officer).get(
+            reverse("audit:list"), {"event_type": AuditLog.EventType.SESSION_LOGIN}
+        )
+        self.assertContains(response, "0888")
+        self.assertNotContains(response, "A1-п")
+
+    def test_filter_by_object_id(self):
+        response = self._client(self.officer).get(reverse("audit:list"), {"object_id": "A1-п"})
+        self.assertContains(response, "A1-п")
+        self.assertNotContains(response, "0888")
+
+    def test_reversed_period_reports_error(self):
+        response = self._client(self.officer).get(
+            reverse("audit:list"), {"date_from": "2030-01-01", "date_to": "2020-01-01"}
+        )
+        self.assertContains(response, "Начало периода позже его окончания.")
+
+    def test_date_to_is_inclusive(self):
+        # Пользователь, выбравший «по сегодня», ожидает увидеть события
+        # сегодняшнего дня, а не пустой список.
+        from django.utils import timezone
+
+        today = timezone.localdate().isoformat()
+        response = self._client(self.officer).get(reverse("audit:list"), {"date_to": today})
+        self.assertContains(response, "A1-п")
+
+    def test_navigation_link_visible_only_to_officer(self):
+        officer_page = self._client(self.officer).get(reverse("audit:list"))
+        self.assertContains(officer_page, "Журнал аудита")
+        reader_page = self._client(self.reader).get(reverse("documents:list"))
+        self.assertNotContains(reader_page, "Журнал аудита")
+
+
+class ProfileViewTests(TestCase):
+    def setUp(self):
+        self.user = make_user(personnel_number="0420")
+        self.client = Client()
+        self.client.login(personnel_number="0420", password=PASSWORD)
+
+    def test_requires_login(self):
+        self.assertEqual(Client().get(reverse("iam:profile")).status_code, 302)
+
+    def test_shows_role_and_clearance(self):
+        response = self.client.get(reverse("iam:profile"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Читатель")
+        self.assertContains(response, "Допуск к документам «ДСП»")
+
+    def test_shows_only_own_login_events(self):
+        other = make_user(personnel_number="0421")
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN,
+            actor=other, actor_personnel_number="0421",
+            details={"ip_address": "10.0.0.9"},
+        )
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN,
+            actor=self.user, actor_personnel_number="0420",
+            details={"ip_address": "10.0.0.1"},
+        )
+        response = self.client.get(reverse("iam:profile"))
+        self.assertContains(response, "10.0.0.1")
+        self.assertNotContains(response, "10.0.0.9")
+
+    def test_password_expiry_absent_when_never_changed(self):
+        self.user.password_changed_at = None
+        self.user.save(update_fields=["password_changed_at"])
+        response = self.client.get(reverse("iam:profile"))
+        self.assertContains(response, "ещё ни разу не менялся")
+
+
+class AuditDetailsRenderingTests(TestCase):
+    """Реквизиты события — свободный JSON, и одна запись может унести в
+    него сотни значений (импорт тезауруса). Без обрезки такая строка
+    вырастает выше всей страницы и хоронит под собой журнал.
+
+    Проверяется отрендеренная страница, а не шаблон: важно, что в ответ
+    не уходит простыня, каким бы способом её ни обрезали.
+    """
+
+    def test_long_details_value_is_truncated_in_the_table(self):
+        officer = make_user(personnel_number="0430", role=User.Role.SECURITY_OFFICER)
+        long_value = "термин-" * 500
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.THESAURUS_UPDATED,
+            object_type="ThesaurusEntry", object_id="bulk_import",
+            details={"created": long_value},
+        )
+        client = Client()
+        client.login(personnel_number="0430", password=PASSWORD)
+        body = client.get(reverse("audit:list")).content.decode()
+
+        # Полное значение остаётся доступным подсказкой, но в самой
+        # ячейке его быть не должно.
+        cell = body.split('<span class="caption">created:</span>')[1][:400]
+        self.assertNotIn(long_value, cell)
+        self.assertIn("…", cell)

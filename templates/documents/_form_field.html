@@ -1,0 +1,14 @@
+{% comment %}
+  Одно поле формы в дизайн-системе проекта: подпись, виджет, подсказка,
+  ошибки. Вынесено в partial, потому что страниц с формами становится
+  больше одной, а «почти такая же» разметка, скопированная во вторую,
+  расходится с первой на первой же правке.
+{% endcomment %}
+<div style="margin-bottom: var(--space-4);">
+  <label class="field-label" for="{{ field.id_for_label }}">
+    {{ field.label }}{% if field.field.required %} <span title="Обязательное поле">*</span>{% endif %}
+  </label>
+  {{ field }}
+  {% if field.help_text %}<p class="caption">{{ field.help_text }}</p>{% endif %}
+  {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+</div>

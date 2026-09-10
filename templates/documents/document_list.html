@@ -2,7 +2,12 @@
 {% block title %}Реестр НРД · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
   <p class="label">Нормативно-распорядительная документация</p>
-  <h1 class="title">Реестр документов</h1>
+  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+    <h1 class="title">Реестр документов</h1>
+    {% if can_edit %}
+      <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
+    {% endif %}
+  </div>
 
   <div class="card" style="margin-top: var(--space-6);">
     <form method="get" novalidate>

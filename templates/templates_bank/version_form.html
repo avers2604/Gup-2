@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Новая версия {{ family.name }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">
+    <a href="{% url 'templates_bank:family_list' %}">Банк бланков</a> ·
+    <a href="{% url 'templates_bank:family_detail' family.pk %}">{{ family.name }}</a>
+  </p>
+  <h1 class="title">Выпуск новой версии</h1>
+  {% if current %}
+    <p class="caption">
+      Действующая версия — {{ current.version }}. После выпуска она перейдёт
+      в архив и будет связана с новой в обе стороны.
+    </p>
+  {% else %}
+    <p class="caption">Это первая версия семейства форм.</p>
+  {% endif %}
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="post" enctype="multipart/form-data" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="notice notice--error" role="alert">
+          {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+        </div>
+      {% endif %}
+      <p class="caption">
+        Оба файла уходят в WORM-хранилище с Governance-блокировкой и
+        проверяются антивирусом и на встроенные макросы до записи.
+      </p>
+      {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
+      <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4);">
+        <button class="btn btn--primary" type="submit">Выпустить версию</button>
+        <a class="btn btn--ghost" href="{% url 'templates_bank:family_detail' family.pk %}">Отмена</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

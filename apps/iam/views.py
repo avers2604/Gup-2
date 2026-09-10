@@ -5,6 +5,8 @@ Web GUI — вход и 2FA/TOTP (ТЗ 4.7). Серверный рендерин
 обращается к User.objects/verify_totp_code напрямую, только к функциям
 services.py (общим с apps/iam/api.py, см. их docstring).
 """
+import datetime
+
 from django.conf import settings
 from django.contrib.auth import login as django_login
 from django.contrib.auth import logout as django_logout
@@ -16,8 +18,11 @@ from django.views.generic import FormView
 
 from apps.core.limits import consume_fixed_window, request_identity
 
+from apps.audit.models import AuditLog
+
 from . import services
 from .forms import LoginForm, PasswordChangeForm, TotpCodeForm
+from .models import PASSWORD_EXPIRY_DAYS
 
 _SESSION_PENDING_TICKET = "totp_pending_ticket"
 _SESSION_SHARED_TERMINAL = "shared_terminal_login"
@@ -187,3 +192,59 @@ class PasswordChangeView(LoginRequiredMixin, FormView):
         # пользователя на этой же странице.
         update_session_auth_hash(self.request, form.user)
         return redirect(settings.LOGIN_REDIRECT_URL)
+
+
+class ProfileView(LoginRequiredMixin, View):
+    """Личный кабинет (п.8.2 решения Заказчика).
+
+    До этой партии единственным местом во всём Web GUI, где пользователь
+    видел себя, была строка в шапке — имя и роль. Ни срока действия
+    пароля, ни состояния 2FA, ни собственной истории входов ему было
+    негде посмотреть, хотя всё это система про него знает и по всему
+    этому его ограничивает.
+
+    Страница только читает: смена пароля — на своей странице, 2FA — на
+    своей, роль и допуск ДСП пользователь себе не назначает.
+    """
+
+    template_name = "iam/profile.html"
+    RECENT_EVENTS = 10
+
+    def get(self, request):
+        user = request.user
+        summary = services.user_auth_summary(user)
+
+        # Собственные входы и выходы — из того же WORM-журнала, что
+        # смотрит Офицер ИБ, но строго свои: фильтр по actor, а не по
+        # табельному номеру из запроса.
+        recent = (
+            AuditLog.objects.filter(
+                actor=user,
+                event_type__in=[
+                    AuditLog.EventType.SESSION_LOGIN,
+                    AuditLog.EventType.SESSION_LOGOUT,
+                    AuditLog.EventType.SESSION_LOGIN_FAILED,
+                ],
+            )
+            .order_by("-created_at")[: self.RECENT_EVENTS]
+        )
+
+        return render(request, self.template_name, {
+            "summary": summary,
+            "recent_events": recent,
+            "password_expires_at": _password_expiry(user),
+        })
+
+
+def _password_expiry(user):
+    """Дата, после которой пароль потребует смены.
+
+    Срок берётся из той же константы `PASSWORD_EXPIRY_DAYS`, по которой
+    считает `User.is_password_expired` — иначе личный кабинет показывал
+    бы одну дату, а middleware перенаправлял на смену пароля в другую.
+    None, если пароль ещё ни разу не менялся: срока в этом случае нет,
+    и придумывать его нельзя.
+    """
+    if not user.password_changed_at:
+        return None
+    return user.password_changed_at + datetime.timedelta(days=PASSWORD_EXPIRY_DAYS)

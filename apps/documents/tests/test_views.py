@@ -1,9 +1,11 @@
 """Web GUI рабочих мест — реестр и карточка НРД (ТЗ 4.1)."""
 import datetime
 
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
 from django.urls import reverse
 
+from apps.core.tests.clamd_fixture import ClamdTestCase
 from apps.iam.models import User
 
 from ..models import DocumentRelation, NormativeDocument
@@ -157,3 +159,202 @@ class TemplateCommentRenderingTests(TestCase):
                 body = self.client.get(reverse(name, args=args)).content.decode()
                 self.assertNotIn("{#", body)
                 self.assertNotIn("{% comment", body)
+
+
+class _WriteTestSetup:
+    """Общая обвязка тестов записи. Именно миксин, а не общий базовый
+    TestCase: наследование одного класса тестов от другого прогнало бы
+    весь его набор повторно — в данном случае ещё и под живым clamd,
+    который поднимается на класс."""
+
+    def setUp(self):
+        super().setUp()
+        self.methodist = make_user(personnel_number="0100", role=User.Role.METHODIST)
+        self.controller = make_user(personnel_number="0101", role=User.Role.CONTROLLER_LAWYER)
+        self.reader = make_user(personnel_number="0102")
+        self.document = make_document(
+            reg_number="400-п", files_original="documents/originals/2026/01/scan.pdf",
+        )
+
+    def _client(self, user):
+        client = Client()
+        client.login(personnel_number=user.personnel_number, password=PASSWORD)
+        return client
+
+    def _form_data(self, **overrides):
+        data = {
+            "reg_number": "401-п", "reg_date": "2026-04-01", "effective_date": "2026-04-10",
+            "doc_type": NormativeDocument.DocType.ORDER, "title": "Созданный через форму",
+            "summary": "", "issuer_dept": self.document.issuer_dept_id,
+            "access_level": NormativeDocument.AccessLevel.GENERAL,
+            "retention_category": self.document.retention_category,
+            "ocr_category": "",
+        }
+        data.update(overrides)
+        return data
+
+
+class DocumentWriteViewTests(_WriteTestSetup, TestCase):
+    """Web GUI записи: регистрация, правка, смена статуса (ТЗ 4.1)."""
+
+    # --- регистрация ---
+
+    def test_reader_does_not_see_create_page(self):
+        response = self._client(self.reader).get(reverse("documents:create"))
+        self.assertEqual(response.status_code, 404)
+
+    def test_effective_date_before_reg_date_rejected(self):
+        scan = SimpleUploadedFile("scan.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+        response = self._client(self.methodist).post(
+            reverse("documents:create"),
+            self._form_data(effective_date="2026-01-01", files_original=scan),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "вступить в силу раньше")
+        self.assertFalse(NormativeDocument.objects.filter(reg_number="401-п").exists())
+
+    def test_declassification_date_without_dsp_rejected(self):
+        scan = SimpleUploadedFile("scan.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+        response = self._client(self.methodist).post(
+            reverse("documents:create"),
+            self._form_data(declassification_date="2030-01-01", files_original=scan),
+        )
+        self.assertContains(response, "только для документов с грифом")
+
+    # --- правка ---
+
+    def test_reader_cannot_open_edit_page(self):
+        response = self._client(self.reader).get(
+            reverse("documents:edit", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_edit_page_closed_for_document_in_force(self):
+        active = make_document(
+            reg_number="402-п", status=NormativeDocument.Status.ACTIVE,
+            files_original="documents/originals/2026/01/scan.pdf",
+        )
+        response = self._client(self.methodist).get(reverse("documents:edit", args=[active.pk]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_methodist_edits_draft(self):
+        response = self._client(self.methodist).post(
+            reverse("documents:edit", args=[self.document.pk]),
+            self._form_data(reg_number="400-п", title="Исправленное наименование"),
+        )
+        self.assertEqual(response.status_code, 302)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.title, "Исправленное наименование")
+
+    # --- смена статуса ---
+
+    def test_methodist_cannot_open_status_page(self):
+        response = self._client(self.methodist).get(
+            reverse("documents:status", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_status_page_offers_only_allowed_transitions(self):
+        response = self._client(self.controller).get(
+            reverse("documents:status", args=[self.document.pk])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Действует")
+        # Из черновика документ не может сразу «утратить силу».
+        self.assertNotContains(response, "Утратил силу")
+
+    def test_controller_publishes_document(self):
+        response = self._client(self.controller).post(
+            reverse("documents:status", args=[self.document.pk]),
+            {"new_status": NormativeDocument.Status.ACTIVE, "comment": "Приказ подписан"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, NormativeDocument.Status.ACTIVE)
+        self.assertEqual(self.document.status_history.count(), 2)
+
+    def test_disallowed_transition_posted_directly_is_rejected(self):
+        # Форма такой вариант не предлагает — но её можно обойти, отправив
+        # запрос напрямую, и сервис обязан проверить переход заново.
+        response = self._client(self.controller).post(
+            reverse("documents:status", args=[self.document.pk]),
+            {"new_status": NormativeDocument.Status.REVOKED, "comment": ""},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.status, NormativeDocument.Status.DRAFT)
+
+    def test_archived_document_offers_no_transitions(self):
+        archived = make_document(
+            reg_number="403-п", status=NormativeDocument.Status.ARCHIVED,
+            files_original="documents/originals/2026/01/scan.pdf",
+        )
+        response = self._client(self.controller).get(
+            reverse("documents:status", args=[archived.pk])
+        )
+        self.assertContains(response, "конечное состояние")
+
+    def test_restricted_document_write_pages_return_404(self):
+        secret = make_document(
+            reg_number="404-дсп",
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+            files_original="documents/originals/2026/01/scan.pdf",
+        )
+        client = self._client(self.controller)
+        for name in ("documents:edit", "documents:status"):
+            with self.subTest(page=name):
+                self.assertEqual(client.get(reverse(name, args=[secret.pk])).status_code, 404)
+
+
+class ActionButtonVisibilityTests(TestCase):
+    def setUp(self):
+        self.document = make_document(
+            reg_number="410-п", files_original="documents/originals/2026/01/scan.pdf",
+        )
+
+    def _get(self, user, name, args=()):
+        client = Client()
+        client.login(personnel_number=user.personnel_number, password=PASSWORD)
+        return client.get(reverse(name, args=args))
+
+    def test_reader_sees_no_registration_button(self):
+        response = self._get(make_user(personnel_number="0110"), "documents:list")
+        self.assertNotContains(response, "Зарегистрировать документ")
+
+    def test_methodist_sees_registration_button(self):
+        methodist = make_user(personnel_number="0111", role=User.Role.METHODIST)
+        response = self._get(methodist, "documents:list")
+        self.assertContains(response, "Зарегистрировать документ")
+
+    def test_controller_sees_status_button_on_card(self):
+        controller = make_user(personnel_number="0112", role=User.Role.CONTROLLER_LAWYER)
+        response = self._get(controller, "documents:detail", [self.document.pk])
+        self.assertContains(response, "Изменить статус")
+
+
+class DocumentCreationUploadTests(_WriteTestSetup, ClamdTestCase):
+    """Успешная регистрация карточки — единственный тест записи, который
+    реально доходит до хранилища.
+
+    Отсюда живой clamd: `NormativeDocument.save()` сканирует загрузку до
+    записи в WORM-бакет и работает fail-closed, поэтому без доступного
+    антивируса создание карточки не проходит вовсе. Мок подменил бы
+    ровно ту часть, которую и надо проверить — что штатный путь Web GUI
+    проходит антивирусный контур целиком. Тот же принцип, что в
+    test_antivirus_integration.py и test_ocr.py.
+    """
+
+    # Свой порт, чтобы не пересечься с другими ClamdTestCase при --parallel.
+    clamd_port = 13312
+
+    def test_methodist_creates_draft(self):
+        scan = SimpleUploadedFile("scan.pdf", b"%PDF-1.4 test", content_type="application/pdf")
+        response = self._client(self.methodist).post(
+            reverse("documents:create"), self._form_data(files_original=scan)
+        )
+        self.assertEqual(response.status_code, 302)
+        created = NormativeDocument.objects.get(reg_number="401-п")
+        self.assertEqual(created.status, NormativeDocument.Status.DRAFT)
+        self.assertEqual(created.status_history.count(), 1)
+        self.assertEqual(created.status_history.first().status, NormativeDocument.Status.DRAFT)
+        created.files_original.delete(save=False)

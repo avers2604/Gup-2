@@ -1,8 +1,11 @@
+import datetime
+
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models, transaction
+from django.utils import timezone
 
 from apps.core import antivirus, macro_check
 from apps.core.models import TimeStampedModel, UUIDPKModel
@@ -144,7 +147,7 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
     )
     declassification_date = models.DateField(
         null=True, blank=True, verbose_name="Дата рассекречивания",
-        help_text="Только для документов ДСП — срок хранения отсчитывается от неё, не от reg_date.",
+        help_text="Только для документов ДСП — срок хранения отсчитывается от неё, а не от даты регистрации.",
     )
 
     class Meta:
@@ -242,6 +245,17 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         with transaction.atomic():
             super().save(*args, **kwargs)
 
+            # SCD-2 (ТЗ 4.2.3). Историю статусов до этой партии не вёл
+            # никто — модель, exclusion constraint и вьюха карточки были,
+            # а записывать в таблицу было нечему. Синхронизация стоит
+            # здесь, рядом с аудитом смены статуса, а не только в
+            # сервисном слое: статус меняют и админка, и импорт, и
+            # management-команды; будь история отдельным шагом сервиса,
+            # эти пути писали бы аудит без истории, и два журнала одного
+            # события разошлись бы.
+            if is_new or status_changed:
+                self._sync_status_history()
+
             if category_changed:
                 if is_new:
                     # Обратная загрузка старого документа с уже истёкшим по матрице
@@ -289,13 +303,21 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 }.get(self.status, AuditLog.EventType.DOCUMENT_STATUS_CHANGED)
 
                 actor = getattr(self, "_audit_actor", None)
+                details = {"old_status": previous_status, "new_status": self.status}
+                # Основание перехода, если вызывающий его указал (форма
+                # смены статуса в Web GUI). Транзитный атрибут, как и
+                # _audit_actor: в модели такого поля нет — основание
+                # принадлежит событию, а не карточке.
+                comment = getattr(self, "_audit_comment", "")
+                if comment:
+                    details["comment"] = comment
                 AuditLog.objects.create(
                     event_type=event_type,
                     actor=actor,
                     actor_personnel_number=getattr(actor, "personnel_number", ""),
                     object_type="NormativeDocument",
                     object_id=self.reg_number,
-                    details={"old_status": previous_status, "new_status": self.status},
+                    details=details,
                 )
 
             if files_original_changed:
@@ -308,6 +330,49 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
 
                 pk = self.pk
                 transaction.on_commit(lambda: run_ocr_for_document.delay(str(pk)))
+
+
+    def _open_status_period(self):
+        """Текущий, ещё не закрытый срез статуса (valid_to = NULL)."""
+        return (
+            DocumentStatusHistory.objects.filter(document=self, period__endswith__isnull=True)
+            .order_by("-period")
+            .first()
+        )
+
+    def _sync_status_history(self):
+        """Закрыть текущий срез статуса и открыть новый (ТЗ 4.2.3).
+
+        Границы tstzrange полуоткрыты — `[valid_from, valid_to)`, поэтому
+        закрывающая и открывающая отметка совпадают: `[t0, t1)` и
+        `[t1, NULL)` не пересекаются, и EXCLUDE USING gist их пропускает.
+        Именно на это опирается вся схема: одна отметка времени, а не две
+        соседние, иначе в истории появлялись бы микроскопические дыры, в
+        которые документ формально не имел никакого статуса.
+
+        У карточки может не быть открытого среза — она заведена до
+        появления этого механизма или создана в обход `save()`. Прошлое в
+        таком случае не восстанавливается (его неоткуда взять): просто
+        открывается новый срез с текущего момента.
+        """
+        now = timezone.now()
+        current = self._open_status_period()
+        if current is not None:
+            if current.status == self.status:
+                return
+            lower = current.period.lower
+            # Защита от вырожденного диапазона: если смена статуса
+            # случилась в ту же микросекунду, что и открытие среза,
+            # `[t, t)` — пустой диапазон, а `lower > upper` и вовсе
+            # ошибка БД. Сдвиг на микросекунду сохраняет порядок записей.
+            if lower is not None and now <= lower:
+                now = lower + datetime.timedelta(microseconds=1)
+            current.period = (lower, now)
+            current.save(update_fields=["period"])
+
+        DocumentStatusHistory.objects.create(
+            document=self, status=self.status, period=(now, None),
+        )
 
 
 class DocumentRelationQuerySet(models.QuerySet):
@@ -348,13 +413,21 @@ class DocumentRelation(models.Model):
         APPROVES_TEMPLATE = "approves_template", "Утверждает форму"
         REFERENCES = "references", "Ссылается на"
 
+    # verbose_name у всех трёх полей — не косметика: Django подставляет
+    # их в подписи формы и в сообщение о нарушении UniqueConstraint. Без
+    # них пользователь Web GUI видел «Relation type» вместо «Вид связи» и
+    # «поля From document, To document и Relation type» в тексте ошибки.
     from_document = models.ForeignKey(
-        NormativeDocument, on_delete=models.CASCADE, related_name="relations_from"
+        NormativeDocument, on_delete=models.CASCADE, related_name="relations_from",
+        verbose_name="Документ-источник",
     )
     to_document = models.ForeignKey(
-        NormativeDocument, on_delete=models.CASCADE, related_name="relations_to"
+        NormativeDocument, on_delete=models.CASCADE, related_name="relations_to",
+        verbose_name="Связанный документ",
     )
-    relation_type = models.CharField(max_length=32, choices=RelationType.choices)
+    relation_type = models.CharField(
+        max_length=32, choices=RelationType.choices, verbose_name="Вид связи",
+    )
     note = models.TextField(blank=True, verbose_name="Описание затронутых пунктов")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -367,6 +440,9 @@ class DocumentRelation(models.Model):
             models.UniqueConstraint(
                 fields=["from_document", "to_document", "relation_type"],
                 name="unique_document_relation",
+                violation_error_message=(
+                    "Такая связь между этими документами уже заведена."
+                ),
             ),
             models.CheckConstraint(
                 condition=~models.Q(from_document=models.F("to_document")),
@@ -413,14 +489,16 @@ class DocumentStatusHistory(models.Model):
     уровне БД — две параллельные транзакции никогда не закоммитят
     пересекающиеся периоды одновременно, одна из них гарантированно
     получит IntegrityError (см. ConcurrentStatusTransitionTests). Но сам
-    по себе constraint не даёт "плавной" семантики перехода: сервис,
-    который будет закрывать текущий период (valid_to) и открывать новый
-    при публикации документа (Этап 2, пока не реализован), должен
-    блокировать строку NormativeDocument через
-    `NormativeDocument.objects.select_for_update()` на время обеих
-    операций — иначе конкурентный переход просто упадёт с ошибкой вместо
-    корректной последовательной обработки, и вызывающему коду нужно будет
-    самому решать, ретраить или нет."""
+    по себе constraint не даёт «плавной» семантики перехода: без
+    блокировки конкурентный переход просто упадёт с ошибкой вместо
+    корректной последовательной обработки, и вызывающему коду пришлось бы
+    самому решать, ретраить или нет.
+
+    Поэтому срезы закрывает и открывает `NormativeDocument._sync_status_history()`
+    (рядом с аудитом смены статуса — один путь записи на оба журнала), а
+    строку документа берёт под `select_for_update()` штатный вход
+    `apps.documents.services.change_document_status()`. Ограничение БД
+    остаётся последним рубежом для путей, которые до сервиса не дошли."""
 
     document = models.ForeignKey(
         NormativeDocument, on_delete=models.CASCADE, related_name="status_history"
