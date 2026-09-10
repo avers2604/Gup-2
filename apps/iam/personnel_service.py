@@ -109,7 +109,14 @@ def _cell(raw_row, col_index, name):
     return raw_row[index]
 
 
-def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
+def import_personnel(
+    file_obj,
+    *,
+    actor: User | None = None,
+    max_rows: int | None = None,
+) -> ImportReport:
+    """Import personnel while allowing the compatibility facade to override its limit."""
+    row_limit = MAX_ROWS if max_rows is None else max_rows
     workbook = openpyxl.load_workbook(file_obj, data_only=True, read_only=True)
     sheet = workbook.active
     row_iter = sheet.iter_rows(values_only=True)
@@ -129,8 +136,10 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
     for row in row_iter:
         if not any(cell is not None and str(cell).strip() for cell in row):
             continue
-        if len(data_rows) >= MAX_ROWS:
-            raise ValidationError(f"В файле больше {MAX_ROWS} строк — максимум за одну операцию (ТЗ 4.6).")
+        if len(data_rows) >= row_limit:
+            raise ValidationError(
+                f"В файле больше {row_limit} строк — максимум за одну операцию (ТЗ 4.6)."
+            )
         data_rows.append(row)
 
     col_index = {name: index for index, name in enumerate(header)}
@@ -141,16 +150,24 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
             with transaction.atomic():
                 if not tab_number:
                     raise ValueError("tab_number не заполнен.")
-                department = _resolve_department(str(_cell(raw_row, col_index, "department_path") or "").strip())
+                department = _resolve_department(
+                    str(_cell(raw_row, col_index, "department_path") or "").strip()
+                )
                 role_raw = str(_cell(raw_row, col_index, "role") or "").strip()
                 if role_raw not in ROLE_IMPORT_MAP:
-                    raise ValueError(f"Неизвестная роль «{role_raw}». Допустимо: {', '.join(ROLE_IMPORT_MAP)}.")
+                    raise ValueError(
+                        f"Неизвестная роль «{role_raw}». Допустимо: {', '.join(ROLE_IMPORT_MAP)}."
+                    )
                 role = ROLE_IMPORT_MAP[role_raw]
                 status_raw = str(_cell(raw_row, col_index, "status") or "").strip().lower() or "active"
                 if status_raw not in STATUS_IMPORT_MAP:
-                    raise ValueError(f"Неизвестный статус «{status_raw}». Допустимо: {', '.join(STATUS_IMPORT_MAP)}.")
+                    raise ValueError(
+                        f"Неизвестный статус «{status_raw}». Допустимо: {', '.join(STATUS_IMPORT_MAP)}."
+                    )
                 status = STATUS_IMPORT_MAP[status_raw]
-                dsp_access = _parse_bool(_cell(raw_row, col_index, "dsp_access"), field_name="dsp_access")
+                dsp_access = _parse_bool(
+                    _cell(raw_row, col_index, "dsp_access"), field_name="dsp_access"
+                )
 
                 existing = User.objects.filter(personnel_number=tab_number).first()
                 is_update = existing is not None
@@ -190,7 +207,9 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
             report.errors.append(ImportRowResult(row_number, tab_number, _format_error(exc)))
             continue
 
-        (report.updates if is_update else report.successes).append(ImportRowResult(row_number, tab_number))
+        (report.updates if is_update else report.successes).append(
+            ImportRowResult(row_number, tab_number)
+        )
     return report
 
 
@@ -198,7 +217,11 @@ def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
-    sections = [("success", report.successes), ("updated", report.updates), ("errors", report.errors)]
+    sections = [
+        ("success", report.successes),
+        ("updated", report.updates),
+        ("errors", report.errors),
+    ]
     for name, rows in sections:
         path = out_dir / f"{name}.csv"
         with path.open("w", newline="", encoding="utf-8-sig") as stream:
