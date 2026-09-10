@@ -120,12 +120,10 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Web GUI (Django Templates + HTMX/Alpine) — вход/выход по имени маршрута,
-# не по URL напрямую. Домашней страницы Web GUI ещё нет (Этап 2 только
-# начат) — временно ведём на /styleguide/, а не оставляем LOGIN_REDIRECT_URL
-# неопределённым (пришлось бы Django-дефолт /accounts/profile/, которого
-# у нас точно нет).
+# не по URL напрямую. Домашняя страница — Smart Search (apps/search_ocr,
+# ТЗ 4.4.1); раньше (пока поиска не было) временно вела на /styleguide/.
 LOGIN_URL = "iam:login"
-LOGIN_REDIRECT_URL = "core:styleguide"
+LOGIN_REDIRECT_URL = "search_ocr:search"
 LOGOUT_REDIRECT_URL = "iam:login"
 
 # Сессии — частичная реализация ТЗ 4.7 (полная política блокировок и

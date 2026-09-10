@@ -18,7 +18,8 @@ from django.db import IntegrityError, transaction
 from apps.audit.models import AuditLog
 from apps.iam.models import User
 
-from .models import ThesaurusCategory, ThesaurusEntry, ThesaurusService, ThesaurusStatus
+from .models import ThesaurusAmbiguity, ThesaurusCategory, ThesaurusEntry, ThesaurusService, ThesaurusStatus
+from .normalization import normalize_term
 
 # Поля записи, которые реально копируются из JSON в модель — дословно
 # meta.schema файла, без id (это PK, обрабатывается отдельно).
@@ -54,14 +55,16 @@ class ThesaurusImportReport:
     # запись; не блокируют импорт, только сообщаются оператору.
     warnings: list[str] = field(default_factory=list)
     diffs: dict[str, dict] = field(default_factory=dict)
+    # ambiguity_registry, реально изменившиеся при этом импорте (см.
+    # ThesaurusAmbiguity) — отдельно от created/updated/errors записей
+    # тезауруса самих по себе: реестр неоднозначностей может измениться,
+    # даже если ни одна запись ThesaurusEntry не изменилась (например,
+    # правка только текста disambiguation).
+    ambiguity_updated: list[str] = field(default_factory=list)
 
     @property
     def total(self):
         return len(self.created) + len(self.updated) + len(self.errors) + len(self.unchanged)
-
-
-def _normalize(text: str) -> str:
-    return text.strip().lower()
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -112,14 +115,14 @@ def _check_file_level_rules(data: dict, report: ThesaurusImportReport) -> None:
         canonical = e.get("canonical")
         entry_id = e.get("id")
         if canonical and entry_id:
-            canonical_by_norm.setdefault(_normalize(canonical), entry_id)
+            canonical_by_norm.setdefault(normalize_term(canonical), entry_id)
 
-    registered_abbrs = {_normalize(a["abbr"]) for a in data.get("ambiguity_registry", []) if a.get("abbr")}
+    registered_abbrs = {normalize_term(a["abbr"]) for a in data.get("ambiguity_registry", []) if a.get("abbr")}
 
     for e in entries:
         entry_id = e.get("id")
         for sf in e.get("short_forms", []) or []:
-            norm = _normalize(sf)
+            norm = normalize_term(sf)
             match_id = canonical_by_norm.get(norm)
             if match_id and match_id != entry_id and norm not in registered_abbrs:
                 report.warnings.append(
@@ -143,10 +146,10 @@ def _check_file_level_rules(data: dict, report: ThesaurusImportReport) -> None:
     # реальный риск спутать номер закона, «асиит»/«аудит» — визуально
     # похожие акронимы).
     short_forms_with_ids = [
-        (_normalize(sf), e.get("id"))
+        (normalize_term(sf), e.get("id"))
         for e in entries
         for sf in (e.get("short_forms", []) or [])
-        if len(_normalize(sf)) >= 5
+        if len(normalize_term(sf)) >= 5
     ]
     reported_pairs: set[tuple[str, str]] = set()
     for i, (norm_i, id_i) in enumerate(short_forms_with_ids):
@@ -240,7 +243,35 @@ def import_thesaurus(file_obj, *, actor: User | None = None) -> ThesaurusImportR
         else:
             report.created.append(entry_id)
 
-    if report.created or report.updated:
+    # Персистенция ambiguity_registry (ThesaurusAmbiguity) — раньше реестр
+    # использовался только транзитно, для warnings TH-02/TH-03 выше, теперь
+    # нужен и apps.search_ocr.search (разрешение неоднозначности при
+    # расширении запроса). Upsert по abbr_normalized, тем же принципом
+    # "менять только реально изменившееся", что и у ThesaurusEntry выше —
+    # не плодить WORM-аудит на повторный импорт того же файла.
+    for item in data.get("ambiguity_registry", []) or []:
+        abbr = item.get("abbr")
+        if not abbr:
+            continue
+        candidates = item.get("candidates", []) or []
+        disambiguation = item.get("disambiguation", "") or ""
+        normalized = normalize_term(abbr)
+        existing = ThesaurusAmbiguity.objects.filter(abbr_normalized=normalized).first()
+        if (
+            existing is not None
+            and existing.abbr == abbr
+            and existing.candidates == candidates
+            and existing.disambiguation == disambiguation
+        ):
+            continue
+        obj = existing or ThesaurusAmbiguity()
+        obj.abbr = abbr
+        obj.candidates = candidates
+        obj.disambiguation = disambiguation
+        obj.save()
+        report.ambiguity_updated.append(abbr)
+
+    if report.created or report.updated or report.ambiguity_updated:
         AuditLog.objects.create(
             event_type=AuditLog.EventType.THESAURUS_UPDATED,
             actor=actor,
@@ -251,6 +282,7 @@ def import_thesaurus(file_obj, *, actor: User | None = None) -> ThesaurusImportR
                 "created": report.created,
                 "updated": report.updated,
                 "diffs": report.diffs,
+                "ambiguity_updated": report.ambiguity_updated,
             },
         )
 

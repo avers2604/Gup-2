@@ -6,6 +6,8 @@ from django.db.models.functions import Lower
 
 from apps.core.models import TimeStampedModel
 
+from .normalization import normalize_term
+
 
 class ThesaurusCategory(models.TextChoices):
     """Дословно meta.categories из docs/thesaurus/thesaurus_v0.9_draft.json.
@@ -142,4 +144,55 @@ class ThesaurusEntry(TimeStampedModel):
 
     def save(self, *args, **kwargs):
         self.full_clean()
+        super().save(*args, **kwargs)
+
+
+class ThesaurusAmbiguity(TimeStampedModel):
+    """Персистентный реестр неоднозначных аббревиатур — ambiguity_registry
+    файла тезауруса (docs/thesaurus/thesaurus_v0.9_draft.json), например
+    «ТП» -> тяговая подстанция (вес 1.0) / транспортное происшествие
+    (0.6) / трамвайный парк, legacy (0.25). Наполняется import_thesaurus()
+    (upsert по abbr_normalized), читается apps.search_ocr.search при
+    разрешении неоднозначности в расширении запроса.
+
+    Раньше (до модуля поиска) реестр использовался только транзитно при
+    импорте — для предупреждений TH-02/TH-03, сам не сохранялся (см.
+    STACK.md, раздел про тезаурус: «когда появится модуль поиска, реестр
+    нужно будет либо читать из того же JSON при индексации, либо
+    перенести в отдельную модель — это решение стоит принимать вместе с
+    дизайном самого поискового модуля»). Этот момент настал — решение:
+    отдельная модель, а не чтение JSON-файла на каждый поисковый запрос
+    (тот же файл и так уже целиком читается один раз при импорте).
+
+    `disambiguation` — человекочитаемое правило файла (например «при
+    фильтре service=EKH → тяговая подстанция»), хранится как есть для
+    отображения/аудита, но НЕ разбирается программно (произвольная
+    русская проза, не формализованный DSL) — реальное разрешение
+    неоднозначности в search.py использует структурированную часть
+    (`candidates[].weight` + сопоставление факультативных фасетов
+    category/service с полями самих ThesaurusEntry-кандидатов), а не
+    парсинг этого текста. Честная граница, а не недосмотр."""
+
+    abbr = models.CharField(max_length=100, verbose_name="Аббревиатура (как в файле)")
+    abbr_normalized = models.CharField(
+        max_length=100, unique=True, editable=False,
+        verbose_name="Аббревиатура (нормализованная — ключ upsert/поиска)",
+    )
+    candidates = models.JSONField(
+        default=list, verbose_name="Кандидаты расшифровки: [{id, weight, reason}, ...]",
+    )
+    disambiguation = models.TextField(
+        blank=True, verbose_name="Правило разрешения неоднозначности (свободный текст файла)",
+    )
+
+    class Meta:
+        verbose_name = "Неоднозначная аббревиатура"
+        verbose_name_plural = "Реестр неоднозначностей тезауруса"
+        ordering = ["abbr"]
+
+    def __str__(self):
+        return self.abbr
+
+    def save(self, *args, **kwargs):
+        self.abbr_normalized = normalize_term(self.abbr)
         super().save(*args, **kwargs)

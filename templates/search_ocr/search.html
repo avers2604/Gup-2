@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Поиск · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Smart Search</p>
+  <h1 class="title">Поиск по базе знаний</h1>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="get" novalidate>
+      <label class="field-label" for="{{ form.q.id_for_label }}">Запрос</label>
+      {{ form.q }}
+      <div style="display:flex; gap: var(--space-4); margin-top: var(--space-4); flex-wrap: wrap;">
+        <div>
+          <label class="field-label" for="{{ form.category.id_for_label }}">{{ form.category.label }}</label>
+          {{ form.category }}
+        </div>
+        <div>
+          <label class="field-label" for="{{ form.service.id_for_label }}">{{ form.service.label }}</label>
+          {{ form.service }}
+        </div>
+      </div>
+      <p class="caption" style="margin-top: var(--space-2);">
+        Категория и служба используются только для разрешения неоднозначных
+        сокращений тезауруса (например «ТП»), не фильтруют сами документы.
+      </p>
+      <button class="btn btn--primary" type="submit" style="margin-top: var(--space-4);">Найти</button>
+    </form>
+  </div>
+
+  {% if results is not None %}
+    <div style="margin-top: var(--space-8);">
+      <p class="label">Результаты по запросу «{{ form.cleaned_data.q }}»</p>
+      {% if results %}
+        <div class="table-scroll">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Рег. номер</th>
+                <th>Наименование</th>
+                <th>Статус</th>
+                <th>Дата регистрации</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for doc in results %}
+                <tr>
+                  <td class="data">{{ doc.reg_number }}</td>
+                  <td>{{ doc.title }}</td>
+                  <td>
+                    <span class="status-pill
+                      {% if doc.status == 'active' %}status-pill--active
+                      {% elif doc.status == 'active_amended' %}status-pill--amended
+                      {% elif doc.status == 'revoked' %}status-pill--revoked
+                      {% else %}status-pill--draft{% endif %}">
+                      {{ doc.get_status_display }}
+                    </span>
+                  </td>
+                  <td class="data">{{ doc.reg_date|date:"d.m.Y" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="caption">Ничего не найдено.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endblock %}
