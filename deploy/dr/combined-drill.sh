@@ -8,6 +8,7 @@
 set -euo pipefail
 umask 077
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRILL_ID="${DRILL_ID:-}"
 DRILL_EVIDENCE_ROOT="${DRILL_EVIDENCE_ROOT:-/var/lib/bz-get/drills}"
 PATRONI_CONFIG="${PATRONI_CONFIG:-/etc/patroni/patroni.yml}"
@@ -15,6 +16,11 @@ PATRONI_SCOPE="${PATRONI_SCOPE:-bz-get}"
 PGBACKREST_BIN="${PGBACKREST_BIN:-pgbackrest}"
 MINIO_DR_ENV="${MINIO_DR_ENV:-/etc/bz-get/minio-dr.env}"
 ALERTMANAGER_URL="${ALERTMANAGER_URL:-}"
+DRILL_INCIDENT_UTC="${DRILL_INCIDENT_UTC:-}"
+DRILL_LAST_DURABLE_UTC="${DRILL_LAST_DURABLE_UTC:-}"
+DRILL_SERVICE_RESTORED_UTC="${DRILL_SERVICE_RESTORED_UTC:-}"
+DRILL_CHANGE_ID="${DRILL_CHANGE_ID:-}"
+DRILL_OPERATOR="${DRILL_OPERATOR:-}"
 
 usage() {
   cat <<'EOF'
@@ -53,7 +59,7 @@ capture_minio() {
     # shellcheck disable=SC1090
     . "$MINIO_DR_ENV"
     set +a
-    bash deploy/minio/dr/check-replication.sh >"$run_dir/minio-$1.txt" 2>&1
+    bash "$SCRIPT_DIR/../minio/dr/check-replication.sh" >"$run_dir/minio-$1.txt" 2>&1
   else
     printf 'SKIPPED: MINIO_DR_ENV not readable: %s\n' "$MINIO_DR_ENV" >"$run_dir/minio-$1.txt"
   fi
@@ -122,8 +128,8 @@ case "$phase" in
     capture_alertmanager preflight
     {
       echo "drill_id=$DRILL_ID"
-      echo "change_id=${DRILL_CHANGE_ID:-}"
-      echo "operator=${DRILL_OPERATOR:-}"
+      echo "change_id=$DRILL_CHANGE_ID"
+      echo "operator=$DRILL_OPERATOR"
       echo "preflight_utc=$(timestamp)"
     } >"$run_dir/metadata.env"
     record_checkpoint preflight-complete
