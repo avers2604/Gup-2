@@ -192,10 +192,14 @@ SIMPLE_JWT = {
 # (REDIS_URL, тот же .env/docker-compose.yml, что был предусмотрен в стеке
 # заранее, см. STACK.md, но не использовался кодом до этой партии).
 CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-# Результаты задач не персистим отдельным backend'ом — воркер сам пишет
-# прогресс в NormativeDocument.ocr_body/.ocr_confidence и в WORM-аудит
-# (apps/documents/tasks.py), внешнего synchronous task.get() в проекте нет.
-CELERY_RESULT_BACKEND = None
+# Отдельная БД Redis (не 0-я, та же, что у брокера) — чтобы результаты
+# задач не путались с очередью сообщений. Приложение по-прежнему не делает
+# synchronous task.get() нигде в коде (воркер сам пишет результат в
+# NormativeDocument.ocr_body/.ocr_confidence и в WORM-аудит) — backend
+# добавлен для операционной интроспекции состояния задач (AsyncResult,
+# `celery inspect`/Flower), а не потому что что-то в приложении его читает.
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+CELERY_RESULT_EXPIRES = 3600
 CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 

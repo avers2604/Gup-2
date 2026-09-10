@@ -55,6 +55,20 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         REVOKED = "revoked", "Утратил силу"
         ARCHIVED = "archived", "Архив"
 
+    class OcrCategory(models.TextChoices):
+        """Категории дифференцированных критериев качества OCR (ТЗ 2.2
+        §4.4.2) — пороги по категории см. apps/documents/ocr_thresholds.py."""
+
+        MODERN_NRD = "modern_nrd", "Современные НРД (с 2018 г.)"
+        MIXED_FORMS = "mixed_forms", "Бланки со смешанным вводом"
+        ARCHIVE = "archive", "Архивный фонд (1970–2017)"
+        SCHEMES = "schemes", "Схемы и чертежи"
+
+    class OcrStatus(models.TextChoices):
+        NOT_PROCESSED = "not_processed", "OCR не выполнялся"
+        INDEXED = "indexed", "Проиндексирован (автоматически)"
+        NEEDS_REVIEW = "needs_review", "Требует ручной верификации"
+
     reg_number = models.CharField(max_length=64, verbose_name="Регистрационный номер")
     reg_date = models.DateField(verbose_name="Дата регистрации")
     effective_date = models.DateField(verbose_name="Дата вступления в силу")
@@ -98,6 +112,21 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
     # прошедших конвейер) поле пусто — безопасно: пустое поле просто не
     # даёт вклада в полнотекстовый поиск, не создаёт ложных совпадений.
     ocr_body = models.TextField(blank=True, verbose_name="Извлечённый текст скана (OCR)")
+    # Категория для дифференцированных порогов качества OCR (ТЗ 2.2 §4.4.2).
+    # Заполняется человеком при регистрации — только "современные НРД"/
+    # "архив" можно надёжно определить автоматически по reg_date
+    # (apps/documents/ocr_thresholds.py, get_threshold_for_document);
+    # "смешанный ввод"/"схемы и чертежи" требуют классификации по факту
+    # документа, не выводятся из даты. Пусто — допустимо, тогда
+    # применяется тот же автовывод по дате.
+    ocr_category = models.CharField(
+        max_length=20, choices=OcrCategory.choices, blank=True,
+        verbose_name="Категория качества OCR",
+    )
+    ocr_status = models.CharField(
+        max_length=16, choices=OcrStatus.choices, default=OcrStatus.NOT_PROCESSED,
+        verbose_name="Статус распознавания",
+    )
 
     # Срок хранения и режим Object Locking (WORM) — apps/documents/retention.py.
     # Категория указывается человеком при регистрации (юридическая

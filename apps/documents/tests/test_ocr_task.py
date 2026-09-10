@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase
 
 from apps.audit.models import AuditLog
+from apps.documents.models import NormativeDocument
 from apps.documents.tasks import run_ocr_for_document
 
 from .factories import make_document
@@ -64,11 +65,88 @@ class RunOcrForDocumentSuccessTests(TestCase):
         doc.refresh_from_db()
         self.assertEqual(doc.ocr_body, "")
         self.assertIsNone(doc.ocr_confidence)
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.NEEDS_REVIEW)
         self.assertTrue(
             AuditLog.objects.filter(
                 event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-BLANK",
             ).exists()
         )
+
+
+class RunOcrForDocumentThresholdTests(TestCase):
+    """Дифференцированные пороги качества по категории (ТЗ 2.2 §4.4.2,
+    apps/documents/ocr_thresholds.py) — граница confidence < review_below."""
+
+    def test_confidence_at_or_above_threshold_is_indexed(self):
+        doc = make_document(
+            reg_number="OCR-THR-1", files_original="documents/originals/2026/01/thr1.pdf",
+            ocr_category=NormativeDocument.OcrCategory.MODERN_NRD,
+        )
+        with patch(
+            "apps.documents.tasks.extract_text_and_confidence", return_value=("Текст", 90.0),
+        ), _mock_storage_open():
+            run_ocr_for_document.delay(str(doc.pk))
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.INDEXED)
+
+    def test_confidence_below_threshold_needs_review(self):
+        doc = make_document(
+            reg_number="OCR-THR-2", files_original="documents/originals/2026/01/thr2.pdf",
+            ocr_category=NormativeDocument.OcrCategory.MODERN_NRD,
+        )
+        with patch(
+            "apps.documents.tasks.extract_text_and_confidence", return_value=("Текст", 89.9),
+        ), _mock_storage_open():
+            run_ocr_for_document.delay(str(doc.pk))
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.NEEDS_REVIEW)
+
+    def test_archive_uses_75_review_gate_not_65_floor(self):
+        # confidence=70 проходит порог min_score=65 архивного фонда, но
+        # ниже отдельно указанного порога ручной верификации 75 — должен
+        # уйти на ручную проверку, а не быть автоматически проиндексирован.
+        doc = make_document(
+            reg_number="OCR-THR-3", files_original="documents/originals/2026/01/thr3.pdf",
+            ocr_category=NormativeDocument.OcrCategory.ARCHIVE,
+        )
+        with patch(
+            "apps.documents.tasks.extract_text_and_confidence", return_value=("Текст", 70.0),
+        ), _mock_storage_open():
+            run_ocr_for_document.delay(str(doc.pk))
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.NEEDS_REVIEW)
+
+    def test_archive_at_75_is_indexed(self):
+        doc = make_document(
+            reg_number="OCR-THR-4", files_original="documents/originals/2026/01/thr4.pdf",
+            ocr_category=NormativeDocument.OcrCategory.ARCHIVE,
+        )
+        with patch(
+            "apps.documents.tasks.extract_text_and_confidence", return_value=("Текст", 75.0),
+        ), _mock_storage_open():
+            run_ocr_for_document.delay(str(doc.pk))
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.INDEXED)
+
+    def test_audit_details_include_threshold_and_status(self):
+        doc = make_document(
+            reg_number="OCR-THR-5", files_original="documents/originals/2026/01/thr5.pdf",
+            ocr_category=NormativeDocument.OcrCategory.ARCHIVE,
+        )
+        with patch(
+            "apps.documents.tasks.extract_text_and_confidence", return_value=("Текст", 70.0),
+        ), _mock_storage_open():
+            run_ocr_for_document.delay(str(doc.pk))
+
+        entry = AuditLog.objects.get(
+            event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-THR-5",
+        )
+        self.assertEqual(entry.details["review_threshold"], 75)
+        self.assertEqual(entry.details["ocr_status"], NormativeDocument.OcrStatus.NEEDS_REVIEW)
 
 
 class RunOcrForDocumentFailureTests(TestCase):
@@ -125,6 +203,24 @@ class RunOcrForDocumentFailureTests(TestCase):
         self.assertEqual(doc.ocr_body, "")
         self.assertIsNone(doc.ocr_confidence)
 
+    def test_final_failure_sets_needs_review_status(self):
+        doc = make_document(
+            reg_number="OCR-FAIL-STATUS", files_original="documents/originals/2026/01/fail-status.pdf",
+        )
+
+        run_ocr_for_document.push_request(retries=run_ocr_for_document.max_retries)
+        try:
+            with patch(
+                "apps.documents.tasks.extract_text_and_confidence",
+                side_effect=RuntimeError("boom"),
+            ), _mock_storage_open():
+                run_ocr_for_document.run(str(doc.pk))
+        finally:
+            run_ocr_for_document.pop_request()
+
+        doc.refresh_from_db()
+        self.assertEqual(doc.ocr_status, NormativeDocument.OcrStatus.NEEDS_REVIEW)
+
     def test_no_completed_audit_entry_after_exhausting_retries(self):
         doc = make_document(reg_number="OCR-FAIL-2", files_original="documents/originals/2026/01/fail2.pdf")
 
@@ -141,6 +237,37 @@ class RunOcrForDocumentFailureTests(TestCase):
         self.assertFalse(
             AuditLog.objects.filter(
                 event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED, object_id="OCR-FAIL-2",
+            ).exists()
+        )
+
+
+class RunOcrForDocumentTimeLimitTests(TestCase):
+    def test_time_limits_configured_for_large_scans(self):
+        # ТЗ 1.2 §4.2.1: скан-оригинал до 150 МБ — жёсткий/мягкий таймаут
+        # защищают воркер от одной зависшей задачи, а не только от медленной.
+        self.assertEqual(run_ocr_for_document.time_limit, 600)
+        self.assertEqual(run_ocr_for_document.soft_time_limit, 540)
+
+    def test_soft_time_limit_exceeded_is_treated_like_other_failures(self):
+        from celery.exceptions import SoftTimeLimitExceeded
+
+        doc = make_document(
+            reg_number="OCR-TIMEOUT", files_original="documents/originals/2026/01/timeout.pdf",
+        )
+
+        run_ocr_for_document.push_request(retries=run_ocr_for_document.max_retries)
+        try:
+            with patch(
+                "apps.documents.tasks.extract_text_and_confidence",
+                side_effect=SoftTimeLimitExceeded(),
+            ), _mock_storage_open():
+                run_ocr_for_document.run(str(doc.pk))
+        finally:
+            run_ocr_for_document.pop_request()
+
+        self.assertTrue(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED, object_id="OCR-TIMEOUT",
             ).exists()
         )
 

@@ -7,15 +7,40 @@
 """
 from __future__ import annotations
 
+import numpy as np
 import pytesseract
 from django.conf import settings
-from pdf2image import convert_from_bytes
+from pdf2image import convert_from_bytes, pdfinfo_from_bytes
 from PIL import Image
 
+from .ocr_preprocessing import preprocess_page
 
-def extract_text_and_confidence(pdf_bytes: bytes) -> tuple[str, float | None]:
-    """Растеризует PDF постранично (pdf2image/poppler) и распознаёт текст
-    каждой страницы (pytesseract/Tesseract, язык — settings.OCR_LANGUAGE).
+DPI = 200
+# Страницы обрабатываются пакетами, а не все сразу — при лимите ТЗ 1.2
+# §4.2.1 на скан-оригинал (150 МБ, потенциально сотни страниц)
+# единовременная растеризация всего файла держала бы в памяти сразу все
+# страницы; пакет ограничивает пик памяти его размером независимо от
+# общего числа страниц документа.
+DEFAULT_BATCH_SIZE = 10
+
+
+def extract_text_and_confidence(
+    pdf_bytes: bytes,
+    *,
+    preprocess: bool = True,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> tuple[str, float | None]:
+    """Растеризует PDF постранично, пакетами по `batch_size` страниц
+    (pdf2image/poppler), и распознаёт текст каждой страницы
+    (pytesseract/Tesseract, язык — settings.OCR_LANGUAGE).
+
+    `preprocess=True` (по умолчанию) прогоняет каждую страницу через
+    apps.documents.ocr_preprocessing.preprocess_page — автовыравнивание
+    перекоса, подавление шума/перфорации, адаптивная бинаризация (ТЗ 2.2
+    §4.5). Без неё метрики качества ТЗ 2.2 §4.4.2 (apps/documents/ocr_thresholds.py),
+    особенно пониженный порог архивного фонда, недостижимы на
+    пожелтевших/перекошенных сканах — параметр оставлен только для тестов,
+    сравнивающих поведение с/без предобработки.
 
     Возвращает (полный_текст, средняя_уверенность). Средняя уверенность —
     по словам, а не по страницам (word-count-weighted): простое среднее
@@ -32,24 +57,34 @@ def extract_text_and_confidence(pdf_bytes: bytes) -> tuple[str, float | None]:
     (ненулевая) уверенность по распознанному слову тоже отбрасывается.
     """
     lang = getattr(settings, "OCR_LANGUAGE", "rus")
-    pages: list[Image.Image] = convert_from_bytes(pdf_bytes, dpi=200)
+    total_pages = pdfinfo_from_bytes(pdf_bytes)["Pages"]
 
     page_texts = []
     confidence_sum = 0.0
     confidence_count = 0
 
-    for page in pages:
-        page_texts.append(pytesseract.image_to_string(page, lang=lang))
+    for batch_start in range(1, total_pages + 1, batch_size):
+        batch_end = min(batch_start + batch_size - 1, total_pages)
+        pages: list[Image.Image] = convert_from_bytes(
+            pdf_bytes, dpi=DPI, first_page=batch_start, last_page=batch_end,
+        )
 
-        data = pytesseract.image_to_data(page, lang=lang, output_type=pytesseract.Output.DICT)
-        for word, conf in zip(data["text"], data["conf"]):
-            if not word.strip():
-                continue
-            conf_value = float(conf)
-            if conf_value < 0:
-                continue
-            confidence_sum += conf_value
-            confidence_count += 1
+        for page in pages:
+            if preprocess:
+                grayscale = np.array(page.convert("L"))
+                page = Image.fromarray(preprocess_page(grayscale))
+
+            page_texts.append(pytesseract.image_to_string(page, lang=lang))
+
+            data = pytesseract.image_to_data(page, lang=lang, output_type=pytesseract.Output.DICT)
+            for word, conf in zip(data["text"], data["conf"]):
+                if not word.strip():
+                    continue
+                conf_value = float(conf)
+                if conf_value < 0:
+                    continue
+                confidence_sum += conf_value
+                confidence_count += 1
 
     full_text = "\n".join(page_texts)
     confidence = (confidence_sum / confidence_count) if confidence_count else None

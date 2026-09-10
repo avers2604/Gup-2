@@ -1,0 +1,37 @@
+# Воркер конвейера OCR (Этап 3, apps/documents/tasks.py) как systemd-сервис
+# для целевой платформы развёртывания — Debian 12 Bookworm (см. STACK.md →
+# «Платформа развёртывания»). Приложение (веб + воркер) в этом репозитории
+# не контейнеризовано (docker-compose.yml поднимает только Postgres/MinIO/
+# Redis и т.п. для локальной разработки), поэтому воркер запускается как
+# обычный systemd-юнит, а не отдельный Docker-контейнер.
+#
+# ЧЕСТНАЯ ГРАНИЦА: это шаблон, не проверенный вживую на целевой ОС (в
+# песочнице разработки нет systemd-контура, см. STACK.md → «Локальная
+# разработка в этой сессии») — пути, пользователь/группа и число воркеров
+# (-c 4) нужно свести с реальной конфигурацией сервера перед вводом в
+# опытную эксплуатацию.
+#
+# Установка:
+#   sudo cp deploy/systemd/get-celery-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now get-celery-worker
+#   sudo systemctl status get-celery-worker
+
+[Unit]
+Description=АИС БЗ ГЭТ — Celery worker (конвейер OCR)
+After=network.target redis.service postgresql.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=get
+Group=get
+WorkingDirectory=/opt/get
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+EnvironmentFile=/opt/get/.env
+ExecStart=/opt/get/venv/bin/celery -A config worker -l info -c 4
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
