@@ -26,3 +26,18 @@ class ConcurrentEditTests(TestCase):
             services.update_document(actor=self.actor, document=stale, title="Stale edit")
         stale.refresh_from_db()
         self.assertEqual(stale.title, "First edit")
+
+    def test_admin_model_save_invalidates_stale_web_edit(self):
+        fresh = NormativeDocument.objects.get(pk=self.document.pk)
+        fresh.title = "Administrative correction"
+        fresh.save()
+        with self.assertRaises(ValidationError):
+            services.update_document(actor=self.actor, document=self.document, title="Stale web edit")
+
+    def test_ocr_only_save_does_not_invalidate_editorial_revision(self):
+        fresh = NormativeDocument.objects.get(pk=self.document.pk)
+        fresh.ocr_body = "Fresh OCR"
+        fresh.save(update_fields=["ocr_body"])
+        services.update_document(actor=self.actor, document=self.document, title="Editorial update")
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.ocr_body, "Fresh OCR")

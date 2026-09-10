@@ -35,3 +35,10 @@ class OutboxTests(TestCase):
                 doc = make_document(reg_number="OUTBOX-1")
         self.assertTrue(type(doc).objects.filter(pk=doc.pk).exists())
         self.assertTrue(TaskOutbox.objects.filter(delivered_at__isnull=True, args=[str(doc.pk)]).exists())
+
+    def test_pending_delivery_is_visible_in_metrics(self):
+        from apps.core.business_metrics import render_prometheus
+        TaskOutbox.objects.create(task_name="unused", args=[])
+        rendered = render_prometheus()
+        self.assertIn("bz_get_outbox_pending 1", rendered)
+        self.assertIn("bz_get_outbox_oldest_seconds", rendered)

@@ -42,10 +42,12 @@ Outbox записывает намерение отправки OCR/индекс
 
 ## Проверка
 
-CI: миграции, регрессионные тесты, production checks, покрытие минимум 75%, реальный Redis/worker
+CI: миграции, регрессионные тесты, production checks, покрытие минимум 85% (90% для политики доступа и outbox), реальный Redis/worker
 smoke test с повторной доставкой task_id. Следите за количеством TaskOutbox с delivered_at=NULL
 и возрастом старейшей записи. delivered_at означает отправку брокеру, а не завершение обработки.
 OCR проверяется по документам и аудиту.
 
 HA/DR-приёмка требует реального стенда, согласованного восстановления БД/MinIO, доставки алертов
 и измеренных RPO/RTO. Эти изменения её не заменяют: см. STAGE4_STATUS.md.
+
+Метрики доставки: `bz_get_outbox_pending` и `bz_get_outbox_oldest_seconds` на business metrics endpoint.

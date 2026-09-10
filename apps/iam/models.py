@@ -210,9 +210,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
     @property
     def requires_totp(self):
-        """Роли, для которых TOTP обязателен. Сужено решением Заказчика:
-        раньше — Администратор/Контролёр-Юрист/Куратор, теперь — только
-        Администратор (роль Куратор при этом упразднена, см. Role)."""
+        """Require a second factor for administrators and Django privileged accounts."""
         return self.role == self.Role.ADMINISTRATOR or self.is_superuser or self.is_staff
 
     def role_rank(self):
@@ -223,19 +221,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
     @property
     def is_password_expired(self):
-        """365-дневный срок действия пароля (решение Заказчика) — ТОЛЬКО
-        информационный флаг, той же честной границы, что и
-        status=PASSWORD_CHANGE_REQUIRED (см. STACK.md): ни один Web/API
-        эндпоинт сейчас его не проверяет и не блокирует вход по нему,
-        потому что в проекте ещё нет ни одной вьюхи смены пароля, на
-        которую можно было бы принудительно перенаправить. password_changed_at
-        = NULL (учётная запись без отслеживаемой истории смены пароля,
-        например импортированная до появления этого поля) трактуется как
-        «не просрочен» — а не наоборот: в отличие от retention_until (где
-        NULL = «под блокировкой», ошибка в обратную сторону опасна для
-        WORM), здесь ложное «не просрочен» на нетипичной записи — не
-        угроза безопасности сама по себе, только повод администратору
-        поднять историю вручную."""
+        """Password age policy enforced in session middleware and JWT permissions."""
         if self.password_changed_at is None:
             return False
         return (timezone.now() - self.password_changed_at).days >= PASSWORD_EXPIRY_DAYS

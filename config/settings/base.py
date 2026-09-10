@@ -208,13 +208,7 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-# Периодическая очистка истёкших/отозванных токенов из БД blacklist
-# (apps.iam.tasks.cleanup_expired_tokens, оборачивает встроенную команду
-# simplejwt flushexpiredtokens). Честная граница: расписание задано, но
-# ни один процесс `celery beat` в проекте не запускается (ни в
-# docker-compose.yml, ни в deploy/ — только celery worker), поэтому
-# запись ниже сейчас ничего не запускает сама по себе; тот же честный
-# разрыв, что и у AUDIT_LOG_EXPORTED в apps/audit/models.py.
+# Cleanup runs daily through the single production celery beat service.
 CELERY_BEAT_SCHEDULE = {
     "cleanup-expired-jwt-tokens": {
         "task": "apps.iam.tasks.cleanup_expired_tokens",

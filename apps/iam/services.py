@@ -590,7 +590,7 @@ def user_auth_summary(user: User) -> dict:
         # клиенту направить пользователя на start_totp_enrollment(),
         # не блокировка самого входа.
         "must_enroll_totp": user.requires_totp and not user.totp_enabled,
-        "password_change_required": user.status == User.Status.PASSWORD_CHANGE_REQUIRED,
+        "password_change_required": user.status == User.Status.PASSWORD_CHANGE_REQUIRED or user.is_password_expired,
     }
 
 

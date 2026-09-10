@@ -114,7 +114,8 @@ jobs:
       - name: Тесты с покрытием
         run: |
           coverage run manage.py test
-          coverage report --fail-under=75
+          coverage report --fail-under=85
+          coverage report --include="apps/iam/security.py,apps/iam/middleware.py,apps/core/outbox.py" --fail-under=90
       - name: Real Redis and worker integration
         run: |
           celery -A config worker --pool=solo --loglevel=INFO > /tmp/bz-get-worker.log 2>&1 &

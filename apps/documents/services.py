@@ -134,7 +134,6 @@ def update_document(*, actor, document, form=None, **attrs):
                 if name not in fields or locked._meta.get_field(name).many_to_many:
                     raise ValidationError(f"Поле {name} нельзя изменять через этот сервис.")
                 setattr(locked, name, value)
-        locked.edit_version += 1
         locked._audit_actor = actor
         locked.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
         locked.save()

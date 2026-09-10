@@ -173,6 +173,7 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 ),
             })
 
+    @transaction.atomic
     def save(self, *args, **kwargs):
         # retention_until — юридическая дата, а не производное поле, которое
         # можно пересчитывать на каждый save(): если бы она пересчитывалась
@@ -186,14 +187,25 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # новое значение), а не пройти тихо.
         previous = (
             type(self)
-            .objects.filter(pk=self.pk)
-            .values_list("retention_category", "status", "files_original")
+            .objects.select_for_update().filter(pk=self.pk)
+            .values_list("retention_category", "status", "files_original", "edit_version")
             .first()
         )
         previous_category = previous[0] if previous is not None else None
         previous_status = previous[1] if previous is not None else None
         previous_files_original = previous[2] if previous is not None else None
         is_new = previous is None
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and not update_fields:
+            return
+        # Every normal write, including Django admin, invalidates stale edit forms.
+        # Background OCR-only persistence does not invalidate an editorial revision.
+        ocr_only = update_fields is not None and set(update_fields) <= {
+            "ocr_body", "ocr_confidence", "ocr_status", "updated_at"}
+        if not is_new and not ocr_only:
+            self.edit_version = previous[3] + 1
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"edit_version"}
         category_changed = is_new or previous_category != self.retention_category
         # Усиление аудита (решение Заказчика: «фиксировать все изменения
         # документов — кто, что изменил, старый/новый статус»). Только на

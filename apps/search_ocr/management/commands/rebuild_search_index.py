@@ -8,7 +8,7 @@ from apps.search_ocr.search_index import rebuild_document_search_index
 
 
 class Command(BaseCommand):
-    help = "Cold rebuild persisted Smart Search index; intended for Stage 4 acceptance measurements."
+    help = "Online rebuild of persisted Smart Search index in bounded transactions."
 
     def add_arguments(self, parser):
         parser.add_argument("--batch-size", type=int, default=1000)
@@ -42,5 +42,5 @@ class Command(BaseCommand):
             )
         if payload["result"] != "PASS":
             raise CommandError(
-                f"cold reindex exceeded acceptance limit: {elapsed:.3f}s > {max_seconds}s"
+                f"online reindex exceeded acceptance limit: {elapsed:.3f}s > {max_seconds}s"
             )

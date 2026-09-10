@@ -106,4 +106,16 @@ def render_prometheus() -> str:
     for status in LINK_FAILURE_STATUSES:
         value = counters[f"{LINK_FAILURE_PREFIX}{status}"]
         lines.append(f'bz_get_link_generation_failures_total{{status="{status}"}} {value}')
+    from django.db.models import Count, Min
+    from .models import TaskOutbox
+    pending = TaskOutbox.objects.filter(delivered_at__isnull=True).aggregate(count=Count("pk"), oldest=Min("created_at"))
+    age = max(0.0, (timezone.now() - pending["oldest"]).total_seconds()) if pending["oldest"] else 0.0
+    lines.extend([
+        "# HELP bz_get_outbox_pending Pending broker delivery intents.",
+        "# TYPE bz_get_outbox_pending gauge",
+        f"bz_get_outbox_pending {pending['count']}",
+        "# HELP bz_get_outbox_oldest_seconds Age of oldest pending broker delivery intent.",
+        "# TYPE bz_get_outbox_oldest_seconds gauge",
+        f"bz_get_outbox_oldest_seconds {age:.3f}",
+    ])
     return "\n".join(lines) + "\n"
