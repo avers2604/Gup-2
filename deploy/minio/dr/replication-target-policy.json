@@ -39,8 +39,6 @@
         "s3:GetObjectVersion",
         "s3:GetObjectVersionTagging",
         "s3:PutObject",
-        "s3:PutObjectRetention",
-        "s3:PutObjectLegalHold",
         "s3:DeleteObject",
         "s3:DeleteObjectVersion",
         "s3:ReplicateObject",
@@ -49,6 +47,17 @@
       "Resource": [
         "arn:aws:s3:::bz-get-originals/*",
         "arn:aws:s3:::bz-get-working/*"
+      ]
+    },
+    {
+      "Sid": "ReceiveOriginalsObjectLockMetadata",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObjectRetention",
+        "s3:PutObjectLegalHold"
+      ],
+      "Resource": [
+        "arn:aws:s3:::bz-get-originals/*"
       ]
     }
   ]
