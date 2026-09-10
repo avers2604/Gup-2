@@ -39,6 +39,21 @@ class BusinessMetricCounter(models.Model):
         return f"{self.name}={self.value}"
 
 
+class OcrReviewQueueEntry(models.Model):
+    """Момент попадания документа в очередь ручной вычитки OCR.
+
+    Отдельная запись нужна, потому что NormativeDocument.updated_at может
+    меняться по несвязанным причинам и не должна обнулять возраст просрочки.
+    """
+
+    document_id = models.UUIDField(unique=True)
+    required_at = models.DateTimeField()
+
+    class Meta:
+        indexes = [models.Index(fields=["required_at"])]
+        ordering = ["required_at"]
+
+
 class QueueDrillProbe(models.Model):
     """DB-evidence для стендовой проверки Celery/Redis redelivery.
 
