@@ -62,6 +62,10 @@ change request до применения.
 
 ## Инициализация DR-площадки
 
+Versioning/Object Lock подготавливаются **администратором до выдачи**
+dedicated replication credentials. Replication-users намеренно не имеют
+`PutBucketVersioning` и не должны усиливать/ослаблять storage policy.
+
 На DR-площадке создать бакеты ДО настройки replication:
 
 ```bash
@@ -89,7 +93,7 @@ set +a
 Скрипт:
 
 - проверяет доступность обеих площадок;
-- включает/проверяет Versioning;
+- **только проверяет** заранее включённый Versioning, не меняет его;
 - требует Object Lock capability на DR `originals`;
 - добавляет ровно одно направление source -> target;
 - включает перенос существующих объектов и delete/delete-marker semantics;
