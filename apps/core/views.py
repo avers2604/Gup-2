@@ -1,9 +1,11 @@
 from django.db import DatabaseError, connection
 from django.http import HttpResponse
 from django.views.decorators.cache import never_cache
+from django.views.decorators.http import require_safe
 from django.views.generic import TemplateView
 
 
+@require_safe
 @never_cache
 def health(request):
     """Minimal readiness endpoint for HA/load-balancer/acceptance checks.
