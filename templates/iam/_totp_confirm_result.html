@@ -1,0 +1,22 @@
+{# HTMX-фрагмент — ответ на POST iam:totp-confirm, заменяет #totp-enroll-panel #}
+{% if success %}
+  <p>2FA включена.</p>
+{% elif not_started %}
+  <p class="caption" style="color: var(--color-red);">
+    Подключение не начато — обновите страницу и начните заново.
+  </p>
+{% else %}
+  {% if form.non_field_errors %}
+    <p class="caption" style="color: var(--color-red); margin-bottom: var(--space-4);">
+      {{ form.non_field_errors.0 }}
+    </p>
+  {% endif %}
+  <form
+    method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
+  >
+    {% csrf_token %}
+    <label class="field-label" for="{{ form.code.id_for_label }}">Код</label>
+    {{ form.code }}
+    <button class="btn btn--primary" type="submit" style="margin-top: var(--space-4);">Подтвердить</button>
+  </form>
+{% endif %}

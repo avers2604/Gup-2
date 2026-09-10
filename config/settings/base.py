@@ -5,6 +5,7 @@
 плана работ по ТЗ-БЗ-ГЭТ-2026-V2.2) и требует утверждения Заказчиком —
 см. открытый вопрос №1 плана.
 """
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +28,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "rest_framework",
+    "drf_spectacular",
     "apps.core",
     "apps.iam",
     "apps.documents",
@@ -108,6 +110,15 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Web GUI (Django Templates + HTMX/Alpine) — вход/выход по имени маршрута,
+# не по URL напрямую. Домашней страницы Web GUI ещё нет (Этап 2 только
+# начат) — временно ведём на /styleguide/, а не оставляем LOGIN_REDIRECT_URL
+# неопределённым (пришлось бы Django-дефолт /accounts/profile/, которого
+# у нас точно нет).
+LOGIN_URL = "iam:login"
+LOGIN_REDIRECT_URL = "core:styleguide"
+LOGOUT_REDIRECT_URL = "iam:login"
+
 # Сессии — частичная реализация ТЗ 4.7 (полная política блокировок и
 # параллельных сессий запланирована на Этап 3).
 SESSION_COOKIE_AGE = 15 * 60  # автосброс сессии при неактивности 15 минут
@@ -117,18 +128,46 @@ SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 X_FRAME_OPTIONS = "DENY"
 SECURE_CONTENT_TYPE_NOSNIFF = True
 
-# API — сессионная аутентификация (cookie + CSRF), не токен/JWT: система
-# внутренняя (ТЗ 4.6 — «без AD/LDAP», не публичный сервис), уже опирается
-# на Django-сессии для admin и для force_logout_user() при блокировке —
-# токен/JWT потребовал бы отдельного механизма отзыва, который
-# дублировал бы уже работающий session-based.
+# Два независимых контура (решение Заказчика, пересматривает более
+# раннее «всё через DRF»):
+# - Web GUI (внутренний, для сотрудников) — Django Templates + HTMX +
+#   Alpine.js, серверный рендеринг, сессия + CSRF (apps/*/views.py,
+#   apps/*/forms.py). DRF в этом контуре не участвует вообще.
+# - External API (интеграции) — DRF + drf-spectacular (OpenAPI),
+#   JWT-аутентификация (apps/*/api.py, apps/*/serializers.py). Отдельный
+#   от Web механизм входа, но та же бизнес-логика (apps/iam/services.py) —
+#   HTTP-слой обоих контуров не должен её дублировать.
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "АИС «БЗ ГЭТ» — External API",
+    "DESCRIPTION": (
+        "REST API для внешних интеграций (не для внутреннего Web GUI — "
+        "тот работает на серверном рендеринге без этого API). "
+        "Аутентификация — JWT (заголовок Authorization: Bearer <access>)."
+    ),
+    "VERSION": "0.1.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+}
+
+# Честная граница: logout в Web-контуре не отзывает уже выданные JWT —
+# access живёт своим TTL, refresh можно использовать до истечения, пока
+# не подключён blacklist (rest_framework_simplejwt.token_blacklist,
+# требует отдельного INSTALLED_APPS + миграции) — не сделано в этой
+# партии, короткий ACCESS_TOKEN_LIFETIME ниже снижает, а не убирает окно.
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 STORAGES = {

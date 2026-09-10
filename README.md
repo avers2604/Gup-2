@@ -114,11 +114,19 @@ docker compose up -d
 
 ## Этап 2 (начат)
 
-- **Вход и 2FA/TOTP** (ТЗ 4.7, `apps/iam/{views,totp}.py`) — первый
-  HTTP API проекта (Django REST Framework, сессионная аутентификация),
-  под `/api/v1/auth/`: `login/`, `login/verify-totp/`, `logout/`,
-  `totp/enroll/`, `totp/confirm/`. Подробности и честные границы (нет
-  rate limiting, нет админ-сброса TOTP) — STACK.md.
+Два независимых HTTP-контура (решение Заказчика, см. STACK.md): **Web
+GUI** (Django Templates + HTMX + Alpine.js, серверный рендеринг, для
+сотрудников) и **External API** (DRF + `drf-spectacular`/OpenAPI + JWT,
+для интеграций). Общая бизнес-логика — `apps/<app>/services.py`; ни
+`views.py`, ни `api.py` не обращаются к моделям напрямую.
+
+- **Вход и 2FA/TOTP** (ТЗ 4.7, `apps/iam/`) — первая реализация обоих
+  контуров: Web под `/accounts/` (`login/`, `login/verify-totp/`,
+  `logout/`, `totp/enroll/`, `totp/confirm/`), API под `/api/v1/auth/`
+  (`token/`, `token/verify-totp/`, `token/refresh/`, `me/`; схема —
+  `/api/v1/schema/`, Swagger UI — `/api/v1/docs/`). Подробности и
+  честные границы (нет rate limiting, нет админ-сброса TOTP, JWT без
+  blacklist) — STACK.md.
 
 ## Дальше по плану
 

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Настройка 2FA · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Безопасность аккаунта</p>
+  <h1 class="title">Двухфакторная аутентификация (TOTP)</h1>
+
+  <div class="card" style="max-width: 480px; margin-top: var(--space-6);" id="totp-enroll-panel">
+    {% if totp_enabled %}
+      <p>2FA уже включена для вашей учётной записи.</p>
+    {% else %}
+      <p class="muted">
+        Подключите приложение-аутентификатор (Google Authenticator, Яндекс.Ключ
+        и т.п.), чтобы получить секрет для входа.
+      </p>
+      <button
+        class="btn btn--primary" style="margin-top: var(--space-4);"
+        hx-post="{% url 'iam:totp-enroll' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
+      >
+        Начать подключение
+      </button>
+    {% endif %}
+  </div>
+{% endblock %}
