@@ -38,7 +38,6 @@ class Tag(models.Model):
 
 
 class NormativeDocument(UUIDPKModel, TimeStampedModel):
-    edit_version = models.PositiveIntegerField(default=0, editable=False)
     """Карточка нормативно-распорядительного документа — атрибуты по таблице ТЗ 4.2.1."""
 
     class DocType(models.TextChoices):
@@ -93,6 +92,11 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         max_length=16, choices=AccessLevel.choices, default=AccessLevel.GENERAL, verbose_name="Уровень доступа"
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    # Счётчик редакций для оптимистичной блокировки правки: форма правки
+    # несёт его скрытым полем и отвергается, если карточку успели
+    # изменить. Не поле ТЗ и не часть карточки — служебная отметка, отсюда
+    # editable=False (в формах и админке не показывается).
+    edit_version = models.PositiveIntegerField(default=0, editable=False)
 
     files_original = models.FileField(
         upload_to="documents/originals/%Y/%m/", storage=originals_storage,
@@ -223,8 +227,6 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         previous_files_original = previous[2] if previous is not None else None
         is_new = previous is None
         update_fields = kwargs.get("update_fields")
-        if update_fields is not None and not update_fields:
-            return
         # Every normal write, including Django admin, invalidates stale edit forms.
         # Background OCR-only persistence does not invalidate an editorial revision.
         ocr_only = update_fields is not None and set(update_fields) <= {
@@ -340,10 +342,20 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 )
 
             if files_original_changed:
+                # Через outbox, а не прямым .delay(): воркер Celery читает
+                # файл отдельным соединением/процессом, и задача,
+                # поставленная до коммита, может стартовать раньше, чем
+                # строка и сам файл в originals-бакете станут видны
+                # снаружи транзакции. Раньше от этого спасал
+                # transaction.on_commit(), но он же и терял постановку
+                # при отказе Redis: коммит уже прошёл, задача не ушла, и
+                # следов не осталось. Запись outbox коммитится вместе с
+                # документом, отправку берёт на себя dispatch (см.
+                # apps/core/outbox.py) — доставка не реже одного раза,
+                # обработчик обязан быть идемпотентным.
                 from apps.core.outbox import enqueue
+
                 enqueue("apps.documents.tasks.run_ocr_for_document", [str(self.pk)])
-
-
 
     def _open_status_period(self):
         """Текущий, ещё не закрытый срез статуса (valid_to = NULL)."""
