@@ -1,0 +1,275 @@
+# Grafana unified alerting — файловый provisioning 5 условий из решения
+# Заказчика («Настроить алерты в Grafana»). Все правила читают напрямую
+# WORM-журнал audit_auditlog (датасорс audit-postgres, см.
+# ../datasources/postgres.yml) — отдельный пайплайн метрик/экспортёров под
+# это заводить не потребовалось, audit_auditlog уже единственный источник
+# истины для всех пяти событий.
+#
+# ЧЕСТНАЯ ГРАНИЦА (см. STACK.md): правила «Массовое скачивание ДСП» и
+# «Экспорт журнала аудита» ссылаются на события (export.restricted,
+# audit_log.exported), которые в этой партии НЕ пишет ни один код — ни
+# скачивание ДСП-документов, ни экспорт самого журнала аудита в проекте
+# ещё не реализованы ни в одном контуре. Правила сконфигурированы и готовы
+# (условие «настроить алерт» выполнено буквально), но физически не могут
+# сработать до появления этих фич — не тихо пропущены, а явно
+# промаркированы ниже.
+#
+# Не проверено вживую (нет Docker-демона в этой песочнице, см. STACK.md).
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: auth-security-alerts
+    folder: Audit
+    interval: 1m
+    rules:
+      - uid: audit-alert-failed-logins
+        title: "5+ неудачных попыток входа подряд"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: audit-postgres
+            model:
+              rawSql: >-
+                SELECT COUNT(*) AS value FROM (
+                  SELECT actor_personnel_number, COUNT(*) AS attempts
+                  FROM audit_auditlog
+                  WHERE event_type = 'session.login_failed'
+                    AND created_at > NOW() - INTERVAL '15 minutes'
+                    AND actor_personnel_number <> ''
+                  GROUP BY actor_personnel_number
+                  HAVING COUNT(*) >= 5
+                ) t
+              format: table
+              rawQuery: true
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: high
+          source: session.login_failed
+        annotations:
+          summary: "Табельный номер с 5+ неудачными попытками входа за последние 15 минут (SESSION_LOGIN_FAILED, apps/iam/services.py)."
+
+      - uid: audit-alert-unusual-ip
+        title: "Вход с необычного IP-адреса"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 900
+              to: 0
+            datasourceUid: audit-postgres
+            model:
+              # «Необычный» = IP, с которого этот табельный номер не входил
+              # успешно последние 30 дней — эвристика по отсутствию
+              # исторического совпадения, не полноценная модель поведения
+              # (гео-IP/устройство и т.п. не подключены — честная граница).
+              rawSql: >-
+                SELECT COUNT(*) AS value FROM audit_auditlog l
+                WHERE l.event_type = 'session.login'
+                  AND l.created_at > NOW() - INTERVAL '15 minutes'
+                  AND COALESCE(l.details->>'ip_address', '') <> ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM audit_auditlog h
+                    WHERE h.event_type = 'session.login'
+                      AND h.actor_personnel_number = l.actor_personnel_number
+                      AND h.details->>'ip_address' = l.details->>'ip_address'
+                      AND h.created_at < l.created_at
+                      AND h.created_at > l.created_at - INTERVAL '30 days'
+                  )
+              format: table
+              rawQuery: true
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: medium
+          source: session.login
+        annotations:
+          summary: "Успешный вход с IP-адреса, ранее не встречавшегося у этого табельного номера за последние 30 дней."
+
+  - orgId: 1
+    name: audit-compliance-alerts
+    folder: Audit
+    interval: 5m
+    rules:
+      - uid: audit-alert-mass-dsp-download
+        title: "Массовое скачивание ДСП (более 5 документов в час)"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 3600
+              to: 0
+            datasourceUid: audit-postgres
+            model:
+              # ЗАГОТОВКА: EXPORT_RESTRICTED сейчас не пишется НИКАКИМ кодом
+              # (нет вьюхи скачивания документов ДСП ни в одном контуре) —
+              # правило готово, сработает автоматически, когда появится
+              # реальный источник события, отдельно менять эту YAML не
+              # потребуется.
+              rawSql: >-
+                SELECT COUNT(*) AS value FROM (
+                  SELECT actor_personnel_number, COUNT(*) AS downloads
+                  FROM audit_auditlog
+                  WHERE event_type = 'export.restricted'
+                    AND created_at > NOW() - INTERVAL '1 hour'
+                    AND actor_personnel_number <> ''
+                  GROUP BY actor_personnel_number
+                  HAVING COUNT(*) > 5
+                ) t
+              format: table
+              rawQuery: true
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: high
+          source: export.restricted
+          status: dormant-no-producer-yet
+        annotations:
+          summary: "Табельный номер скачал более 5 документов ДСП за час (EXPORT_RESTRICTED). Честная граница: событие пока ничем не пишется, см. STACK.md."
+
+      - uid: audit-alert-offhours-status-change
+        title: "Смена статуса документа в нерабочее время"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: audit-postgres
+            model:
+              # Рабочее время принято как Пн-Пт 08:00-20:00 (Europe/Moscow)
+              # — ТЗ конкретных часов не задаёт, это самостоятельное,
+              # задокументированное в STACK.md допущение, не вычитанное из
+              # документа буквально.
+              rawSql: >-
+                SELECT COUNT(*) AS value FROM audit_auditlog
+                WHERE event_type IN ('document.published', 'document.revoked', 'document.status_changed')
+                  AND created_at > NOW() - INTERVAL '5 minutes'
+                  AND (
+                    EXTRACT(ISODOW FROM (created_at AT TIME ZONE 'Europe/Moscow')) IN (6, 7)
+                    OR EXTRACT(HOUR FROM (created_at AT TIME ZONE 'Europe/Moscow')) NOT BETWEEN 8 AND 19
+                  )
+              format: table
+              rawQuery: true
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: medium
+          source: document.status_changed
+        annotations:
+          summary: "Статус документа изменён вне рабочего времени (Пн-Пт 08:00-20:00 МСК) — DOCUMENT_PUBLISHED/DOCUMENT_REVOKED/DOCUMENT_STATUS_CHANGED, apps/documents/models.py."
+
+      - uid: audit-alert-audit-log-exported
+        title: "Экспорт журнала аудита"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: audit-postgres
+            model:
+              # ЗАГОТОВКА: AUDIT_LOG_EXPORTED сейчас не пишется НИКАКИМ
+              # кодом (в проекте вообще нет функции экспорта журнала аудита
+              # ни в одном контуре) — правило готово так же, как «Массовое
+              # скачивание ДСП» выше.
+              rawSql: >-
+                SELECT COUNT(*) AS value FROM audit_auditlog
+                WHERE event_type = 'audit_log.exported'
+                  AND created_at > NOW() - INTERVAL '5 minutes'
+              format: table
+              rawQuery: true
+              refId: A
+          - refId: C
+            datasourceUid: "-100"
+            model:
+              type: threshold
+              refId: C
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: OK
+        execErrState: Error
+        for: 0m
+        labels:
+          severity: high
+          source: audit_log.exported
+          status: dormant-no-producer-yet
+        annotations:
+          summary: "Журнал аудита выгружен (AUDIT_LOG_EXPORTED). Честная граница: события экспорта журнала в проекте пока нет ни в одном контуре, см. STACK.md."
+
+contactPoints:
+  - orgId: 1
+    name: audit-security-team
+    receivers:
+      # Плейсхолдер — реальный канал уведомлений (email/Slack/Telegram)
+      # не выбран Заказчиком в этой сессии; email-получатель ниже условный,
+      # его нужно заменить перед реальным использованием. Без хотя бы
+      # одного получателя часть версий Grafana отказывается провизионить
+      # contact point вовсе.
+      - uid: audit-security-team-email
+        type: email
+        settings:
+          addresses: security-team@get.spb.ru
+
+policies:
+  - orgId: 1
+    receiver: audit-security-team
+    group_by: ["alertname"]
+    matchers:
+      - source =~ "session\\.login_failed|session\\.login|export\\.restricted|document\\.status_changed|audit_log\\.exported"
+    routes: []

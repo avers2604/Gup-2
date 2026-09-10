@@ -219,3 +219,96 @@ class TotpEnrollmentWebTests(TestCase):
         response = self.client.post(reverse("iam:totp-confirm"), {"code": "123456"})
         self.assertEqual(response.status_code, 400)
         self.assertContains(response, "Подключение не начато", status_code=400)
+
+
+class FailedLoginAuditTests(TestCase):
+    """Усиление аудита (решение Заказчика): неудачные попытки входа
+    пишутся в SESSION_LOGIN_FAILED — основа Grafana-алерта «5+ подряд»."""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = _make_user()
+
+    def test_wrong_password_writes_session_login_failed(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "wrong",
+        })
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().actor_personnel_number, "0001")
+
+    def test_blocked_user_login_writes_session_login_failed(self):
+        _make_user(personnel_number="0002", status=User.Status.BLOCKED)
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0002", "password": "Sup3r$ecret!Pass",
+        })
+        self.assertTrue(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.SESSION_LOGIN_FAILED, actor_personnel_number="0002",
+            ).exists()
+        )
+
+    def test_correct_login_writes_no_failed_entry(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        self.assertFalse(
+            AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED).exists()
+        )
+
+
+class FailedTotpAuditTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.secret = generate_totp_secret()
+        self.user = _make_user(totp_enabled=True, totp_secret=self.secret)
+
+    def test_wrong_totp_code_writes_session_login_failed(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        self.client.post(reverse("iam:login-verify-totp"), {"code": "000000"})
+
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().actor_personnel_number, "0001")
+
+
+class SessionLoginDetailsTests(TestCase):
+    """Усиление аудита: SESSION_LOGIN несёт снимок ФИО/роли/IP, не только
+    табельный номер."""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = _make_user(role=User.Role.SECURITY_OFFICER)
+
+    def test_login_details_contain_full_name_and_role(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        entry = AuditLog.objects.get(event_type=AuditLog.EventType.SESSION_LOGIN)
+        self.assertEqual(entry.details["full_name"], self.user.full_name)
+        self.assertEqual(entry.details["role"], User.Role.SECURITY_OFFICER)
+        self.assertIn("ip_address", entry.details)
+
+
+class SharedTerminalSessionTimeoutTests(TestCase):
+    """Таймаут неактивности: 30 минут по умолчанию, 15 — если отмечен
+    терминал общего доступа (решение Заказчика)."""
+
+    def setUp(self):
+        self.client = Client()
+        self.user = _make_user()
+
+    def test_shared_terminal_checkbox_shortens_session_to_15_minutes(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+            "shared_terminal": "on",
+        })
+        self.assertEqual(self.client.session.get_expiry_age(), 15 * 60)
+
+    def test_without_shared_terminal_uses_default_30_minutes(self):
+        self.client.post(reverse("iam:login"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        self.assertEqual(self.client.session.get_expiry_age(), 30 * 60)

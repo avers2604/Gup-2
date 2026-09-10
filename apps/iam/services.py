@@ -43,7 +43,14 @@ REQUIRED_COLUMNS = {
 
 ROLE_IMPORT_MAP = {
     "reader": User.Role.READER,
-    "curator": User.Role.CURATOR,
+    # "curator" намеренно НЕ отображается на CONTROLLER_LAWYER автоматически:
+    # роль «Куратор службы» упразднена (решение Заказчика, см.
+    # apps/iam/models.py → Role), и файл импорта со значением "curator" в
+    # колонке role должен явно провалиться построчной ошибкой «Неизвестная
+    # роль», а не молча получить другую роль — реклассификация обязана быть
+    # осознанным действием того, кто готовит файл, не побочным эффектом
+    # словаря импорта.
+    "methodist": User.Role.METHODIST,
     "controller": User.Role.CONTROLLER_LAWYER,
     "security_officer": User.Role.SECURITY_OFFICER,
     "admin": User.Role.ADMINISTRATOR,
@@ -224,6 +231,10 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
                 user.status = status
 
                 user.full_clean(exclude=["password"])
+                # Транзитный атрибут (не поле модели) — User.save() читает
+                # его, чтобы записать оператора в комплексный аудит смены
+                # роли (USER_ROLE_CHANGED), если role реально изменилась.
+                user._audit_actor = actor
                 user.save()
 
                 # Массовое удаление через импорт не выполняется: строки,
@@ -315,13 +326,37 @@ class CredentialCheckResult:
     totp_required: bool
 
 
+def _client_ip(request) -> str:
+    """REMOTE_ADDR напрямую, без учёта заголовков reverse-proxy
+    (X-Forwarded-For/X-Real-IP). Честная граница усиления аудита (решение
+    Заказчика): за балансировщиком/nginx REMOTE_ADDR будет адресом самого
+    прокси, а не клиента. Доверенная обработка таких заголовков (с явным
+    списком доверенных прокси — иначе клиент подделывает IP просто отправив
+    свой X-Forwarded-For) специфична для целевой топологии развёртывания,
+    которой в этой сессии нет (см. STACK.md «Локальная разработка») —
+    отложено до Этапа 3/4, не реализовано вслепую."""
+    if request is None:
+        return ""
+    return request.META.get("REMOTE_ADDR", "") or ""
+
+
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
     """Шаг 1. None — неверный табельный номер, неверный пароль или
     пользователь заблокирован (is_active=False уже отсекается
     authenticate() через ModelBackend) — вызывающий код должен отвечать
-    ОДНИМ сообщением на все три случая, не раскрывая, какой именно."""
+    ОДНИМ сообщением на все три случая, не раскрывая, какой именно.
+    Неудача пишется в WORM-аудит (SESSION_LOGIN_FAILED, усиление аудита —
+    решение Заказчика, основа Grafana-алерта «5+ попыток подряд») именно
+    здесь, а не в вызывающем коде — иначе Web и API продублировали бы
+    правило, какая именно неудача достойна аудита."""
     user = authenticate(request, username=personnel_number, password=password)
     if user is None:
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            actor=None, actor_personnel_number=personnel_number,
+            object_type="User", object_id="",
+            details={"ip_address": _client_ip(request), "stage": "credentials"},
+        )
         return None
     return CredentialCheckResult(user=user, totp_required=user.totp_enabled)
 
@@ -330,19 +365,40 @@ def make_totp_pending_ticket(user: User) -> str:
     return signing.dumps({"user_id": str(user.pk)}, salt=_TOTP_PENDING_TICKET_SALT)
 
 
-def verify_totp_login(*, ticket: str, code: str) -> User | None:
+def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     """Шаг 2. None — тикет невалиден/подделан/просрочен, пользователя уже
     нет, он не активен (заблокирован между шагом 1 и шагом 2 — окно
-    небольшое, но не нулевое), или код неверный."""
+    небольшое, но не нулевое), или код неверный. Каждая из этих ветвей
+    пишет SESSION_LOGIN_FAILED (см. check_credentials про то же решение на
+    шаге 1) — request нужен только чтобы снять IP для аудита, необязателен
+    (None — например, вызов из теста/скрипта без HTTP-контекста)."""
     try:
         data = signing.loads(ticket, salt=_TOTP_PENDING_TICKET_SALT, max_age=_TOTP_PENDING_TICKET_MAX_AGE)
     except signing.BadSignature:
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            actor=None, actor_personnel_number="",
+            object_type="User", object_id="",
+            details={"ip_address": _client_ip(request), "stage": "totp", "reason": "invalid_or_expired_ticket"},
+        )
         return None
 
     user = User.objects.filter(pk=data.get("user_id")).first()
     if user is None or not user.is_active:
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            actor=user, actor_personnel_number=user.personnel_number if user else "",
+            object_type="User", object_id=str(user.pk) if user else "",
+            details={"ip_address": _client_ip(request), "stage": "totp", "reason": "user_inactive_or_missing"},
+        )
         return None
     if not verify_totp_code(secret=user.totp_secret, code=code):
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            actor=user, actor_personnel_number=user.personnel_number,
+            object_type="User", object_id=str(user.pk),
+            details={"ip_address": _client_ip(request), "stage": "totp", "reason": "wrong_code"},
+        )
         return None
     return user
 
@@ -363,19 +419,27 @@ def user_auth_summary(user: User) -> dict:
     }
 
 
-def record_session_login(user: User) -> None:
+def record_session_login(user: User, request=None) -> None:
+    """Усиление аудита (решение Заказчика: «фиксировать все входы —
+    табельный номер, ФИО, роль, IP, метка времени»). Табельный номер и
+    метка времени уже были (actor_personnel_number/created_at) — ФИО, роль
+    и IP добавлены как снимок в details, а не только через actor (FK
+    actor — SET_NULL при удалении пользователя, снимок переживёт это, как
+    и actor_personnel_number уже переживает)."""
     AuditLog.objects.create(
         event_type=AuditLog.EventType.SESSION_LOGIN,
         actor=user, actor_personnel_number=user.personnel_number,
         object_type="User", object_id=str(user.pk),
+        details={"full_name": user.full_name, "role": user.role, "ip_address": _client_ip(request)},
     )
 
 
-def record_session_logout(user: User) -> None:
+def record_session_logout(user: User, request=None) -> None:
     AuditLog.objects.create(
         event_type=AuditLog.EventType.SESSION_LOGOUT,
         actor=user, actor_personnel_number=user.personnel_number,
         object_type="User", object_id=str(user.pk),
+        details={"full_name": user.full_name, "role": user.role, "ip_address": _client_ip(request)},
     )
 
 

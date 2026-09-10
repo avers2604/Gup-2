@@ -16,6 +16,9 @@
       {{ form.personnel_number }}
       <label class="field-label" for="{{ form.password.id_for_label }}" style="margin-top: var(--space-4); display:block;">Пароль</label>
       {{ form.password }}
+      <label class="caption" style="display:flex; align-items:center; gap: var(--space-2); margin-top: var(--space-4);">
+        {{ form.shared_terminal }} {{ form.shared_terminal.label }}
+      </label>
       <button class="btn btn--primary" type="submit" style="margin-top: var(--space-6);">Войти</button>
     </form>
   </div>

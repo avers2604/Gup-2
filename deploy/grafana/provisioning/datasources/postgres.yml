@@ -1,0 +1,32 @@
+# Датасорс Grafana поверх той же БД, где живёт WORM-журнал аудита
+# (audit_auditlog) — источник данных для алертов из ../alerting/audit-alerts.yml
+# (усиление аудита, решение Заказчика). uid зафиксирован явно и используется
+# как datasourceUid в правилах алертов ниже — генерировать его самим
+# Grafana нельзя, иначе правила не смогли бы на него сослаться детерминированно.
+#
+# $POSTGRES_DB/$POSTGRES_USER/$POSTGRES_PASSWORD — переменные окружения
+# контейнера grafana (см. docker-compose.yml → сервис grafana), те же
+# значения, что и у самого Postgres из .env; подстановка переменных
+# окружения в provisioning-файлах поддерживается Grafana начиная с 9.1.
+#
+# Не проверено вживую в этой сессии (нет доступа к Docker-демону —
+# см. STACK.md → «Локальная разработка в этой сессии»), только на
+# соответствие документированной схеме provisioning YAML.
+apiVersion: 1
+
+datasources:
+  - uid: audit-postgres
+    name: PostgreSQL (audit_auditlog)
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: $POSTGRES_DB
+    user: $POSTGRES_USER
+    secureJsonData:
+      password: $POSTGRES_PASSWORD
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    isDefault: false
+    editable: false

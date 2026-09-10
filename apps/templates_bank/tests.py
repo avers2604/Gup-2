@@ -1,9 +1,69 @@
 from django.test import TestCase
 
+from apps.audit.models import AuditLog
 from apps.core.storage import originals_storage
 from apps.documents.retention import RetentionMode
+from apps.documents.tests.factories import make_document
 
-from .models import Template
+from .models import Template, TemplateFamily
+
+
+def _make_template(status=Template.Status.ACTIVE, version="v1.0", **kwargs):
+    family = kwargs.pop("family", None) or TemplateFamily.objects.create(name="Акт схода подвижного состава")
+    approving_document = kwargs.pop("approving_document", None) or make_document(reg_number=f"doc-{version}")
+    defaults = dict(
+        family=family, version=version, change_type=Template.ChangeType.MAJOR, status=status,
+        approving_document=approving_document,
+    )
+    defaults.update(kwargs)
+    return Template.objects.create(**defaults)
+
+
+class TemplateStatusChangeAuditTests(TestCase):
+    """Усиление аудита (решение Заказчика): Template.save() (раньше без
+    переопределения save() вообще) пишет WORM-запись при реальном
+    изменении status — тот же паттерн, что и NormativeDocument.status."""
+
+    def test_creating_template_writes_no_audit_entry(self):
+        _make_template()
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type__in=[AuditLog.EventType.TEMPLATE_SUPERSEDED, AuditLog.EventType.TEMPLATE_UPDATED]
+            ).exists()
+        )
+
+    def test_active_to_superseded_writes_template_superseded(self):
+        template = _make_template()
+        template.status = Template.Status.SUPERSEDED
+        template.save()
+
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.TEMPLATE_SUPERSEDED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().details, {"old_status": "active", "new_status": "superseded"})
+
+    def test_resaving_same_status_writes_no_audit_entry(self):
+        template = _make_template()
+        template.download_count += 1
+        template.save()
+        self.assertFalse(AuditLog.objects.filter(event_type=AuditLog.EventType.TEMPLATE_SUPERSEDED).exists())
+
+    def test_actor_is_captured_from_transient_attribute(self):
+        from apps.iam.models import Department, User
+
+        dept, _ = Department.objects.get_or_create(
+            name="Служба движения", defaults={"level": Department.Level.SERVICE}
+        )
+        operator = User.objects.create(
+            personnel_number="0099", last_name="Петров", first_name="Иван",
+            position="Контролёр", department=dept, role=User.Role.CONTROLLER_LAWYER,
+        )
+        template = _make_template()
+        template.status = Template.Status.SUPERSEDED
+        template._audit_actor = operator
+        template.save()
+
+        entry = AuditLog.objects.get(event_type=AuditLog.EventType.TEMPLATE_SUPERSEDED)
+        self.assertEqual(entry.actor_personnel_number, "0099")
 
 
 class TemplateStorageTests(TestCase):

@@ -42,13 +42,27 @@ class AuditLog(models.Model):
     class EventType(models.TextChoices):
         DOCUMENT_PUBLISHED = "document.published", "Документ опубликован"
         DOCUMENT_REVOKED = "document.revoked", "Документ отменён"
+        # Любая другая смена status карточки НРД, не подпадающая под
+        # «опубликован»/«отменён» буквально (например draft -> active_amended,
+        # active -> archived) — усиление аудита (решение Заказчика: «фиксировать
+        # все изменения документов — старый/новый статус»), см. NormativeDocument.save().
+        DOCUMENT_STATUS_CHANGED = "document.status_changed", "Изменён статус документа"
         TEMPLATE_UPDATED = "template.updated", "Бланк обновлён (минорно)"
         TEMPLATE_SUPERSEDED = "template.superseded", "Бланк заменён новой редакцией"
         SESSION_LOGIN = "session.login", "Вход в систему"
         SESSION_LOGOUT = "session.logout", "Выход из системы"
+        # Неудачная попытка входа (неверный пароль/код TOTP/заблокированный
+        # пользователь/просроченный тикет) — усиление аудита (решение
+        # Заказчика, основа для Grafana-алерта «5+ неудачных попыток подряд»).
+        SESSION_LOGIN_FAILED = "session.login_failed", "Неудачная попытка входа"
         EXPORT_RESTRICTED = "export.restricted", "Выгрузка документа «ДСП»"
         ARCHIVE_DOWNLOAD = "archive.download", "Скачивание архивного бланка"
         USER_ROLE_ELEVATED = "user.role_elevated", "Повышение роли пользователя"
+        # Комплексный аудит ЛЮБОГО изменения роли (не только повышения) —
+        # усиление аудита (решение Заказчика). Пишется из User.save(), в
+        # дополнение к более узкому USER_ROLE_ELEVATED (см. его docstring и
+        # STACK.md про намеренное пересечение событий).
+        USER_ROLE_CHANGED = "user.role_changed", "Изменение роли пользователя"
         DOCUMENT_RETENTION_CATEGORY_CHANGED = (
             "document.retention_category_changed", "Изменена категория срока хранения"
         )
@@ -56,6 +70,12 @@ class AuditLog(models.Model):
             "document.retention_expired_at_intake", "Срок хранения уже истёк на момент регистрации"
         )
         THESAURUS_UPDATED = "thesaurus.updated", "Обновление тезауруса (импорт)"
+        # «Заготовка» — как EXPORT_RESTRICTED/ARCHIVE_DOWNLOAD исторически:
+        # событие заведено под будущий Grafana-алерт «экспорт журнала аудита»
+        # (решение Заказчика), но в этой партии не пишется НИКАКИМ кодом —
+        # экспорта самого журнала аудита в проекте ещё нет ни в одном контуре
+        # (честная граница, см. STACK.md).
+        AUDIT_LOG_EXPORTED = "audit_log.exported", "Экспорт журнала аудита"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.CharField(max_length=64, choices=EventType.choices)

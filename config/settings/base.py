@@ -88,15 +88,24 @@ PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
 ]
 
+# Парольная политика (решение Заказчика, усиление): минимум 14 символов,
+# история 10 паролей, проверка по чёрному списку. CommonPasswordValidator
+# (встроенный словарь Django из ~20000 самых частых скомпрометированных
+# паролей) принят как реализация требования «проверка по чёрному списку» —
+# Заказчик не присылал отдельный корпоративный словарь (в отличие,
+# например, от тезауруса Smart Search, где файл был прислан явно), поэтому
+# собственный список не придуман самостоятельно, использован стандартный
+# инструмент Django для этой же цели.
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-        "OPTIONS": {"min_length": 10},
+        "OPTIONS": {"min_length": 14},
     },
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
     {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
     {"NAME": "apps.iam.validators.SpecialCharacterValidator"},
+    {"NAME": "apps.iam.validators.PasswordHistoryValidator"},
 ]
 
 LANGUAGE_CODE = "ru-ru"
@@ -120,8 +129,18 @@ LOGIN_REDIRECT_URL = "core:styleguide"
 LOGOUT_REDIRECT_URL = "iam:login"
 
 # Сессии — частичная реализация ТЗ 4.7 (полная política блокировок и
-# параллельных сессий запланирована на Этап 3).
-SESSION_COOKIE_AGE = 15 * 60  # автосброс сессии при неактивности 15 минут
+# параллельных сессий запланирована на Этап 3). Таймаут неактивности
+# дифференцирован решением Заказчика: 30 минут по умолчанию (личное
+# рабочее место), 15 минут — если пользователь отметил вход как терминал
+# общего доступа (LoginForm.shared_terminal, apps/iam/views.py явно
+# вызывает request.session.set_expiry() при завершении входа — это
+# значение здесь работает как дефолт ДО первого такого вызова и как база
+# для любой сессии, где set_expiry() не был вызван явно). Различие
+# специфично для Web GUI (браузерная сессия сотрудника на конкретном
+# устройстве) — в External API/JWT-контуре понятия «рабочее место» и
+# «терминал общего доступа» не применимы, там свой отдельный таймаут —
+# ACCESS_TOKEN_LIFETIME (SIMPLE_JWT ниже), не связан с этой настройкой.
+SESSION_COOKIE_AGE = 30 * 60
 SESSION_SAVE_EVERY_REQUEST = True
 SESSION_EXPIRE_AT_BROWSER_CLOSE = True
 

@@ -158,14 +158,14 @@ class PersonnelImportRoleElevationAuditTests(TestCase):
             AuditLog.objects.filter(event_type=AuditLog.EventType.USER_ROLE_ELEVATED).count(), 0
         )
 
-        import_personnel(_build_xlsx([_row(role="curator")]))
+        import_personnel(_build_xlsx([_row(role="methodist")]))
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.USER_ROLE_ELEVATED)
         self.assertEqual(entries.count(), 1)
         self.assertEqual(entries.first().details["previous_role"], "reader")
-        self.assertEqual(entries.first().details["new_role"], "curator")
+        self.assertEqual(entries.first().details["new_role"], "methodist")
 
     def test_role_downgrade_does_not_create_audit_entry(self):
-        import_personnel(_build_xlsx([_row(role="curator")]))
+        import_personnel(_build_xlsx([_row(role="methodist")]))
         import_personnel(_build_xlsx([_row(role="reader")]))
         self.assertEqual(
             AuditLog.objects.filter(event_type=AuditLog.EventType.USER_ROLE_ELEVATED).count(), 0
@@ -184,7 +184,7 @@ class PersonnelImportRoleElevationAuditTests(TestCase):
         # не дублирование тех тестов, а проверка, что именно ЭТОТ путь
         # создания записи не в обход них.
         import_personnel(_build_xlsx([_row(role="reader")]))
-        import_personnel(_build_xlsx([_row(role="curator")]))
+        import_personnel(_build_xlsx([_row(role="methodist")]))
         entry = AuditLog.objects.get(event_type=AuditLog.EventType.USER_ROLE_ELEVATED)
         with self.assertRaises(PermissionError):
             entry.delete()

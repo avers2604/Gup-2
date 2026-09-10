@@ -1,6 +1,6 @@
 import uuid
 
-from django.db import models
+from django.db import models, transaction
 
 from apps.core.models import TimeStampedModel
 from apps.core.storage import originals_storage
@@ -37,10 +37,11 @@ class Template(TimeStampedModel):
     из retention.RETENTION_MATRIX), а не в working, как было решено раньше.
 
     Незаблокированная рабочая копия для правки ДО публикации новой версии
-    (собственно "минорная корректировка" со стороны Куратора) — это
-    отдельный, пока не реализованный механизм черновиков (Этап 2/3, будущий
-    UI), результатом работы которого является НОВАЯ строка Template с
-    новым version, а не мутация существующей."""
+    (собственно "минорная корректировка" со стороны Контролёра/Юриста —
+    роль, унаследовавшая функционал упразднённого «Куратора службы», см.
+    apps/iam/models.py) — это отдельный, пока не реализованный механизм
+    черновиков (Этап 2/3, будущий UI), результатом работы которого является
+    НОВАЯ строка Template с новым version, а не мутация существующей."""
 
     class ChangeType(models.TextChoices):
         MAJOR = "major", "Новая редакция"
@@ -107,3 +108,43 @@ class Template(TimeStampedModel):
 
     def __str__(self):
         return f"{self.family.name} {self.version}"
+
+    def save(self, *args, **kwargs):
+        # Усиление аудита (решение Заказчика: «фиксировать все изменения
+        # бланков — кто, что изменил, старый/новый статус»). Тот же
+        # паттерн "сравнить с БД до super().save()", что и у
+        # NormativeDocument.status/retention_category — см. их docstring'и.
+        previous_status = (
+            type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
+        )
+        is_new = previous_status is None
+        status_changed = not is_new and previous_status != self.status
+
+        with transaction.atomic():
+            super().save(*args, **kwargs)
+
+            if not status_changed:
+                return
+
+            from apps.audit.models import AuditLog
+
+            # ACTIVE -> SUPERSEDED — единственный реальный переход сейчас
+            # (TemplateAdmin.save_model блокирует любое изменение уже
+            # опубликованной версии, так что TEMPLATE_UPDATED здесь —
+            # честная заготовка на случай будущего механизма минорной
+            # корректировки/отката SUPERSEDED -> ACTIVE, а не гарантированно
+            # используемая сегодня ветка).
+            event_type = (
+                AuditLog.EventType.TEMPLATE_SUPERSEDED
+                if self.status == self.Status.SUPERSEDED
+                else AuditLog.EventType.TEMPLATE_UPDATED
+            )
+            actor = getattr(self, "_audit_actor", None)
+            AuditLog.objects.create(
+                event_type=event_type,
+                actor=actor,
+                actor_personnel_number=getattr(actor, "personnel_number", ""),
+                object_type="Template",
+                object_id=str(self.pk),
+                details={"old_status": previous_status, "new_status": self.status},
+            )

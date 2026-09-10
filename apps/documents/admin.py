@@ -53,6 +53,10 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         if not self._can_access(request, obj):
             raise PermissionDenied("Для работы с документами ДСП требуется соответствующий допуск.")
+        # Транзитный атрибут (не поле модели) — NormativeDocument.save()
+        # читает его для комплексного аудита смены статуса документа
+        # (усиление аудита, решение Заказчика).
+        obj._audit_actor = request.user
         super().save_model(request, obj, form, change)
 
 
