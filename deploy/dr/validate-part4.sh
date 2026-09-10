@@ -152,13 +152,17 @@ grep -q 'observed_rpo_upper_bound_seconds: 10' "$tmp/evidence/ci-part4/RESULT.md
 grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-part4/RESULT.md"
 grep -q 'failover-complete' "$tmp/evidence/ci-part4/checkpoints.csv"
 
-# Approval helper must refuse TBD and accept an explicitly signed PASS in
-# dry-run mode. Root-owned marker creation is intentionally not exercised in CI.
+# Approval helper must refuse TBD and accept exactly one signed PASS decision.
 if env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
   echo 'ERROR: approval helper accepted an unsigned/TBD drill' >&2
   exit 1
 fi
-printf '\nPASS/FAIL: PASS\n' >>"$tmp/evidence/ci-part4/RESULT.md"
+sed -i 's/^PASS\/FAIL: TBD.*/PASS\/FAIL: PASS/' "$tmp/evidence/ci-part4/RESULT.md"
 env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null
+printf '\nPASS/FAIL: PASS\n' >>"$tmp/evidence/ci-part4/RESULT.md"
+if env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
+  echo 'ERROR: approval helper accepted multiple PASS/FAIL decisions' >&2
+  exit 1
+fi
 
 echo 'Stage 4 part 4 rebuild/drill validation passed.'
