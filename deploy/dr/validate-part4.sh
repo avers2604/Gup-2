@@ -6,10 +6,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 bash -n "$SCRIPT_DIR/patroni-pgbackrest-restore.sh"
 bash -n "$SCRIPT_DIR/rebuild-replica.sh"
 bash -n "$SCRIPT_DIR/combined-drill.sh"
+bash -n "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh"
 
 grep -q 'create_replica_methods:' "$REPO_ROOT/deploy/ha/patroni.yml.example"
 grep -q 'patroni-pgbackrest-restore.sh' "$REPO_ROOT/deploy/ha/patroni.yml.example"
 grep -q 'manual-pitr-approved' "$SCRIPT_DIR/patroni-pgbackrest-restore.sh"
+grep -q 'status=approved' "$SCRIPT_DIR/patroni-pgbackrest-restore.sh"
 grep -q -- '--execute' "$SCRIPT_DIR/rebuild-replica.sh"
 if grep -q -- '--target-action=promote' "$SCRIPT_DIR/patroni-pgbackrest-restore.sh"; then
   echo 'ERROR: replica restore wrapper must never promote a restored node' >&2
@@ -19,7 +21,8 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/data" "$tmp/evidence"
-touch "$tmp/patroni.yml" "$tmp/manual-pitr-approved"
+touch "$tmp/patroni.yml"
+printf 'status=approved\nmanual_pitr_drill_id=ci\n' >"$tmp/manual-pitr-approved"
 
 cat >"$tmp/bin/patronictl" <<'EOF'
 #!/usr/bin/env bash
@@ -100,14 +103,15 @@ if grep -q -- '--target-action=promote' "$FAKE_RESTORE_LOG"; then
   exit 1
 fi
 
+printf 'status=pending\n' >"$tmp/unapproved"
 if env \
-  PATRONI_PGBACKREST_APPROVAL_FILE="$tmp/missing-approval" \
+  PATRONI_PGBACKREST_APPROVAL_FILE="$tmp/unapproved" \
   PATRONI_ALLOWED_DATA_ROOT="$tmp" \
   PATRONI_EXPECTED_SCOPE=bz-get \
   PGBACKREST_BIN="$tmp/bin/pgbackrest" \
   "$SCRIPT_DIR/patroni-pgbackrest-restore.sh" \
   --scope=bz-get --datadir="$tmp/data" --role=replica >/dev/null 2>&1; then
-  echo 'ERROR: restore wrapper ran without approval marker' >&2
+  echo 'ERROR: restore wrapper ran with an unapproved marker' >&2
   exit 1
 fi
 
@@ -147,5 +151,14 @@ env \
 grep -q 'observed_rpo_upper_bound_seconds: 10' "$tmp/evidence/ci-part4/RESULT.md"
 grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-part4/RESULT.md"
 grep -q 'failover-complete' "$tmp/evidence/ci-part4/checkpoints.csv"
+
+# Approval helper must refuse TBD and accept an explicitly signed PASS in
+# dry-run mode. Root-owned marker creation is intentionally not exercised in CI.
+if env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
+  echo 'ERROR: approval helper accepted an unsigned/TBD drill' >&2
+  exit 1
+fi
+printf '\nPASS/FAIL: PASS\n' >>"$tmp/evidence/ci-part4/RESULT.md"
+env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null
 
 echo 'Stage 4 part 4 rebuild/drill validation passed.'
