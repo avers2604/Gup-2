@@ -76,6 +76,14 @@ jobs:
         # сигнатурой на время тестового класса, не нужен freshclam/интернет.
         run: sudo apt-get install -y -qq clamav-daemon
 
+      - name: Проверить артефакты monitoring Этапа 4
+        # В CI проверяем Python/JSON и shell-wrapper. Полная семантическая
+        # проверка Prometheus выполняется `promtool` на HA/DR стенде; helper
+        # автоматически запускает её, когда promtool установлен.
+        run: |
+          bash -n deploy/monitoring/validate.sh
+          bash deploy/monitoring/validate.sh
+
       - name: manage.py check
         run: python manage.py check
 
