@@ -15,15 +15,6 @@ jobs:
     # PostgreSQL 17/18 (tstzrange/EXCLUDE USING gist/btree_gist доступны
     # с 9.2), поэтому расхождение не должно менять исход этих проверок,
     # но не заменяет проверку на целевой версии перед вводом в ПЭ.
-    #
-    # Права на CREATE EXTENSION (нужны миграции documents.0002_initial,
-    # которая создаёт btree_gist): официальный образ postgres создаёт роль
-    # из POSTGRES_USER суперпользователем, когда это имя отличается от
-    # дефолтного "postgres" — см. https://hub.docker.com/_/postgres,
-    # раздел про POSTGRES_USER. Явно настраивать права не требуется.
-    # (Проверено и локально: даже без SUPERUSER, только с CREATEDB,
-    # миграция тоже проходит — btree_gist помечено "trusted" начиная с
-    # PostgreSQL 13 и доступно владельцу БД без прав суперпользователя.)
     services:
       postgres:
         image: postgres:16
@@ -55,7 +46,6 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # 3.13 — текущий проверенный baseline (STACK.md → «Политика версий»).
           python-version: "3.13"
           cache: "pip"
           cache-dependency-path: requirements-dev.txt
@@ -64,32 +54,33 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Установить системные пакеты OCR
-        # tesseract-ocr-rus — языковые данные для конвейера OCR (Этап 3,
-        # apps/documents/ocr.py). fonts-dejavu-core — Cyrillic-шрифт для
-        # тестового PDF в apps/documents/tests/test_ocr.py (реальный, не
-        # замоканный прогон Tesseract/poppler).
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus poppler-utils fonts-dejavu-core
 
       - name: Установить ClamAV (анти-фрод, Этап 3)
-        # Демон не запускается как системный сервис — apps/core/tests/clamd_fixture.py
-        # сам поднимает собственный clamd с минимальной тестовой (EICAR)
-        # сигнатурой на время тестового класса, не нужен freshclam/интернет.
         run: sudo apt-get install -y -qq clamav-daemon
 
       - name: Проверить артефакты monitoring Этапа 4
-        # В CI проверяем Python/JSON и shell-wrapper. Полная семантическая
-        # проверка Prometheus выполняется `promtool` на HA/DR стенде; helper
-        # автоматически запускает её, когда promtool установлен.
         run: |
           bash -n deploy/monitoring/validate.sh
           bash deploy/monitoring/validate.sh
+
+      - name: Проверить MinIO DR Этапа 4
+        run: |
+          bash -n deploy/minio/dr/validate.sh
+          bash deploy/minio/dr/validate.sh
+
+      - name: Проверить Alertmanager Этапа 4
+        # Без установленного amtool helper выполняет shell-проверки и честно
+        # пропускает только semantic check Alertmanager. На HA/DR стенде с
+        # amtool тот же скрипт выполняет полноценный check-config.
+        run: |
+          bash -n deploy/alertmanager/validate.sh
+          bash deploy/alertmanager/validate.sh
 
       - name: manage.py check
         run: python manage.py check
 
       - name: Нет неучтённых изменений моделей
-        # Падает, если модель изменена без соответствующей миграции —
-        # миграция должна приезжать в том же коммите/PR, что и модель.
         run: python manage.py makemigrations --check --dry-run
 
       - name: Применить миграции
