@@ -1,0 +1,65 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "infrastructure-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "targets": [{"expr": "max(bz_get_ocr_review_overdue_total)", "refId": "A"}],
+      "title": "OCR: очередь вычитки > 14 дней",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "infrastructure-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "targets": [{"expr": "max(bz_get_templates_revision_overdue_total)", "refId": "A"}],
+      "title": "Бланки без ревизии > 3 лет",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "infrastructure-prometheus"},
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "textMode": "auto"},
+      "targets": [{"expr": "max(bz_get_search_zero_result_ratio) * 100", "refId": "A"}],
+      "title": "Доля поисков с нулевой выдачей",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "infrastructure-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "textMode": "auto"},
+      "targets": [
+        {"expr": "max(bz_get_link_generation_failures_total{status=\"403\"})", "legendFormat": "403", "refId": "A"},
+        {"expr": "max(bz_get_link_generation_failures_total{status=\"404\"})", "legendFormat": "404", "refId": "B"},
+        {"expr": "max(bz_get_link_generation_failures_total{status=\"504\"})", "legendFormat": "504", "refId": "C"}
+      ],
+      "title": "Сбои генерации ссылок",
+      "type": "stat"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["bz-get", "stage4", "business"],
+  "templating": {"list": []},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "BZ GET — Stage 4 Business Indicators",
+  "uid": "bz-get-stage4-business",
+  "version": 1,
+  "weekStart": ""
+}
