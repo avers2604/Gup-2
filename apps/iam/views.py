@@ -13,24 +13,20 @@ from django.shortcuts import redirect, render
 from django.views import View
 from django.views.generic import FormView
 
-from apps.core.limits import client_ip, consume_fixed_window, request_identity
+from apps.core.limits import consume_fixed_window, request_identity
 
 from . import services
 from .forms import LoginForm, TotpCodeForm
 
 _SESSION_PENDING_TICKET = "totp_pending_ticket"
-# Значение shared_terminal со ШАГА 1 нужно донести до момента реальной
-# авторизации (шаг 2, если включена 2FA) — django_login() переживает
-# ключи сессии (cycle_key(), не flush()), так что положить их в
-# неавторизованную pending-сессию и прочитать после — безопасно.
 _SESSION_SHARED_TERMINAL = "shared_terminal_login"
-# Дифференцированный таймаут неактивности (решение Заказчика) — 15 минут
-# для терминала общего доступа вместо личного рабочего места
-# (settings.SESSION_COOKIE_AGE, 30 минут).
 _SHARED_TERMINAL_SESSION_AGE = 15 * 60
 
-_LOGIN_LIMIT = 8
-_TOTP_LIMIT = 12
+# Application lockout in services.py (5 failed credentials / 15 min) remains
+# the strict brute-force control. These larger per-minute limits protect HTTP
+# resources from floods and intentionally do not duplicate account lockout.
+_LOGIN_LIMIT = 60
+_TOTP_LIMIT = 60
 _WINDOW_SECONDS = 60
 
 
@@ -49,7 +45,9 @@ class LoginView(FormView):
     form_class = LoginForm
 
     def form_valid(self, form):
-        if not _limit_auth_attempt(self.request, "iam.web.login", form.cleaned_data.get("personnel_number")):
+        if not _limit_auth_attempt(
+            self.request, "iam.web.login", form.cleaned_data.get("personnel_number")
+        ):
             form.add_error(None, "Слишком много попыток входа. Попробуйте позже.")
             return self.form_invalid(form)
 
@@ -82,11 +80,6 @@ class LoginView(FormView):
 
 
 class TotpVerifyView(FormView):
-    """Шаг 2 — только если в сессии есть тикет, оставленный LoginView.
-    Сама сессия на этом этапе ещё НЕ авторизована (django_login() не
-    вызывался) — тикет живёт в session ровно как переносчик состояния
-    между двумя запросами одного браузера, не как признак входа."""
-
     template_name = "iam/totp_verify.html"
     form_class = TotpCodeForm
 
@@ -105,7 +98,11 @@ class TotpVerifyView(FormView):
             return self.form_invalid(form)
 
         try:
-            user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"], request=self.request)
+            user = services.verify_totp_login(
+                ticket=ticket,
+                code=form.cleaned_data["code"],
+                request=self.request,
+            )
         except services.LoginBlocked:
             form.add_error(None, "Слишком много неудачных попыток входа. Попробуйте позже.")
             return self.form_invalid(form)
@@ -122,9 +119,6 @@ class TotpVerifyView(FormView):
 
 
 class LogoutView(LoginRequiredMixin, View):
-    """POST-only (Django 5-конвенция — выход не должен срабатывать по
-    голой GET-ссылке без подтверждения/CSRF)."""
-
     def post(self, request):
         user = request.user
         django_logout(request)
@@ -133,12 +127,6 @@ class LogoutView(LoginRequiredMixin, View):
 
 
 class TotpEnrollView(LoginRequiredMixin, View):
-    """GET — страница с кнопкой начала подключения 2FA (hx-post на этот
-    же URL). POST — генерирует секрет и возвращает HTMX-фрагмент с
-    провижининг-URI и формой подтверждения кода — без перезагрузки
-    страницы. Прогрессивная деградация без JS не реализована (внутренний
-    инструмент с контролируемым набором браузеров, не публичный сайт)."""
-
     def get(self, request):
         return render(request, "iam/totp_enroll.html", {"totp_enabled": request.user.totp_enabled})
 
@@ -161,8 +149,10 @@ class TotpConfirmView(LoginRequiredMixin, View):
             enabled = services.confirm_totp_enrollment(request.user, code=form.cleaned_data["code"])
         except services.TotpEnrollmentNotStarted:
             return render(
-                request, "iam/_totp_confirm_result.html",
-                {"form": form, "not_started": True}, status=400,
+                request,
+                "iam/_totp_confirm_result.html",
+                {"form": form, "not_started": True},
+                status=400,
             )
 
         if not enabled:
