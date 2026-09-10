@@ -54,7 +54,7 @@ Replica rebuild не является full-cluster recovery: автоматич�
 
 ## Партия 5 — стендовый acceptance cycle
 
-Ветка `stage4/acceptance-cycle` добавляет воспроизводимый acceptance harness для
+После merge PR #33 в `main` присутствует воспроизводимый acceptance harness для
 реального HA/DR стенда.
 
 `deploy/acceptance/acceptance-cycle.sh` запускается с operations/bastion host и
@@ -66,7 +66,11 @@ Replica rebuild не является full-cluster recovery: автоматич�
 - `pgbackrest check`, наличие и свежесть backup;
 - MinIO active-passive replication через существующий DR helper;
 - доступность обоих Alertmanager;
-- health приложения через стабильный service endpoint.
+- health приложения через `/health/`.
+
+`/health/` возвращает `200 healthy`, только если Django может выполнить
+минимальный запрос к настроенной БД; при `DatabaseError` возвращается
+`503 unhealthy` без раскрытия деталей инфраструктуры.
 
 Harness не выполняет destructive failure injection, promotion, DCS cleanup,
 PITR target selection или переключение MinIO DNS/LB. Эти действия остаются
@@ -126,7 +130,7 @@ SLA возникает только после утверждения Заказ
 
 ## Граница автоматизации
 
-Репозиторий теперь содержит инструменты для воспроизводимого acceptance cycle,
-но сам реальный стенд из GitHub создать или признать принятым нельзя. Результат
-Этапа 4 становится эксплуатационно принятым только после запуска этих процедур
-на целевой/приёмочной инфраструктуре и подписанного evidence.
+Репозиторий содержит инструменты для воспроизводимого acceptance cycle, но сам
+реальный стенд из GitHub создать или признать принятым нельзя. Результат Этапа 4
+становится эксплуатационно принятым только после запуска этих процедур на
+целевой/приёмочной инфраструктуре и подписанного evidence.
