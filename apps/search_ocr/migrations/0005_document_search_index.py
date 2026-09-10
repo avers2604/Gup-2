@@ -4,6 +4,24 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
+SEED_INDEX_SQL = """
+INSERT INTO search_ocr_documentsearchindex
+    (document_id, title_vector, summary_vector, ocr_vector, combined_vector, updated_at)
+SELECT
+    d.id,
+    to_tsvector('russian', coalesce(d.title, '')),
+    to_tsvector('russian', coalesce(d.summary, '')),
+    to_tsvector('russian', coalesce(d.ocr_body, '')),
+    to_tsvector(
+        'russian',
+        concat_ws(' ', coalesce(d.title, ''), coalesce(d.summary, ''), coalesce(d.ocr_body, ''))
+    ),
+    CURRENT_TIMESTAMP
+FROM documents_normativedocument d
+ON CONFLICT (document_id) DO NOTHING
+"""
+
+
 class Migration(migrations.Migration):
     dependencies = [
         ("documents", "0006_normativedocument_ocr_category_and_more"),
@@ -38,4 +56,5 @@ class Migration(migrations.Migration):
                 ]
             },
         ),
+        migrations.RunSQL(SEED_INDEX_SQL, reverse_sql=migrations.RunSQL.noop),
     ]
