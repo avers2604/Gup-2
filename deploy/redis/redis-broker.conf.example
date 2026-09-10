@@ -1,0 +1,15 @@
+# Stage 4 acceptance baseline for the Celery broker Redis instance.
+# Bind/auth/TLS/network policy are deployment-specific and must be applied
+# separately; this file focuses on crash durability required by the queue drill.
+
+appendonly yes
+appendfsync always
+aof-use-rdb-preamble yes
+no-appendfsync-on-rewrite no
+stop-writes-on-bgsave-error yes
+
+# Keep persistence in a dedicated durable filesystem/volume.
+dir /var/lib/redis
+
+# Do not evict broker messages under memory pressure.
+maxmemory-policy noeviction

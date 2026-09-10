@@ -9,8 +9,10 @@ from django.core.paginator import Paginator
 from django.shortcuts import render
 from django.views import View
 
+from apps.core.business_metrics import record_search
+
 from .forms import SearchForm
-from .search import search_documents
+from .indexed_search import search_documents_indexed
 
 PAGE_SIZE = 20
 
@@ -29,13 +31,14 @@ class SearchView(LoginRequiredMixin, View):
         query_string = ""
 
         if form.is_valid() and form.cleaned_data.get("q"):
-            queryset = search_documents(
+            queryset = search_documents_indexed(
                 request.user,
                 form.cleaned_data["q"],
                 category=form.cleaned_data.get("category") or None,
                 service=form.cleaned_data.get("service") or None,
             )
             paginator = Paginator(queryset, PAGE_SIZE)
+            record_search(paginator.count)
             page_obj = paginator.get_page(request.GET.get("page"))
             results = page_obj.object_list
             query_params = request.GET.copy()

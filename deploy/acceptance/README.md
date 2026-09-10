@@ -1,40 +1,13 @@
 # Этап 4 — стендовый acceptance cycle
 
-Этот каталог переводит HA/DR Этапа 4 из набора конфигураций и runbook в
-воспроизводимую процедуру приёмочных испытаний. Он **не создаёт production
-инфраструктуру** и не запускает разрушительные действия из CI.
-
-## Назначение
-
-`acceptance-cycle.sh` запускается на выделенном operations/bastion host, который
-имеет сетевой доступ к HA/DR стенду и установленные:
-
-- `patronictl`;
-- `etcdctl`;
-- `pgbackrest`;
-- `curl`;
-- Python 3;
-- MinIO Client (`mc`) — через существующий `deploy/minio/dr/check-replication.sh`.
-
-Адреса стенда и пути к TLS-файлам задаются в root-readable
-`/etc/bz-get/stage4-acceptance.env`. Шаблон: `acceptance.env.example`.
-
-## Что проверяет preflight
-
-До любого failover/PITR испытания harness требует:
-
-1. ровно ожидаемые три Patroni member и ровно один leader/primary;
-2. рабочие replicas и replication lag не выше стендового лимита;
-3. здоровье всех трёх etcd endpoints через TLS;
-4. успешный `pgbackrest check`, наличие backup и допустимый возраст последнего
-   backup;
-5. успешную проверку active-passive MinIO replication;
-6. доступность обоих Alertmanager endpoints;
-7. успешный health-check приложения через стабильный service endpoint.
-
-Если любой пункт не проходит, acceptance cycle прекращается до инъекции отказа.
+Каталог содержит воспроизводимую процедуру приёмочных HA/DR испытаний. Скрипты
+собирают evidence и делают итог fail-closed, но **не создают production
+инфраструктуру и не выполняют разрушительные действия из CI**.
 
 ## Подготовка
+
+На operations/bastion host нужны `patronictl`, `etcdctl`, `pgbackrest`, `curl`,
+Python 3, MinIO Client (`mc`) и checkout приложения с рабочим virtualenv.
 
 ```bash
 sudo install -d -o root -g root -m 0750 /etc/bz-get
@@ -43,53 +16,122 @@ sudo install -o root -g root -m 0600 \
   /etc/bz-get/stage4-acceptance.env
 ```
 
-Заполнить реальные адреса, TLS paths и MinIO DR env. Секреты и реальные
-endpoints не коммитить в Git.
+Заполнить реальные endpoints/TLS paths/credentials. Секреты в Git не
+коммитятся. Для очередного испытания выбрать уникальный `RUN_ID`.
 
-Установить harness:
-
-```bash
-sudo install -o root -g root -m 0755 \
-  deploy/acceptance/acceptance-cycle.sh \
-  /usr/local/sbin/bz-get-stage4-acceptance
-```
-
-## Старт испытания
-
-У каждого запуска должен быть уникальный `RUN_ID`, например номер change/request:
+## 1. Fail-closed preflight
 
 ```bash
-sudo ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
-  /usr/local/sbin/bz-get-stage4-acceptance CHG-2026-0042 preflight
+ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
+  bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 preflight
 ```
 
-Evidence создаётся в `ACCEPTANCE_EVIDENCE_ROOT/RUN_ID`.
+Preflight проверяет:
 
-## Рекомендуемый порядок acceptance
+- `db1/db2/db3`, ровно один Patroni leader и здоровые replicas;
+- replication lag;
+- все три etcd endpoints через TLS;
+- `pgbackrest check`, наличие и возраст backup;
+- MinIO DR replication readiness;
+- оба Alertmanager;
+- `/health/` приложения.
 
-После успешного preflight оператор выполняет процедуры из
-`deploy/dr/REBUILD_AND_DRILL.md` и фиксирует контрольные точки:
+Любая ошибка останавливает цикл **до** failure injection.
+
+## 2. Холодная переиндексация 10 000 документов
+
+Критерий ТЗ: **ровно 10 000 документов, не более 3600 секунд**.
 
 ```bash
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint baseline-ready
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint planned-switchover-start
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint planned-switchover-complete
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint unplanned-failover-start
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint unplanned-failover-complete
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint pitr-start
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint pitr-validated
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint minio-failover-validated
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint alertmanager-peer-loss-validated
-bz-get-stage4-acceptance CHG-2026-0042 checkpoint application-smoke-validated
+ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
+  bash deploy/acceptance/extended-checks.sh CHG-2026-0042 cold-reindex
 ```
 
-Harness намеренно **не выполняет** `systemctl stop patroni`, promotion, DCS
-cleanup, PITR target selection или MinIO DNS/LB switch. Эти действия остаются
-change-controlled operator steps.
+`rebuild_search_index` делает cold rebuild persisted `DocumentSearchIndex`:
+read-model очищается через `TRUNCATE`, затем FTS-векторы считаются в PostgreSQL
+батчами (`SEARCH_REINDEX_BATCH_SIZE`, baseline 1000). Измерение сохраняется в
+`search-reindex.json` и `extended-results.env`.
 
-## Финализация и измеренные RPO/RTO
+Если время > 60 минут, чекпоинт получает FAIL, а `RESULT.md` содержит явное
+`DISCREPANCY`. До приёмки требуется либо оптимизация (batch size, DB resources,
+параллельная стратегия/воркеры), либо документированное решение Заказчика об
+изменении порога. Скрипт сам порог не повышает.
 
-После полного цикла задаются реальные UTC timestamps и результаты подсистем:
+## 3. Planned/unplanned PostgreSQL и PITR
+
+Разрушительные шаги выполняются оператором по `deploy/dr/REBUILD_AND_DRILL.md`.
+Harness только фиксирует контрольные точки, например:
+
+```bash
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 checkpoint planned-switchover-start
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 checkpoint planned-switchover-complete
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 checkpoint unplanned-failover-start
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 checkpoint unplanned-failover-complete
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 checkpoint pitr-validated
+```
+
+CI не получает права делать `systemctl stop patroni`, promotion, DCS cleanup
+или выбирать PITR target.
+
+## 4. Аварийная остановка Celery/Redis под нагрузкой
+
+Проверка использует специальные idempotent probe tasks. Celery/Redis работают
+по модели **at-least-once**: после аварии одна и та же доставка может войти в
+task повторно. Критерий приёмки — ни одной потерянной задачи и **ровно один
+durable business completion на probe**. `delivery_count > 1` сохраняется как
+evidence redelivery и не считается дублированием бизнес-эффекта.
+
+Перед drill broker Redis должен использовать durable AOF baseline из
+`deploy/redis/redis-broker.conf.example`; `CELERY_REDIS_VISIBILITY_TIMEOUT`
+должен быть больше OCR hard limit 600 секунд (baseline 900 секунд).
+
+### Worker SIGKILL
+
+```bash
+bash deploy/acceptance/extended-checks.sh CHG-2026-0042 queue-start worker
+# убедиться, что часть probe находится STARTED
+# на стенде: kill -9 <PID celery worker/child согласно change plan>
+# восстановить worker и дождаться redelivery/завершения
+bash deploy/acceptance/extended-checks.sh CHG-2026-0042 queue-verify worker
+```
+
+### Redis SIGKILL
+
+```bash
+bash deploy/acceptance/extended-checks.sh CHG-2026-0042 queue-start redis
+# во время обработки: kill -9 <PID redis-server>
+# запустить Redis с тем же durable AOF/data directory, затем worker
+# дождаться завершения/redelivery
+bash deploy/acceptance/extended-checks.sh CHG-2026-0042 queue-verify redis
+```
+
+`queue_drill verify` требует: ожидаемое число probe существует, каждая была
+доставлена хотя бы раз и каждая имеет `completion_count == 1`. Любая потеря или
+двойной durable effect делает acceptance FAIL.
+
+## 5. MinIO failover/failback и SHA-256 выборка 500 файлов
+
+Обычный `check-replication.sh` проверяет readiness/counts, но этого недостаточно
+для приёмки. После переключения/восстановления выполняется криптографическая
+проверка случайной выборки **ровно из 500 файлов**:
+
+```bash
+ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
+  bash deploy/acceptance/extended-checks.sh CHG-2026-0042 minio-hash-500
+```
+
+`verify-500-hashes.sh` случайно выбирает 500 объектов, читает каждый с source и
+DR site, считает SHA-256 и пишет `minio-hash-sample.csv`. PASS требует ровно
+500 проверенных файлов и 0 несовпадений. Если в контрольном bucket меньше 500
+файлов, проверка завершается FAIL — уменьшать выборку нельзя.
+
+## 6. Alertmanager и application smoke
+
+Проверить synthetic warning/critical/resolved, потерю одного Alertmanager peer и
+работу Web/API после DB/MinIO переключений. Evidence и checkpoints сохраняются
+в каталоге запуска.
+
+## 7. Финализация
 
 ```bash
 export ACCEPTANCE_DB_RESULT=PASS
@@ -100,38 +142,29 @@ export ACCEPTANCE_INCIDENT_UTC=2026-09-10T19:00:00Z
 export ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T18:59:50Z
 export ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T19:03:00Z
 
-bz-get-stage4-acceptance CHG-2026-0042 finalize
+bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 finalize
 ```
 
-`RESULT.md` содержит технический итог и измеренные `observed_rpo_seconds` /
-`observed_rto_seconds`. Любой `FAIL` делает общий результат FAIL и возвращает
-ненулевой exit code.
+`RESULT.md` содержит:
 
-## Что считается PASS
+- общий PASS/FAIL;
+- observed RPO/RTO;
+- cold reindex: число документов, время, лимит и результат;
+- результат worker `kill -9` drill;
+- результат Redis `kill -9` drill;
+- размер MinIO SHA-256 sample и число mismatches;
+- пути/evidence для операторских HA/DR действий.
 
-Технический PASS допустим только когда одновременно подтверждены:
-
-- PostgreSQL/Patroni switchover и аварийный failover;
-- pgBackRest full/diff/incr + WAL и isolated PITR;
-- pgBackRest-based rebuild одной replica после approval gate;
-- MinIO failover/failback, версии объектов, checksums и WORM retention;
-- доставка synthetic critical/warning alerts и работа при потере одного
-  Alertmanager peer;
-- Web/API health и выбранные бизнес-smoke tests после переключений;
-- evidence содержит UTC timestamps, команды/логи и измеренные RPO/RTO.
-
-Технический `RESULT.md` не заменяет подпись Заказчика/эксплуатации и не создаёт
-SLA автоматически.
+Даже если DB/MinIO/Alert/Application отмечены PASS, общий результат остаётся
+FAIL, пока cold reindex, оба queue crash drill и 500-file hash verification не
+выполнены успешно.
 
 ## CI
 
-`validate.sh` использует fake Patroni/etcd/pgBackRest/Alertmanager/MinIO и
-проверяет:
+`validate.sh` проверяет shell/runtime-контракты harness без destructive
+инфраструктуры: базовый preflight, RPO/RTO, новые extended gates, обязательный
+FAIL при reindex > 3600 секунд и FAIL при `NOT_RUN`. MinIO validator отдельно
+проверяет механизм SHA-256 comparison через fake `mc`.
 
-- happy-path preflight;
-- запись checkpoints;
-- расчёт RPO/RTO;
-- общий PASS при PASS всех подсистем;
-- fail-closed итог при FAIL любой подсистемы.
-
-Это проверяет код harness, но не подменяет реальный стендовый acceptance.
+CI подтверждает корректность tooling, но не заменяет реальный стендовый запуск
+и подпись Заказчика/эксплуатации.

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import views
+from . import file_views, views
 
 app_name = "documents"
 
@@ -10,6 +10,7 @@ urlpatterns = [
     # "new/" объявлен ДО "<uuid:pk>/": иначе конвертер uuid всё равно не
     # совпал бы со словом, но порядок делает намерение явным и защищает от
     # будущей замены конвертера на более широкий.
+    path("<uuid:pk>/files/<str:kind>/", file_views.document_file_link, name="file-link"),
     path("<uuid:pk>/", views.DocumentDetailView.as_view(), name="detail"),
     path("<uuid:pk>/edit/", views.DocumentUpdateView.as_view(), name="edit"),
     path("<uuid:pk>/status/", views.DocumentStatusChangeView.as_view(), name="status"),
