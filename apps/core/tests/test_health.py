@@ -19,3 +19,8 @@ class HealthEndpointTests(TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.content, b"unhealthy\n")
+
+    def test_health_rejects_post(self):
+        response = self.client.post(reverse("core:health"))
+
+        self.assertEqual(response.status_code, 405)
