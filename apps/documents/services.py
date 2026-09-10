@@ -19,12 +19,15 @@ def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
     if from_document_id == to_document_id:
         return True
 
-    # Модель через apps.get_model(), а не прямой импорт — models.py вызывает
-    # эту функцию из DocumentRelation.clean(), прямой импорт дал бы цикл.
-    table = apps.get_model("documents", "DocumentRelation")._meta.db_table
+    # Имя таблицы берётся только из Django model metadata, а не из ввода
+    # пользователя. quote_name() дополнительно экранирует SQL identifier;
+    # значения UUID ниже передаются параметрами DB-API отдельно.
+    table = connection.ops.quote_name(
+        apps.get_model("documents", "DocumentRelation")._meta.db_table
+    )
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""
+            f"""  # nosec B608 -- trusted quoted identifier; values are parameterized
             WITH RECURSIVE reachable(id) AS (
                 SELECT to_document_id FROM {table} WHERE from_document_id = %s
                 UNION
