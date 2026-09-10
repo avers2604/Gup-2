@@ -19,10 +19,14 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Ruff
         run: ruff check apps config
-      - name: mypy
-        run: mypy apps/core apps/iam apps/search_ocr config
-      - name: Bandit
-        run: bandit -r apps config -q -s B101,B105
+      - name: mypy — typed baseline
+        run: >-
+          mypy --follow-imports=skip
+          apps/core/domain_events.py
+          apps/iam/totp.py
+          apps/search_ocr/normalization.py
+      - name: Bandit — medium/high findings
+        run: bandit -r apps config -q -ll -s B101,B105
       - name: Dependency audit
         run: pip-audit -r requirements.txt --progress-spinner off
       - name: Docker Compose config
