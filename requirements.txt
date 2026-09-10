@@ -17,3 +17,4 @@ pdf2image>=1.17,<2
 Pillow>=10,<11
 numpy>=1.26,<3
 opencv-python-headless>=4.9,<5
+clamd>=1.0,<2

@@ -70,6 +70,12 @@ jobs:
         # замоканный прогон Tesseract/poppler).
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus poppler-utils fonts-dejavu-core
 
+      - name: Установить ClamAV (анти-фрод, Этап 3)
+        # Демон не запускается как системный сервис — apps/core/tests/clamd_fixture.py
+        # сам поднимает собственный clamd с минимальной тестовой (EICAR)
+        # сигнатурой на время тестового класса, не нужен freshclam/интернет.
+        run: sudo apt-get install -y -qq clamav-daemon
+
       - name: manage.py check
         run: python manage.py check
 

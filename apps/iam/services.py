@@ -18,6 +18,7 @@
 """
 import csv
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 import openpyxl
@@ -25,6 +26,7 @@ from django.contrib.auth import authenticate
 from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from apps.audit.models import AuditLog
 
@@ -320,6 +322,16 @@ class TotpEnrollmentNotStarted(Exception):
     """confirm_totp_enrollment() вызван раньше start_totp_enrollment()."""
 
 
+class LoginBlocked(Exception):
+    """Табельный номер временно заблокирован после серии неудачных попыток
+    (rate limiting/lockout, см. is_locked_out() ниже) — отдельное
+    исключение, не None, как у обычной неверной пары логин/пароль:
+    вызывающий код должен показать другое сообщение ("слишком много
+    попыток"), это не раскрывает данные об учётной записи, поскольку
+    счётчик неудач копится независимо от того, существует ли такой
+    табельный номер вообще (см. check_credentials)."""
+
+
 @dataclass
 class CredentialCheckResult:
     user: User
@@ -340,6 +352,37 @@ def _client_ip(request) -> str:
     return request.META.get("REMOTE_ADDR", "") or ""
 
 
+# Rate limiting / lockout на подбор пароля или TOTP-кода (ТЗ 4.7,
+# отложенный «честный пробел» из более ранней партии — см. STACK.md).
+# Пороги — буквально те же цифры, что уже вшиты в Grafana-алерт «5+
+# неудачных попыток подряд» (deploy/grafana/provisioning/alerting/
+# audit-alerts.yml, group by actor_personnel_number, INTERVAL '15 minutes'):
+# не новое число, тот же порог, на котором уже построен алерт, теперь ещё
+# и реально блокирует вход, а не только сигналит о нём постфактум.
+LOCKOUT_MAX_ATTEMPTS = 5
+LOCKOUT_WINDOW = timedelta(minutes=15)
+
+
+def _recent_failed_attempts(personnel_number: str) -> int:
+    if not personnel_number:
+        return 0
+    return AuditLog.objects.filter(
+        event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+        actor_personnel_number=personnel_number,
+        created_at__gte=timezone.now() - LOCKOUT_WINDOW,
+    ).count()
+
+
+def is_locked_out(personnel_number: str) -> bool:
+    """Скользящее окно, а не фиксированный таймер разблокировки: как
+    только самая старая неудача "стекает" за пределы LOCKOUT_WINDOW,
+    блокировка снимается сама, без отдельного шага сброса. Общий счётчик
+    на оба шага входа (пароль и TOTP-код, см. verify_totp_login) — ТЗ
+    формулирует лимит как «подбор пароля ИЛИ TOTP-кода», один порог,
+    не два независимых."""
+    return _recent_failed_attempts(personnel_number) >= LOCKOUT_MAX_ATTEMPTS
+
+
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
     """Шаг 1. None — неверный табельный номер, неверный пароль или
     пользователь заблокирован (is_active=False уже отсекается
@@ -348,7 +391,16 @@ def check_credentials(request, *, personnel_number: str, password: str) -> Crede
     Неудача пишется в WORM-аудит (SESSION_LOGIN_FAILED, усиление аудита —
     решение Заказчика, основа Grafana-алерта «5+ попыток подряд») именно
     здесь, а не в вызывающем коде — иначе Web и API продублировали бы
-    правило, какая именно неудача достойна аудита."""
+    правило, какая именно неудача достойна аудита.
+
+    LoginBlocked поднимается ДО authenticate() — верный пароль тоже не
+    пропускает при активной блокировке (иначе это была бы не блокировка
+    учётной записи, а только ограничение на подбор). Попытка во время
+    блокировки НЕ пишет новую запись SESSION_LOGIN_FAILED — иначе
+    блокировка самопродлевалась бы бесконечно от одного только факта
+    повторных попыток, вместо того чтобы сама снятся по истечении окна."""
+    if is_locked_out(personnel_number):
+        raise LoginBlocked
     user = authenticate(request, username=personnel_number, password=password)
     if user is None:
         AuditLog.objects.create(
@@ -392,6 +444,11 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
             details={"ip_address": _client_ip(request), "stage": "totp", "reason": "user_inactive_or_missing"},
         )
         return None
+    # Тот же общий счётчик, что и на шаге 1 (LOCKOUT_MAX_ATTEMPTS за
+    # LOCKOUT_WINDOW, см. check_credentials) — перебор TOTP-кода на уже
+    # верно введённом пароле блокируется тем же порогом, не отдельным.
+    if is_locked_out(user.personnel_number):
+        raise LoginBlocked
     if not verify_totp_code(secret=user.totp_secret, code=code):
         AuditLog.objects.create(
             event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,

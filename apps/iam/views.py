@@ -33,11 +33,15 @@ class LoginView(FormView):
     form_class = LoginForm
 
     def form_valid(self, form):
-        result = services.check_credentials(
-            self.request,
-            personnel_number=form.cleaned_data["personnel_number"],
-            password=form.cleaned_data["password"],
-        )
+        try:
+            result = services.check_credentials(
+                self.request,
+                personnel_number=form.cleaned_data["personnel_number"],
+                password=form.cleaned_data["password"],
+            )
+        except services.LoginBlocked:
+            form.add_error(None, "Слишком много неудачных попыток входа. Попробуйте позже.")
+            return self.form_invalid(form)
         if result is None:
             form.add_error(None, "Неверный табельный номер или пароль.")
             return self.form_invalid(form)
@@ -76,7 +80,11 @@ class TotpVerifyView(FormView):
         if not ticket:
             return redirect("iam:login")
 
-        user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"], request=self.request)
+        try:
+            user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"], request=self.request)
+        except services.LoginBlocked:
+            form.add_error(None, "Слишком много неудачных попыток входа. Попробуйте позже.")
+            return self.form_invalid(form)
         if user is None:
             form.add_error(None, "Неверный код.")
             return self.form_invalid(form)
