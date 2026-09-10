@@ -8,6 +8,7 @@ urlpatterns = [
     # DRF) — два независимых контура на разных префиксах, см. STACK.md.
     path("accounts/", include("apps.iam.urls")),
     path("api/v1/auth/", include("apps.iam.api_urls")),
+    path("api/v1/search/", include("apps.search_ocr.api_urls")),
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/v1/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="api-docs"),
     # Smart Search (ТЗ 4.4.1) — домашняя страница Web GUI, на неё уже
