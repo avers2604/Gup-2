@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ family.name }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label"><a href="{% url 'templates_bank:family_list' %}">Банк бланков</a></p>
+  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+    <h1 class="title">{{ family.name }}</h1>
+    {% if can_manage %}
+      <a class="btn btn--accent" href="{% url 'templates_bank:version_create' family.pk %}">Выпустить версию</a>
+    {% endif %}
+  </div>
+  <p class="caption">
+    Версия бланка неизменяема: ТЗ 4.3.1 требует инкремента версии даже для
+    минорной корректировки, поэтому правка выпущенной формы невозможна —
+    выпускается новая версия, а предыдущая переходит в архив.
+  </p>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Линия версий</p>
+    {% if versions %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Версия</th>
+              <th>Состояние</th>
+              <th>Тип изменения</th>
+              <th>Утверждена</th>
+              <th>Отменена</th>
+              <th>Пересмотр</th>
+              <th>Скачиваний</th>
+              <th>Файлы</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for version in versions %}
+              <tr>
+                <td class="data">{{ version.version }}</td>
+                <td>
+                  {% if version.status == 'active' %}
+                    <span class="status-pill status-pill--active">Действует</span>
+                  {% else %}
+                    <span class="status-pill status-pill--draft">Архив</span>
+                  {% endif %}
+                </td>
+                <td>{{ version.get_change_type_display }}</td>
+                <td>
+                  <a href="{% url 'documents:detail' version.approving_document.pk %}">
+                    {{ version.approving_document.reg_number }}
+                  </a>
+                </td>
+                <td>
+                  {% if version.revoking_document %}
+                    <a href="{% url 'documents:detail' version.revoking_document.pk %}">
+                      {{ version.revoking_document.reg_number }}
+                    </a>
+                  {% else %}—{% endif %}
+                </td>
+                <td class="data">
+                  {% if version.last_reviewed_at %}{{ version.last_reviewed_at|date:"d.m.Y" }}{% else %}—{% endif %}
+                </td>
+                <td class="data">{{ version.download_count }}</td>
+                <td>
+                  <a href="{% url 'templates_bank:download' version.pk 'file_editable' %}">Бланк</a>
+                  {% if version.file_sample %}
+                    · <a href="{% url 'templates_bank:download' version.pk 'file_sample' %}">Образец</a>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="caption" style="margin-top: var(--space-4);">
+        Скачивание архивной версии фиксируется в журнале аудита — форма,
+        утратившая силу, не должна расходиться по подразделениям незаметно.
+      </p>
+    {% else %}
+      <p class="caption">Ни одной версии ещё не выпущено.</p>
+    {% endif %}
+  </div>
+{% endblock %}

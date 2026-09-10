@@ -413,13 +413,21 @@ class DocumentRelation(models.Model):
         APPROVES_TEMPLATE = "approves_template", "Утверждает форму"
         REFERENCES = "references", "Ссылается на"
 
+    # verbose_name у всех трёх полей — не косметика: Django подставляет
+    # их в подписи формы и в сообщение о нарушении UniqueConstraint. Без
+    # них пользователь Web GUI видел «Relation type» вместо «Вид связи» и
+    # «поля From document, To document и Relation type» в тексте ошибки.
     from_document = models.ForeignKey(
-        NormativeDocument, on_delete=models.CASCADE, related_name="relations_from"
+        NormativeDocument, on_delete=models.CASCADE, related_name="relations_from",
+        verbose_name="Документ-источник",
     )
     to_document = models.ForeignKey(
-        NormativeDocument, on_delete=models.CASCADE, related_name="relations_to"
+        NormativeDocument, on_delete=models.CASCADE, related_name="relations_to",
+        verbose_name="Связанный документ",
     )
-    relation_type = models.CharField(max_length=32, choices=RelationType.choices)
+    relation_type = models.CharField(
+        max_length=32, choices=RelationType.choices, verbose_name="Вид связи",
+    )
     note = models.TextField(blank=True, verbose_name="Описание затронутых пунктов")
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -432,6 +440,9 @@ class DocumentRelation(models.Model):
             models.UniqueConstraint(
                 fields=["from_document", "to_document", "relation_type"],
                 name="unique_document_relation",
+                violation_error_message=(
+                    "Такая связь между этими документами уже заведена."
+                ),
             ),
             models.CheckConstraint(
                 condition=~models.Q(from_document=models.F("to_document")),

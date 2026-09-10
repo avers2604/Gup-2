@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Личный кабинет · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Учётная запись</p>
+  <h1 class="title">{{ user.full_name }}</h1>
+  <p class="caption">{{ user.position }} · {{ user.department.name }}</p>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Учётные данные</p>
+    <div class="table-scroll">
+      <table class="table">
+        <tbody>
+          <tr><th>Табельный номер</th><td class="data">{{ summary.personnel_number }}</td></tr>
+          <tr><th>Роль</th><td>{{ user.get_role_display }}</td></tr>
+          <tr>
+            <th>Допуск к документам «ДСП»</th>
+            <td>
+              {% if user.dsp_access %}
+                <span class="status-pill status-pill--active">оформлен</span>
+              {% else %}
+                <span class="status-pill status-pill--draft">нет</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr><th>Состояние учётной записи</th><td>{{ user.get_status_display }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption" style="margin-top: var(--space-3);">
+      Роль и допуск назначает Администратор — изменить их самостоятельно нельзя.
+      Любое изменение роли фиксируется в журнале аудита.
+    </p>
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Безопасность</p>
+    <div class="table-scroll">
+      <table class="table">
+        <tbody>
+          <tr>
+            <th>Двухфакторная аутентификация</th>
+            <td>
+              {% if summary.totp_enabled %}
+                <span class="status-pill status-pill--active">подключена</span>
+              {% elif summary.must_enroll_totp %}
+                <span class="status-pill status-pill--revoked">обязательна, но не подключена</span>
+              {% else %}
+                <span class="status-pill status-pill--draft">не подключена</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Пароль действителен до</th>
+            <td class="data">
+              {% if password_expires_at %}
+                {{ password_expires_at|date:"d.m.Y" }}
+                {% if user.is_password_expired %}
+                  <span class="status-pill status-pill--revoked">срок истёк</span>
+                {% endif %}
+              {% else %}
+                не установлен — пароль ещё ни разу не менялся
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4); flex-wrap: wrap;">
+      <a class="btn btn--primary" href="{% url 'iam:password-change' %}">Сменить пароль</a>
+      {% if not summary.totp_enabled %}
+        <a class="btn btn--accent" href="{% url 'iam:totp-enroll' %}">Подключить 2FA</a>
+      {% endif %}
+    </div>
+    {% if summary.password_change_required %}
+      <div class="notice notice--warning" style="margin-top: var(--space-4);">
+        Требуется смена пароля. Пока она не выполнена, разделы системы,
+        кроме страниц учётной записи, недоступны.
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Последние входы</p>
+    {% if recent_events %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead><tr><th>Время</th><th>Событие</th><th>IP-адрес</th></tr></thead>
+          <tbody>
+            {% for entry in recent_events %}
+              <tr>
+                <td class="data">{{ entry.created_at|date:"d.m.Y H:i:s" }}</td>
+                <td>{{ entry.get_event_type_display }}</td>
+                <td class="data">{{ entry.details.ip_address|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="caption" style="margin-top: var(--space-3);">
+        Показаны только собственные события. Вход, которого вы не совершали,
+        — повод обратиться к Офицеру ИБ.
+      </p>
+    {% else %}
+      <p class="caption">Записей ещё нет.</p>
+    {% endif %}
+  </div>
+{% endblock %}

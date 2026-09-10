@@ -75,6 +75,13 @@ class AuditLog(models.Model):
         DOCUMENT_RETENTION_EXPIRED_AT_INTAKE = (
             "document.retention_expired_at_intake", "Срок хранения уже истёк на момент регистрации"
         )
+        # Рёбра графа версионности (ТЗ 4.2.2). Сама таблица связей не
+        # WORM — ребро можно снять, если его завели по ошибке. Именно
+        # поэтому оба события и заведены: снятие связи меняет граф, по
+        # которому документ считается отменённым или изменённым, и не
+        # должно быть бесследным.
+        DOCUMENT_RELATION_ADDED = "document.relation_added", "Добавлена связь версионности"
+        DOCUMENT_RELATION_REMOVED = "document.relation_removed", "Снята связь версионности"
         THESAURUS_UPDATED = "thesaurus.updated", "Обновление тезауруса (импорт)"
         DOCUMENT_OCR_COMPLETED = "document.ocr_completed", "Распознавание OCR завершено"
         # Финальный отказ после исчерпания retry (apps/documents/tasks.py) —

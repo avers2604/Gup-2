@@ -15,13 +15,14 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
+from django.db import IntegrityError
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
 
 from . import permissions, services, transitions
-from .forms import DocumentFilterForm, DocumentForm, StatusChangeForm
+from .forms import DocumentFilterForm, DocumentForm, RelationForm, StatusChangeForm
 from .models import DocumentRelation, DocumentStatusHistory
 
 # Тот же размер страницы, что и в Smart Search (apps/search_ocr/views.py)
@@ -127,6 +128,7 @@ class DocumentDetailView(LoginRequiredMixin, View):
             "tags": document.category_tags.all(),
             "can_edit": permissions.can_edit_document(request.user, document),
             "can_change_status": permissions.can_change_status(request.user, document),
+            "can_manage_relations": permissions.can_manage_relations(request.user, document),
         })
 
 
@@ -263,3 +265,85 @@ class DocumentStatusChangeView(_DocumentWriteMixin, View):
             "document": document, "form": form,
             "allowed": transitions.target_choices(document.status),
         })
+
+
+class DocumentRelationCreateView(_DocumentWriteMixin, View):
+    """Завести связь версионности из карточки документа (ТЗ 4.2.2).
+
+    Отдельная страница, а не форма внутри карточки: у связи свой набор
+    ошибок (цикл, дубль, недоступная цель), и показывать их посреди
+    карточки на 5 разделов — значит прятать их от пользователя.
+    """
+
+    template_name = "documents/relation_form.html"
+
+    def get(self, request, pk):
+        document = self._document_for_relations(request, pk)
+        return render(request, self.template_name, {
+            "document": document,
+            "form": RelationForm(user=request.user, from_document=document),
+        })
+
+    def post(self, request, pk):
+        document = self._document_for_relations(request, pk)
+        form = RelationForm(request.POST, user=request.user, from_document=document)
+        if form.is_valid():
+            try:
+                services.add_relation(
+                    actor=request.user, from_document=document,
+                    to_document=form.cleaned_data["to_document"],
+                    relation_type=form.cleaned_data["relation_type"],
+                    note=form.cleaned_data.get("note", ""),
+                )
+            except (ValidationError, IntegrityError) as error:
+                # Обычный дубль ловит ещё валидация формы (ModelForm
+                # проверяет UniqueConstraint до сохранения). IntegrityError
+                # сюда доходит только в гонке — две одинаковые связи,
+                # отправленные одновременно, — и без этой ветки такая
+                # гонка выглядела бы как 500-я страница.
+                form.add_error(None, _relation_error_message(error))
+            except PermissionDenied as error:
+                form.add_error(None, str(error))
+            else:
+                messages.success(request, "Связь версионности добавлена.")
+                return HttpResponseRedirect(reverse("documents:detail", args=[document.pk]))
+        return render(request, self.template_name, {"document": document, "form": form})
+
+    def _document_for_relations(self, request, pk):
+        document = self.get_document(request, pk)
+        if not permissions.can_manage_relations(request.user, document):
+            raise Http404
+        return document
+
+
+class DocumentRelationDeleteView(_DocumentWriteMixin, View):
+    """Снять связь. Только POST: удаление по GET-ссылке сработало бы от
+    любого предзагрузчика ссылок в браузере или почтовом клиенте."""
+
+    def post(self, request, pk, relation_id):
+        document = self.get_document(request, pk)
+        if not permissions.can_manage_relations(request.user, document):
+            raise Http404
+        relation = get_object_or_404(
+            DocumentRelation, pk=relation_id, from_document=document
+        )
+        try:
+            services.remove_relation(actor=request.user, relation=relation)
+        except PermissionDenied as error:
+            messages.error(request, str(error))
+        else:
+            messages.success(request, "Связь версионности снята.")
+        return HttpResponseRedirect(reverse("documents:detail", args=[document.pk]))
+
+
+def _relation_error_message(error):
+    """Читаемое сообщение вместо текста ограничения БД.
+
+    ValidationError уже написан по-русски: цикл объясняет
+    DocumentRelation.clean(), дубль — violation_error_message самого
+    UniqueConstraint. А вот IntegrityError приходит текстом Postgres про
+    unique_document_relation, который пользователю ни о чём не говорит.
+    """
+    if isinstance(error, IntegrityError):
+        return "Такая связь между этими документами уже заведена."
+    return error

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Банк бланков · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Унифицированные формы</p>
+  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+    <h1 class="title">Банк бланков</h1>
+    {% if can_manage %}
+      <a class="btn btn--accent" href="{% url 'templates_bank:family_create' %}">Новое семейство форм</a>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="get" novalidate style="display:flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap;">
+      <div style="flex:1; min-width: 240px;">
+        <label class="field-label" for="q">Наименование формы</label>
+        <input class="field" type="search" id="q" name="q" value="{{ query }}"
+               placeholder="например, акт схода">
+      </div>
+      <button class="btn btn--primary" type="submit">Найти</button>
+      <a class="btn btn--ghost" href="{% url 'templates_bank:family_list' %}">Сбросить</a>
+    </form>
+  </div>
+
+  <div style="margin-top: var(--space-8);">
+    {% if families %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Семейство форм</th>
+              <th>Действующая версия</th>
+              <th>Утверждена</th>
+              <th>Всего версий</th>
+              <th>Файлы</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in families %}
+              <tr>
+                <td>
+                  <a href="{% url 'templates_bank:family_detail' row.family.pk %}">{{ row.family.name }}</a>
+                </td>
+                <td class="data">
+                  {% if row.active %}
+                    <span class="status-pill status-pill--active">{{ row.active.version }}</span>
+                  {% else %}
+                    <span class="status-pill status-pill--draft">нет действующей</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if row.active %}{{ row.active.approving_document.reg_number }}{% else %}—{% endif %}
+                </td>
+                <td class="data">{{ row.family.version_count }}</td>
+                <td>
+                  {% if row.active %}
+                    <a href="{% url 'templates_bank:download' row.active.pk 'file_editable' %}">Бланк</a>
+                    {% if row.active.file_sample %}
+                      · <a href="{% url 'templates_bank:download' row.active.pk 'file_sample' %}">Образец</a>
+                    {% endif %}
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.paginator.num_pages > 1 %}
+        <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--secondary" href="?q={{ query }}&page={{ page_obj.previous_page_number }}">Назад</a>
+          {% endif %}
+          <span class="caption">Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
+          {% if page_obj.has_next %}
+            <a class="btn btn--secondary" href="?q={{ query }}&page={{ page_obj.next_page_number }}">Вперёд</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <p class="caption">Семейства форм не найдены.</p>
+    {% endif %}
+  </div>
+{% endblock %}

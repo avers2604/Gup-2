@@ -10,6 +10,8 @@ urlpatterns = [
     # Рабочие места (ТЗ 4.1) — реестр и карточка НРД. До этого работа с
     # карточками была возможна только через /admin/.
     path("documents/", include("apps.documents.urls")),
+    path("templates/", include("apps.templates_bank.urls")),
+    path("audit/", include("apps.audit.urls")),
     path("api/v1/auth/", include("apps.iam.api_urls")),
     path("api/v1/search/", include("apps.search_ocr.api_urls")),
     path("api/v1/schema/", SpectacularAPIView.as_view(), name="schema"),

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Связь для {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">
+    <a href="{% url 'documents:list' %}">Реестр НРД</a> ·
+    <a href="{% url 'documents:detail' document.pk %}">{{ document.reg_number }}</a>
+  </p>
+  <h1 class="title">Новая связь версионности</h1>
+  <p class="caption">
+    Связь направлена от «{{ document.reg_number }}» к выбранному документу:
+    «Отменяет», «Вносит изменения в», «Принят взамен» читаются именно в эту
+    сторону. Граф проверяется на ацикличность — связь, замыкающая цикл,
+    принята не будет.
+  </p>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="post" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="notice notice--error" role="alert">
+          {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+        </div>
+      {% endif %}
+      {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
+      <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4);">
+        <button class="btn btn--primary" type="submit">Добавить связь</button>
+        <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Отмена</a>
+      </div>
+    </form>
+  </div>
+{% endblock %}

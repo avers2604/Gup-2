@@ -41,24 +41,19 @@
       <nav>
         <a href="{% url 'search_ocr:search' %}">Поиск</a>
         <a href="{% url 'documents:list' %}">Документы</a>
-        {% comment %}
-          «Бланки» вели на "/" — заглушка с Этапа 1, когда своих страниц
-          ещё не было. Пункт вернётся в навигацию вместе с рабочим местом
-          банка бланков (следующая партия Этапа 2); ссылка в никуда хуже,
-          чем её отсутствие.
-        {% endcomment %}
+        <a href="{% url 'templates_bank:family_list' %}">Бланки</a>
+        {% if can_view_audit_log %}
+          <a href="{% url 'audit:list' %}">Журнал аудита</a>
+        {% endif %}
         <a href="/admin/">Администрирование</a>
         {% if user.is_authenticated %}
           {% comment %}
-            п.8.2 решения Заказчика: название роли в «личном кабинете» —
-            отдельной страницы профиля в проекте ещё нет (Этап 2 только
-            начат), это единственное место, где пользователь вообще видит
-            себя во всех Web-шаблонах. get_role_display() берёт название
-            прямо из User.Role.choices — обновляется автоматически при
-            любом будущем изменении списка ролей, отдельно править
-            шаблон не потребуется.
+            п.8.2 решения Заказчика: имя и роль в шапке ведут в личный
+            кабинет. get_role_display() берёт название прямо из
+            User.Role.choices — при изменении списка ролей шаблон править
+            не потребуется.
           {% endcomment %}
-          <span class="caption">{{ user.full_name }} · {{ user.get_role_display }}</span>
+          <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
           <form method="post" action="{% url 'iam:logout' %}" style="display:inline;">
             {% csrf_token %}
             <button class="btn btn--ghost" type="submit">Выйти</button>

@@ -4,7 +4,7 @@ from django import forms
 
 from apps.iam.models import Department
 
-from .models import NormativeDocument
+from .models import DocumentRelation, NormativeDocument
 
 # .field — класс дизайн-системы (static/css/components.css), тот же
 # паттерн ручного проставления, что в apps/iam/forms.py и
@@ -176,3 +176,41 @@ class StatusChangeForm(forms.Form):
         self.fields["new_status"].choices = choices
         if not choices:
             self.fields["new_status"].widget.attrs["disabled"] = True
+
+
+class RelationForm(forms.ModelForm):
+    """Новое ребро графа версионности (ТЗ 4.2.2).
+
+    Список документов-целей строится из видимых пользователю и без самой
+    карточки: самоссылку ловит ограничение БД, но предлагать её в
+    выпадающем списке — значит предлагать заведомую ошибку.
+    """
+
+    class Meta:
+        model = DocumentRelation
+        fields = ["to_document", "relation_type", "note"]
+        widgets = {
+            "to_document": forms.Select(attrs=_FIELD_ATTRS),
+            "relation_type": forms.Select(attrs=_FIELD_ATTRS),
+            "note": forms.TextInput(attrs=_FIELD_ATTRS),
+        }
+        labels = {"to_document": "Документ", "note": "Затронутые пункты"}
+
+    def __init__(self, *args, user=None, from_document=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from . import permissions
+
+        self.from_document = from_document
+        queryset = permissions.visible_documents(user).order_by("-reg_date", "reg_number")
+        if from_document is not None:
+            queryset = queryset.exclude(pk=from_document.pk)
+        self.fields["to_document"].queryset = queryset
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.from_document is not None:
+            # Проставляем сторону-источник до валидации модели: без неё
+            # DocumentRelation.clean() не сможет проверить цикл, а
+            # ModelForm вызывает её в _post_clean().
+            self.instance.from_document = self.from_document
+        return cleaned

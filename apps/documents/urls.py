@@ -13,4 +13,12 @@ urlpatterns = [
     path("<uuid:pk>/", views.DocumentDetailView.as_view(), name="detail"),
     path("<uuid:pk>/edit/", views.DocumentUpdateView.as_view(), name="edit"),
     path("<uuid:pk>/status/", views.DocumentStatusChangeView.as_view(), name="status"),
+    path(
+        "<uuid:pk>/relations/new/",
+        views.DocumentRelationCreateView.as_view(), name="relation_create",
+    ),
+    path(
+        "<uuid:pk>/relations/<int:relation_id>/delete/",
+        views.DocumentRelationDeleteView.as_view(), name="relation_delete",
+    ),
 ]

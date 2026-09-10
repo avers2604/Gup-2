@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Журнал аудита · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Контроль безопасности</p>
+  <h1 class="title">Журнал аудита</h1>
+  <p class="caption">
+    Журнал неизменяем (WORM): записи нельзя исправить или удалить ни из
+    одного контура системы, включая эту страницу и Django admin —
+    ограничение продублировано триггерами в самой базе.
+  </p>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="get" novalidate>
+      {% if form.non_field_errors %}
+        <p class="field-error" style="margin-bottom: var(--space-4);">{{ form.non_field_errors.0 }}</p>
+      {% endif %}
+      <div style="display:flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;">
+        {% for field in form %}
+          <div>
+            <label class="field-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
+            {{ field }}
+            {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+          </div>
+        {% endfor %}
+        <button class="btn btn--primary" type="submit">Применить</button>
+        <a class="btn btn--ghost" href="{% url 'audit:list' %}">Сбросить</a>
+      </div>
+    </form>
+  </div>
+
+  <div style="margin-top: var(--space-8);">
+    {% if page_obj %}
+      <p class="caption">
+        Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
+        всего записей: {{ page_obj.paginator.count }}
+      </p>
+    {% endif %}
+
+    {% if entries %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Время</th>
+              <th>Событие</th>
+              <th>Оператор</th>
+              <th>Объект</th>
+              <th>Реквизиты</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in entries %}
+              <tr>
+                <td class="data">{{ entry.created_at|date:"d.m.Y H:i:s" }}</td>
+                <td>{{ entry.get_event_type_display }}</td>
+                <td class="data">{{ entry.actor_personnel_number|default:"—" }}</td>
+                <td class="data">
+                  {% if entry.object_type %}{{ entry.object_type }}{% endif %}
+                  {% if entry.object_id %} · {{ entry.object_id }}{% endif %}
+                  {% if not entry.object_type and not entry.object_id %}—{% endif %}
+                </td>
+                <td style="max-width: 420px;">
+                  {% comment %}
+                    Значение обрезается, а полное показывается подсказкой.
+                    Реквизиты события — свободный JSON, и одна запись
+                    (например, импорт тезауруса) уносит в него сотни
+                    терминов: без обрезки такая строка вырастала выше всей
+                    остальной страницы и хоронила под собой журнал, ради
+                    которого Офицер ИБ сюда и пришёл.
+                  {% endcomment %}
+                  {% if entry.details %}
+                    <dl style="margin:0;">
+                      {% for key, value in entry.details.items %}
+                        <div title="{{ value }}">
+                          <span class="caption">{{ key }}:</span>
+                          {{ value|stringformat:"s"|truncatechars:120 }}
+                        </div>
+                      {% endfor %}
+                    </dl>
+                  {% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.paginator.num_pages > 1 %}
+        <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+          {% endif %}
+          <span class="caption">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
+          {% if page_obj.has_next %}
+            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <p class="caption">Записей по заданным условиям нет.</p>
+    {% endif %}
+  </div>
+{% endblock %}

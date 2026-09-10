@@ -101,12 +101,20 @@
   </div>
 
   <div class="card" style="margin-top: var(--space-6);">
-    <p class="label">Связи версионности</p>
+    <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+      <p class="label" style="margin:0;">Связи версионности</p>
+      {% if can_manage_relations %}
+        <a class="btn btn--ghost" href="{% url 'documents:relation_create' document.pk %}">Добавить связь</a>
+      {% endif %}
+    </div>
     {% if relations_out or relations_in %}
       <div class="table-scroll">
         <table class="table">
           <thead>
-            <tr><th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th></tr>
+            <tr>
+              <th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th>
+              {% if can_manage_relations %}<th></th>{% endif %}
+            </tr>
           </thead>
           <tbody>
             {% for relation in relations_out %}
@@ -120,6 +128,15 @@
                   — {{ relation.to_document.title }}
                 </td>
                 <td>{{ relation.note|default:"—" }}</td>
+                {% if can_manage_relations %}
+                  <td>
+                    <form method="post"
+                          action="{% url 'documents:relation_delete' document.pk relation.pk %}">
+                      {% csrf_token %}
+                      <button class="btn btn--danger" type="submit">Снять</button>
+                    </form>
+                  </td>
+                {% endif %}
               </tr>
             {% endfor %}
             {% for relation in relations_in %}
@@ -133,6 +150,14 @@
                   — {{ relation.from_document.title }}
                 </td>
                 <td>{{ relation.note|default:"—" }}</td>
+                {% if can_manage_relations %}
+                  {% comment %}
+                    Входящую связь снимают из карточки её источника — там,
+                    где она заведена и где видно, зачем. Кнопка здесь
+                    удаляла бы чужое ребро из чужого графа.
+                  {% endcomment %}
+                  <td class="caption">из карточки источника</td>
+                {% endif %}
               </tr>
             {% endfor %}
           </tbody>

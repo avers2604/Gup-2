@@ -208,3 +208,71 @@ def find_cycle_through_document(document_id):
         )
         row = cursor.fetchone()
     return row[0] if row else None
+
+
+def add_relation(*, actor, from_document, to_document, relation_type, note=""):
+    """Завести ребро графа версионности (ТЗ 4.2.2).
+
+    Ацикличность проверяет сам `DocumentRelation.clean()` (вызывается из
+    его `save()`), самоссылку и точный дубль — ограничения БД. Здесь —
+    права и, отдельно, видимость ЦЕЛИ: ссылку на документ, которого
+    пользователь не видит, заводить нельзя, иначе гриф «ДСП» утекает уже
+    через сам факт успешного создания связи.
+    """
+    model = apps.get_model("documents", "DocumentRelation")
+
+    if not permissions.can_manage_relations(actor, from_document):
+        raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
+    if not permissions.can_view_document(actor, to_document):
+        raise PermissionDenied("Указанный документ недоступен.")
+
+    with transaction.atomic():
+        relation = model(
+            from_document=from_document, to_document=to_document,
+            relation_type=relation_type, note=note,
+        )
+        relation.save()
+        _log_relation_event(
+            actor=actor, relation=relation,
+            event_name="DOCUMENT_RELATION_ADDED",
+        )
+    return relation
+
+
+def remove_relation(*, actor, relation):
+    """Снять ребро графа. Таблица связей не WORM — ошибочно заведённую
+    связь надо уметь убрать, — но само снятие меняет граф, по которому
+    документ считается отменённым или изменённым, поэтому пишется в
+    журнал так же, как и добавление."""
+    if not permissions.can_manage_relations(actor, relation.from_document):
+        raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
+    if not permissions.can_view_document(actor, relation.to_document):
+        # Связь на скрытый документ пользователь и не видел в карточке —
+        # значит и снять её «случайно» не мог: это прямой запрос.
+        raise PermissionDenied("Указанный документ недоступен.")
+
+    with transaction.atomic():
+        _log_relation_event(
+            actor=actor, relation=relation,
+            event_name="DOCUMENT_RELATION_REMOVED",
+        )
+        relation.delete()
+
+
+def _log_relation_event(*, actor, relation, event_name):
+    from apps.audit.models import AuditLog
+
+    AuditLog.objects.create(
+        event_type=getattr(AuditLog.EventType, event_name),
+        actor=actor,
+        actor_personnel_number=getattr(actor, "personnel_number", ""),
+        object_type="NormativeDocument",
+        # Объект события — документ, от которого идёт связь: именно в его
+        # карточке она видна и именно его граф меняется.
+        object_id=relation.from_document.reg_number,
+        details={
+            "relation_type": relation.relation_type,
+            "to_document": relation.to_document.reg_number,
+            "note": relation.note,
+        },
+    )
