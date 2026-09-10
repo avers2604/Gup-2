@@ -56,9 +56,9 @@ ensure_target_bucket() {
   mc_cmd version enable "target/$bucket" >/dev/null
 
   if [[ "$lock_required" == "yes" ]]; then
-    # A bucket created without Object Lock cannot be safely used as the DR copy
-    # of originals. Fail closed instead of silently accepting a weaker target.
-    if ! mc_cmd retention info "target/$bucket" >/dev/null 2>&1; then
+    # Query the bucket-level Object Lock configuration. Checking an object-level
+    # retention entry would fail on a newly created, empty DR bucket.
+    if ! mc_cmd retention info --default "target/$bucket" >/dev/null 2>&1; then
       echo "Target originals bucket has no Object Lock capability: target/$bucket" >&2
       echo "Recreate it with --with-lock before proceeding." >&2
       exit 3
