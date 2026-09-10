@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}{{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">
+    <a href="{% url 'documents:list' %}">Реестр НРД</a> · {{ document.get_doc_type_display }}
+  </p>
+  <h1 class="title">{{ document.title }}</h1>
+
+  <div style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2);">
+    <span class="status-pill
+      {% if document.status == 'active' %}status-pill--active
+      {% elif document.status == 'active_amended' %}status-pill--amended
+      {% elif document.status == 'revoked' %}status-pill--revoked
+      {% else %}status-pill--draft{% endif %}">
+      {{ document.get_status_display }}
+    </span>
+    {% if document.access_level == 'restricted' %}
+      <span class="status-pill status-pill--revoked">ДСП</span>
+    {% endif %}
+    {% if document.ocr_status == 'needs_review' %}
+      <span class="status-pill status-pill--draft" title="Распознавание ниже порога качества">OCR: требует верификации</span>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Реквизиты</p>
+    <div class="table-scroll">
+      <table class="table">
+        <tbody>
+          <tr><th>Регистрационный номер</th><td class="data">{{ document.reg_number }}</td></tr>
+          <tr><th>Дата регистрации</th><td class="data">{{ document.reg_date|date:"d.m.Y" }}</td></tr>
+          <tr><th>Дата вступления в силу</th><td class="data">{{ document.effective_date|date:"d.m.Y" }}</td></tr>
+          <tr><th>Вид документа</th><td>{{ document.get_doc_type_display }}</td></tr>
+          <tr><th>Издавшее подразделение</th><td>{{ document.issuer_dept.name }}</td></tr>
+          <tr>
+            <th>Область применения</th>
+            <td>
+              {% for dept in applied_depts %}{{ dept.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+            </td>
+          </tr>
+          <tr>
+            <th>Теги</th>
+            <td>
+              {% for tag in tags %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
+            </td>
+          </tr>
+          <tr><th>Гриф доступа</th><td>{{ document.get_access_level_display }}</td></tr>
+          {% if document.declassification_date %}
+            <tr><th>Дата рассекречивания</th><td class="data">{{ document.declassification_date|date:"d.m.Y" }}</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if document.summary %}
+      <p class="label" style="margin-top: var(--space-6);">Аннотация</p>
+      <p>{{ document.summary }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Хранение и файлы</p>
+    <div class="table-scroll">
+      <table class="table">
+        <tbody>
+          <tr><th>Категория срока хранения</th><td>{{ document.get_retention_category_display|default:"—" }}</td></tr>
+          <tr><th>Режим</th><td>{{ document.get_retention_mode_display|default:"—" }}</td></tr>
+          <tr>
+            <th>Хранить до</th>
+            <td class="data">
+              {% if document.retention_until %}{{ document.retention_until|date:"d.m.Y" }}{% else %}бессрочно{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Скан-оригинал</th>
+            <td>
+              {% if document.files_original %}
+                <a href="{{ document.files_original.url }}">Скачать</a>
+                {% if document.files_original_sha256 %}
+                  <span class="caption data">SHA-256: {{ document.files_original_sha256 }}</span>
+                {% endif %}
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+          <tr>
+            <th>Редактируемая версия</th>
+            <td>{% if document.files_editable %}<a href="{{ document.files_editable.url }}">Скачать</a>{% else %}—{% endif %}</td>
+          </tr>
+          <tr>
+            <th>Распознавание (OCR)</th>
+            <td>
+              {{ document.get_ocr_status_display }}
+              {% if document.ocr_confidence %}
+                <span class="caption">уверенность {{ document.ocr_confidence|floatformat:1 }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">Связи версионности</p>
+    {% if relations_out or relations_in %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr><th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th></tr>
+          </thead>
+          <tbody>
+            {% for relation in relations_out %}
+              <tr>
+                <td>Этот документ</td>
+                <td>{{ relation.get_relation_type_display }}</td>
+                <td>
+                  <a href="{% url 'documents:detail' relation.to_document.pk %}">
+                    {{ relation.to_document.reg_number }}
+                  </a>
+                  — {{ relation.to_document.title }}
+                </td>
+                <td>{{ relation.note|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+            {% for relation in relations_in %}
+              <tr>
+                <td>Входящая</td>
+                <td>{{ relation.get_relation_type_display }}</td>
+                <td>
+                  <a href="{% url 'documents:detail' relation.from_document.pk %}">
+                    {{ relation.from_document.reg_number }}
+                  </a>
+                  — {{ relation.from_document.title }}
+                </td>
+                <td>{{ relation.note|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="caption">Связей нет.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">История статусов</p>
+    {% if status_history %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead><tr><th>Статус</th><th>Период действия</th></tr></thead>
+          <tbody>
+            {% for entry in status_history %}
+              <tr>
+                <td>{{ entry.get_status_display }}</td>
+                <td class="data">
+                  {{ entry.period.lower|date:"d.m.Y" }} —
+                  {% if entry.period.upper %}{{ entry.period.upper|date:"d.m.Y" }}{% else %}по настоящее время{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="caption">История не заполнена.</p>
+    {% endif %}
+  </div>
+
+  {% if can_edit or can_change_status %}
+    <p class="caption" style="margin-top: var(--space-6);">
+      {% comment %}
+        Редактирование и смена статуса — следующая партия Этапа 2; здесь
+        показано только наличие права, чтобы кнопки появились ровно там,
+        где они и должны быть, а не в неожиданном месте.
+      {% endcomment %}
+      Доступные действия: {% if can_edit %}редактирование черновика{% endif %}{% if can_edit and can_change_status %}, {% endif %}{% if can_change_status %}смена статуса{% endif %} — интерфейс в следующей партии, пока через <a href="/admin/documents/normativedocument/{{ document.pk }}/change/">админку</a>.
+    </p>
+  {% endif %}
+{% endblock %}

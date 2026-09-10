@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Реестр НРД · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Нормативно-распорядительная документация</p>
+  <h1 class="title">Реестр документов</h1>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <form method="get" novalidate>
+      {% if form.non_field_errors %}
+        <p class="caption" style="color: var(--color-red); margin-bottom: var(--space-4);">
+          {{ form.non_field_errors.0 }}
+        </p>
+      {% endif %}
+      <div style="display:flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;">
+        <div>
+          <label class="field-label" for="{{ form.doc_type.id_for_label }}">{{ form.doc_type.label }}</label>
+          {{ form.doc_type }}
+        </div>
+        <div>
+          <label class="field-label" for="{{ form.status.id_for_label }}">{{ form.status.label }}</label>
+          {{ form.status }}
+        </div>
+        <div>
+          <label class="field-label" for="{{ form.issuer_dept.id_for_label }}">{{ form.issuer_dept.label }}</label>
+          {{ form.issuer_dept }}
+        </div>
+        <div>
+          <label class="field-label" for="{{ form.effective_from.id_for_label }}">{{ form.effective_from.label }}</label>
+          {{ form.effective_from }}
+        </div>
+        <div>
+          <label class="field-label" for="{{ form.effective_to.id_for_label }}">{{ form.effective_to.label }}</label>
+          {{ form.effective_to }}
+        </div>
+        <button class="btn btn--primary" type="submit">Применить</button>
+        <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить</a>
+      </div>
+    </form>
+  </div>
+
+  <div style="margin-top: var(--space-8);">
+    {% if page_obj %}
+      <p class="caption">
+        Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
+        показано {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ page_obj.paginator.count }}
+      </p>
+    {% endif %}
+
+    {% if results %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Рег. номер</th>
+              <th>Наименование</th>
+              <th>Вид</th>
+              <th>Статус</th>
+              <th>Издавшее подразделение</th>
+              <th>Вступил в силу</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for doc in results %}
+              <tr>
+                <td class="data"><a href="{% url 'documents:detail' doc.pk %}">{{ doc.reg_number }}</a></td>
+                <td>
+                  {{ doc.title }}
+                  {% if doc.access_level == 'restricted' %}
+                    <span class="status-pill status-pill--revoked" title="Для служебного пользования">ДСП</span>
+                  {% endif %}
+                </td>
+                <td>{{ doc.get_doc_type_display }}</td>
+                <td>
+                  <span class="status-pill
+                    {% if doc.status == 'active' %}status-pill--active
+                    {% elif doc.status == 'active_amended' %}status-pill--amended
+                    {% elif doc.status == 'revoked' %}status-pill--revoked
+                    {% else %}status-pill--draft{% endif %}">
+                    {{ doc.get_status_display }}
+                  </span>
+                </td>
+                <td>{{ doc.issuer_dept.name }}</td>
+                <td class="data">{{ doc.effective_date|date:"d.m.Y" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.paginator.num_pages > 1 %}
+        <nav style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); align-items: center;">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+          {% endif %}
+
+          {% for num in page_obj.paginator.page_range %}
+            {% if num == page_obj.number %}
+              <span class="btn btn--primary" aria-current="page">{{ num }}</span>
+            {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+              <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
+            {% endif %}
+          {% endfor %}
+
+          {% if page_obj.has_next %}
+            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    {% else %}
+      <p class="caption">Документы не найдены.</p>
+    {% endif %}
+  </div>
+{% endblock %}
