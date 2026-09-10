@@ -90,6 +90,15 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         validators=[MinValueValidator(0), MaxValueValidator(100)],
         verbose_name="OCR Confidence Score",
     )
+    # Извлечённый текст скана и вложений — под FTS(ocr_body) из формулы
+    # ранжирования Smart Search (ТЗ 2.2 §4.4.1, apps/search_ocr/search.py).
+    # ЧЕСТНАЯ ГРАНИЦА: конвейер OCR (Этап 3, README «Дальше по плану») в
+    # проекте ещё не реализован — это поле заведено СЕЙЧАС, под формулу,
+    # но реально заполняться начнёт только когда появится сам конвейер
+    # (Tesseract подключён в docker-compose.yml, но никуда не вызывается).
+    # Пока всегда пусто у всех документов — безопасно: пустое поле просто
+    # не даёт вклада в полнотекстовый поиск, не создаёт ложных совпадений.
+    ocr_body = models.TextField(blank=True, verbose_name="Извлечённый текст скана (OCR)")
 
     # Срок хранения и режим Object Locking (WORM) — apps/documents/retention.py.
     # Категория указывается человеком при регистрации (юридическая

@@ -157,29 +157,35 @@ class ThesaurusAmbiguity(TimeStampedModel):
 
     Раньше (до модуля поиска) реестр использовался только транзитно при
     импорте — для предупреждений TH-02/TH-03, сам не сохранялся (см.
-    STACK.md, раздел про тезаурус: «когда появится модуль поиска, реестр
-    нужно будет либо читать из того же JSON при индексации, либо
-    перенести в отдельную модель — это решение стоит принимать вместе с
-    дизайном самого поискового модуля»). Этот момент настал — решение:
+    STACK.md, раздел про тезаурус). Этот момент настал — решение:
     отдельная модель, а не чтение JSON-файла на каждый поисковый запрос
     (тот же файл и так уже целиком читается один раз при импорте).
+
+    Сами кандидаты расшифровки — НЕ JSONField (была первая версия этой
+    модели, пересмотрено по итогам ревью), а отдельная модель
+    `ThesaurusAmbiguityCandidate` с настоящим `ForeignKey` на
+    `ThesaurusEntry`: референциальную целостность («на какую запись
+    тезауруса ссылается кандидат») теперь гарантирует сама БД, а не
+    строка id внутри JSON, которая могла бы рассинхронизироваться при
+    удалении записи в обход импорта. Отдельная модель также даёт
+    индексированный путь «запись тезауруса -> в каких неоднозначностях
+    она участвует» (`ThesaurusEntry.ambiguity_candidates`,
+    `ThesaurusAmbiguityCandidate.Meta.indexes`) вместо полного
+    сканирования JSON по всем строкам таблицы на каждый поисковый запрос.
 
     `disambiguation` — человекочитаемое правило файла (например «при
     фильтре service=EKH → тяговая подстанция»), хранится как есть для
     отображения/аудита, но НЕ разбирается программно (произвольная
     русская проза, не формализованный DSL) — реальное разрешение
     неоднозначности в search.py использует структурированную часть
-    (`candidates[].weight` + сопоставление факультативных фасетов
-    category/service с полями самих ThesaurusEntry-кандидатов), а не
+    (`ThesaurusAmbiguityCandidate.weight` + сопоставление факультативных
+    фасетов category/service с полями самого́ кандидата-записи), а не
     парсинг этого текста. Честная граница, а не недосмотр."""
 
-    abbr = models.CharField(max_length=100, verbose_name="Аббревиатура (как в файле)")
+    abbr = models.CharField(max_length=100, db_index=True, verbose_name="Аббревиатура (как в файле)")
     abbr_normalized = models.CharField(
         max_length=100, unique=True, editable=False,
         verbose_name="Аббревиатура (нормализованная — ключ upsert/поиска)",
-    )
-    candidates = models.JSONField(
-        default=list, verbose_name="Кандидаты расшифровки: [{id, weight, reason}, ...]",
     )
     disambiguation = models.TextField(
         blank=True, verbose_name="Правило разрешения неоднозначности (свободный текст файла)",
@@ -196,3 +202,34 @@ class ThesaurusAmbiguity(TimeStampedModel):
     def save(self, *args, **kwargs):
         self.abbr_normalized = normalize_term(self.abbr)
         super().save(*args, **kwargs)
+
+
+class ThesaurusAmbiguityCandidate(TimeStampedModel):
+    """Один кандидат расшифровки неоднозначной аббревиатуры — строка
+    candidates[] файла тезауруса, персистится отдельной моделью (см.
+    докстринг ThesaurusAmbiguity про отказ от JSONField). `entry` —
+    настоящий FK на ThesaurusEntry, не строка id."""
+
+    ambiguity = models.ForeignKey(ThesaurusAmbiguity, on_delete=models.CASCADE, related_name="candidates")
+    entry = models.ForeignKey(ThesaurusEntry, on_delete=models.CASCADE, related_name="ambiguity_candidates")
+    weight = models.FloatField(
+        default=1.0, validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        verbose_name="Вес кандидата (candidates[].weight файла)",
+    )
+    reason = models.CharField(max_length=500, blank=True, verbose_name="Обоснование (candidates[].reason файла)")
+
+    class Meta:
+        verbose_name = "Кандидат неоднозначной аббревиатуры"
+        verbose_name_plural = "Кандидаты неоднозначных аббревиатур"
+        ordering = ["-weight"]
+        constraints = [
+            models.UniqueConstraint(fields=["ambiguity", "entry"], name="unique_ambiguity_candidate"),
+        ]
+        # Индекс на entry — путь "запись тезауруса -> её неоднозначности",
+        # реально используемый apps.search_ocr.search.expand_query() через
+        # обратную связь ThesaurusEntry.ambiguity_candidates на каждый
+        # поисковый запрос (не только для этой модели самой по себе).
+        indexes = [models.Index(fields=["entry"])]
+
+    def __str__(self):
+        return f"{self.ambiguity.abbr} -> {self.entry_id} ({self.weight})"

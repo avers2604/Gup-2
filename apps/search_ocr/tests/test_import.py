@@ -6,7 +6,7 @@ from django.test import TestCase
 
 from apps.audit.models import AuditLog
 
-from ..models import ThesaurusEntry
+from ..models import ThesaurusAmbiguity, ThesaurusAmbiguityCandidate, ThesaurusEntry
 from ..services import import_thesaurus
 
 
@@ -190,3 +190,89 @@ class ImportThesaurusFileLevelWarningsTests(TestCase):
             _entry(id="b", canonical="Термин Б", short_forms=["ОК"]),
         ]))
         self.assertFalse(any("TH-03" in w for w in report.warnings))
+
+
+class ImportThesaurusAmbiguityPersistenceTests(TestCase):
+    """ambiguity_registry файла теперь персистится (ThesaurusAmbiguity +
+    ThesaurusAmbiguityCandidate — настоящий FK на ThesaurusEntry, не
+    JSONField), не только используется транзитно для warnings TH-02/03."""
+
+    def test_ambiguity_registry_creates_ambiguity_and_candidates(self):
+        import_thesaurus(_file(
+            [
+                _entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"]),
+                _entry(id="tp_incident", canonical="Транспортное происшествие", short_forms=["ТП-1"]),
+            ],
+            ambiguity_registry=[{
+                "abbr": "ТП",
+                "candidates": [
+                    {"id": "tp_main", "weight": 1.0, "reason": "основное значение"},
+                    {"id": "tp_incident", "weight": 0.6, "reason": "контекст инцидентов"},
+                ],
+            }],
+        ))
+        ambiguity = ThesaurusAmbiguity.objects.get(abbr="ТП")
+        candidates = {c.entry_id: c.weight for c in ambiguity.candidates.all()}
+        self.assertEqual(candidates, {"tp_main": 1.0, "tp_incident": 0.6})
+
+    def test_candidate_has_real_fk_to_thesaurus_entry(self):
+        import_thesaurus(_file(
+            [_entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"])],
+            ambiguity_registry=[{"abbr": "ТП", "candidates": [{"id": "tp_main", "weight": 1.0}]}],
+        ))
+        candidate = ThesaurusAmbiguityCandidate.objects.get(ambiguity__abbr="ТП")
+        self.assertEqual(candidate.entry, ThesaurusEntry.objects.get(pk="tp_main"))
+
+    def test_candidate_referencing_missing_entry_warns_not_fails(self):
+        report = import_thesaurus(_file(
+            [_entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"])],
+            ambiguity_registry=[{
+                "abbr": "ТП",
+                "candidates": [
+                    {"id": "tp_main", "weight": 1.0},
+                    {"id": "does_not_exist", "weight": 0.5},
+                ],
+            }],
+        ))
+        self.assertTrue(any("does_not_exist" in w for w in report.warnings))
+        self.assertEqual(ThesaurusAmbiguityCandidate.objects.count(), 1)
+
+    def test_reimport_with_changed_weight_updates_candidate(self):
+        base_entries = [_entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"])]
+        import_thesaurus(_file(
+            base_entries, ambiguity_registry=[{"abbr": "ТП", "candidates": [{"id": "tp_main", "weight": 1.0}]}],
+        ))
+        import_thesaurus(_file(
+            base_entries, ambiguity_registry=[{"abbr": "ТП", "candidates": [{"id": "tp_main", "weight": 0.7}]}],
+        ))
+        candidate = ThesaurusAmbiguityCandidate.objects.get(ambiguity__abbr="ТП", entry_id="tp_main")
+        self.assertEqual(candidate.weight, 0.7)
+        self.assertEqual(ThesaurusAmbiguityCandidate.objects.count(), 1)
+
+    def test_reimport_removing_candidate_deletes_stale_row(self):
+        entries = [
+            _entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"]),
+            _entry(id="tp_incident", canonical="Транспортное происшествие", short_forms=["ТП-1"]),
+        ]
+        import_thesaurus(_file(entries, ambiguity_registry=[{
+            "abbr": "ТП",
+            "candidates": [{"id": "tp_main", "weight": 1.0}, {"id": "tp_incident", "weight": 0.6}],
+        }]))
+        self.assertEqual(ThesaurusAmbiguityCandidate.objects.filter(ambiguity__abbr="ТП").count(), 2)
+
+        import_thesaurus(_file(entries, ambiguity_registry=[{
+            "abbr": "ТП", "candidates": [{"id": "tp_main", "weight": 1.0}],
+        }]))
+        remaining = ThesaurusAmbiguityCandidate.objects.filter(ambiguity__abbr="ТП")
+        self.assertEqual(remaining.count(), 1)
+        self.assertEqual(remaining.first().entry_id, "tp_main")
+
+    def test_reimport_unchanged_ambiguity_writes_no_extra_audit_entry(self):
+        entries = [_entry(id="tp_main", canonical="Тяговая подстанция", short_forms=["ТП"])]
+        registry = [{"abbr": "ТП", "candidates": [{"id": "tp_main", "weight": 1.0}]}]
+        import_thesaurus(_file(entries, ambiguity_registry=registry))
+        report = import_thesaurus(_file(entries, ambiguity_registry=registry))
+        self.assertEqual(report.ambiguity_updated, [])
+        self.assertEqual(
+            AuditLog.objects.filter(event_type=AuditLog.EventType.THESAURUS_UPDATED).count(), 1,
+        )
