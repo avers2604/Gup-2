@@ -85,6 +85,13 @@ jobs:
           bash -n deploy/dr/validate-part4.sh
           bash deploy/dr/validate-part4.sh
 
+      - name: Проверить стендовый acceptance harness Этапа 4
+        # Fake Patroni/etcd/pgBackRest/MinIO/Alertmanager позволяют проверить
+        # orchestration, fail-closed итог и RPO/RTO без разрушительных действий.
+        run: |
+          bash -n deploy/acceptance/validate.sh
+          bash deploy/acceptance/validate.sh
+
       - name: manage.py check
         run: python manage.py check
 
