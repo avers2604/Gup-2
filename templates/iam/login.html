@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Вход · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Вход в систему</p>
+  <h1 class="title">АИС «БЗ ГЭТ»</h1>
+
+  <div class="card" style="max-width: 420px; margin-top: var(--space-6);">
+    {% if form.non_field_errors %}
+      <p class="caption" style="color: var(--color-red); margin-bottom: var(--space-4);">
+        {{ form.non_field_errors.0 }}
+      </p>
+    {% endif %}
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <label class="field-label" for="{{ form.personnel_number.id_for_label }}">Табельный номер</label>
+      {{ form.personnel_number }}
+      <label class="field-label" for="{{ form.password.id_for_label }}" style="margin-top: var(--space-4); display:block;">Пароль</label>
+      {{ form.password }}
+      <button class="btn btn--primary" type="submit" style="margin-top: var(--space-6);">Войти</button>
+    </form>
+  </div>
+{% endblock %}

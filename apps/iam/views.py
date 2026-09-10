@@ -1,164 +1,126 @@
 """
-Логин с обязательным TOTP для ролей из `User.requires_totp` (ТЗ 4.7).
-Двухшаговый флоу: LoginView проверяет табельный номер/пароль и, если у
-пользователя включена 2FA, НЕ вызывает django_login() — сессия отмечается
-как "ожидает код" (через request.session, не отдельное хранилище — сама
-сессия уже round-trip'ится по cookie), полноценный вход происходит только
-в LoginVerifyTotpView. Так исключается окно между "пароль верный" и
-"второй фактор пройден", в котором уже есть валидная авторизованная сессия.
+Web GUI — вход и 2FA/TOTP (ТЗ 4.7). Серверный рендеринг (Django Templates
++ HTMX для enroll/confirm без полной перезагрузки страницы), сессия + CSRF.
+Тонкий HTTP-слой поверх apps.iam.services — ни одна из этих вьюх не
+обращается к User.objects/verify_totp_code напрямую, только к функциям
+services.py (общим с apps/iam/api.py, см. их docstring).
 """
-from django.contrib.auth import authenticate
+from django.conf import settings
 from django.contrib.auth import login as django_login
 from django.contrib.auth import logout as django_logout
-from rest_framework import status
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from rest_framework.views import APIView
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.shortcuts import redirect, render
+from django.views import View
+from django.views.generic import FormView
 
-from apps.audit.models import AuditLog
+from . import services
+from .forms import LoginForm, TotpCodeForm
 
-from .models import User
-from .serializers import LoginSerializer, TotpCodeSerializer
-from .totp import generate_totp_secret, totp_provisioning_uri, verify_totp_code
-
-_SESSION_PENDING_TOTP_USER_ID = "totp_pending_user_id"
+_SESSION_PENDING_TICKET = "totp_pending_ticket"
 
 
-def _user_summary(user: User) -> dict:
-    return {
-        "personnel_number": user.personnel_number,
-        "full_name": user.full_name,
-        "role": user.role,
-        "totp_enabled": user.totp_enabled,
-        # Роль требует 2FA (ТЗ 4.7), но пользователь ещё не прошёл enroll —
-        # клиент должен направить его на /auth/totp/enroll/ следующим шагом.
-        # Это сигнал, не блокировка: сам вход уже состоялся.
-        "must_enroll_totp": user.requires_totp and not user.totp_enabled,
-        # Информационный флаг — принудительная смена пароля до доступа к
-        # остальному API не реализована на уровне permissions (см. STACK.md,
-        # честная граница); клиент решает, что с этим делать.
-        "password_change_required": user.status == User.Status.PASSWORD_CHANGE_REQUIRED,
-    }
+class LoginView(FormView):
+    template_name = "iam/login.html"
+    form_class = LoginForm
 
-
-def _log_session_event(user: User, event_type: str) -> None:
-    AuditLog.objects.create(
-        event_type=event_type,
-        actor=user,
-        actor_personnel_number=user.personnel_number,
-        object_type="User",
-        object_id=str(user.pk),
-    )
-
-
-class LoginView(APIView):
-    """Шаг 1: табельный номер + пароль."""
-
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        user = authenticate(
-            request,
-            username=serializer.validated_data["personnel_number"],
-            password=serializer.validated_data["password"],
+    def form_valid(self, form):
+        result = services.check_credentials(
+            self.request,
+            personnel_number=form.cleaned_data["personnel_number"],
+            password=form.cleaned_data["password"],
         )
+        if result is None:
+            form.add_error(None, "Неверный табельный номер или пароль.")
+            return self.form_invalid(form)
+
+        if result.totp_required:
+            self.request.session[_SESSION_PENDING_TICKET] = services.make_totp_pending_ticket(result.user)
+            return redirect("iam:login-verify-totp")
+
+        django_login(self.request, result.user)
+        services.record_session_login(result.user)
+        return redirect(self.get_success_url())
+
+    def get_success_url(self):
+        return settings.LOGIN_REDIRECT_URL
+
+
+class TotpVerifyView(FormView):
+    """Шаг 2 — только если в сессии есть тикет, оставленный LoginView.
+    Сама сессия на этом этапе ещё НЕ авторизована (django_login() не
+    вызывался) — тикет живёт в session ровно как переносчик состояния
+    между двумя запросами одного браузера, не как признак входа."""
+
+    template_name = "iam/totp_verify.html"
+    form_class = TotpCodeForm
+
+    def get(self, request, *args, **kwargs):
+        if _SESSION_PENDING_TICKET not in request.session:
+            return redirect("iam:login")
+        return super().get(request, *args, **kwargs)
+
+    def form_valid(self, form):
+        ticket = self.request.session.get(_SESSION_PENDING_TICKET)
+        if not ticket:
+            return redirect("iam:login")
+
+        user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"])
         if user is None:
-            # Один и тот же ответ для "нет такого табельного номера",
-            # "неверный пароль" и "пользователь заблокирован" (is_active
-            # уже отсекается authenticate() через ModelBackend) — не
-            # раскрываем оператору, какая именно часть неверна.
-            return Response(
-                {"detail": "Неверный табельный номер или пароль."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
+            form.add_error(None, "Неверный код.")
+            return self.form_invalid(form)
 
-        if user.totp_enabled:
-            request.session[_SESSION_PENDING_TOTP_USER_ID] = str(user.pk)
-            return Response({"totp_required": True})
-
-        django_login(request, user)
-        _log_session_event(user, AuditLog.EventType.SESSION_LOGIN)
-        return Response({"totp_required": False, **_user_summary(user)})
+        del self.request.session[_SESSION_PENDING_TICKET]
+        django_login(self.request, user)
+        services.record_session_login(user)
+        return redirect(settings.LOGIN_REDIRECT_URL)
 
 
-class LoginVerifyTotpView(APIView):
-    """Шаг 2: код TOTP, завершает вход, начатый LoginView."""
+class LogoutView(LoginRequiredMixin, View):
+    """POST-only (Django 5-конвенция — выход не должен срабатывать по
+    голой GET-ссылке без подтверждения/CSRF)."""
 
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        pending_id = request.session.get(_SESSION_PENDING_TOTP_USER_ID)
-        if not pending_id:
-            return Response(
-                {"detail": "Нет ожидающего подтверждения входа — начните с /auth/login/."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        serializer = TotpCodeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        # Перечитываем пользователя, а не полагаемся на снимок из шага 1:
-        # между шагами (сколько бы времени ни прошло) его могли
-        # заблокировать — is_active проверяется здесь так же, как
-        # authenticate() уже проверял его на шаге 1.
-        user = User.objects.filter(pk=pending_id).first()
-        if (
-            user is None
-            or not user.is_active
-            or not verify_totp_code(secret=user.totp_secret, code=serializer.validated_data["code"])
-        ):
-            return Response({"detail": "Неверный код."}, status=status.HTTP_401_UNAUTHORIZED)
-
-        del request.session[_SESSION_PENDING_TOTP_USER_ID]
-        django_login(request, user)
-        _log_session_event(user, AuditLog.EventType.SESSION_LOGIN)
-        return Response(_user_summary(user))
-
-
-class LogoutView(APIView):
     def post(self, request):
         user = request.user
         django_logout(request)
-        _log_session_event(user, AuditLog.EventType.SESSION_LOGOUT)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        services.record_session_logout(user)
+        return redirect("iam:login")
 
 
-class TotpEnrollView(APIView):
-    """Начало включения 2FA — генерирует секрет, но НЕ включает
-    totp_enabled: включение требует подтверждения кодом (TotpConfirmView),
-    иначе пользователь рискует остаться без доступа, так и не убедившись,
-    что приложение-аутентификатор реально синхронизировано с сервером."""
+class TotpEnrollView(LoginRequiredMixin, View):
+    """GET — страница с кнопкой начала подключения 2FA (hx-post на этот
+    же URL). POST — генерирует секрет и возвращает HTMX-фрагмент с
+    провижининг-URI и формой подтверждения кода — без перезагрузки
+    страницы. Прогрессивная деградация без JS не реализована (внутренний
+    инструмент с контролируемым набором браузеров, не публичный сайт)."""
+
+    def get(self, request):
+        return render(request, "iam/totp_enroll.html", {"totp_enabled": request.user.totp_enabled})
 
     def post(self, request):
-        user = request.user
-        secret = generate_totp_secret()
-        user.totp_secret = secret
-        user.save(update_fields=["totp_secret"])
-        return Response({
-            "secret": secret,
-            "provisioning_uri": totp_provisioning_uri(
-                secret=secret, personnel_number=user.personnel_number,
-            ),
+        data = services.start_totp_enrollment(request.user)
+        return render(request, "iam/_totp_enroll_result.html", {
+            "secret": data["secret"],
+            "provisioning_uri": data["provisioning_uri"],
+            "form": TotpCodeForm(),
         })
 
 
-class TotpConfirmView(APIView):
+class TotpConfirmView(LoginRequiredMixin, View):
     def post(self, request):
-        user = request.user
-        serializer = TotpCodeSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        form = TotpCodeForm(request.POST)
+        if not form.is_valid():
+            return render(request, "iam/_totp_confirm_result.html", {"form": form}, status=400)
 
-        if not user.totp_secret:
-            return Response(
-                {"detail": "2FA не начата — сначала вызовите /auth/totp/enroll/."},
-                status=status.HTTP_400_BAD_REQUEST,
+        try:
+            enabled = services.confirm_totp_enrollment(request.user, code=form.cleaned_data["code"])
+        except services.TotpEnrollmentNotStarted:
+            return render(
+                request, "iam/_totp_confirm_result.html",
+                {"form": form, "not_started": True}, status=400,
             )
-        if not verify_totp_code(secret=user.totp_secret, code=serializer.validated_data["code"]):
-            return Response({"detail": "Неверный код."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        user.totp_enabled = True
-        user.save(update_fields=["totp_enabled"])
-        return Response({"totp_enabled": True})
+        if not enabled:
+            form.add_error(None, "Неверный код.")
+            return render(request, "iam/_totp_confirm_result.html", {"form": form}, status=400)
+
+        return render(request, "iam/_totp_confirm_result.html", {"success": True})

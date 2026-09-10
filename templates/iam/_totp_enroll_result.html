@@ -1,0 +1,16 @@
+{# HTMX-фрагмент — ответ на POST iam:totp-enroll, заменяет #totp-enroll-panel #}
+<p class="muted">Добавьте секрет в приложение-аутентификатор:</p>
+<p class="data" style="word-break: break-all; margin-top: var(--space-2);">{{ secret }}</p>
+<p class="caption" style="margin-top: var(--space-2); word-break: break-all;">
+  <a href="{{ provisioning_uri }}">{{ provisioning_uri }}</a>
+</p>
+<p class="muted" style="margin-top: var(--space-4);">Введите код из приложения, чтобы подтвердить подключение:</p>
+<form
+  method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
+  style="margin-top: var(--space-3);"
+>
+  {% csrf_token %}
+  <label class="field-label" for="{{ form.code.id_for_label }}">Код</label>
+  {{ form.code }}
+  <button class="btn btn--primary" type="submit" style="margin-top: var(--space-4);">Подтвердить</button>
+</form>

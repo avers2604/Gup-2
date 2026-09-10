@@ -21,12 +21,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import openpyxl
+from django.contrib.auth import authenticate
+from django.core import signing
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from apps.audit.models import AuditLog
 
 from .models import Department, User
+from .totp import generate_totp_secret, totp_provisioning_uri, verify_totp_code
 
 MAX_ROWS = 5000
 
@@ -277,3 +280,128 @@ def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
                     writer.writerow([r.row_number, r.tab_number])
         paths[name] = path
     return paths
+
+
+# --- Вход и 2FA/TOTP (ТЗ 4.7) --------------------------------------------
+#
+# Общая бизнес-логика для ДВУХ независимых HTTP-контуров (решение
+# Заказчика): Web GUI (apps/iam/views.py, серверный рендеринг, сессия) и
+# External API (apps/iam/api.py, DRF + JWT). Ни views.py, ни api.py не
+# обращаются к User.objects/verify_totp_code напрямую — только через
+# функции этого раздела, чтобы правила (кто должен пройти 2FA, что
+# считается верным кодом, что пишется в аудит) не разъехались между
+# контурами.
+#
+# Двухшаговый вход одинаков в обоих контурах: шаг 1 проверяет пароль и,
+# если у пользователя включена 2FA, возвращает подписанный "pending"-
+# тикет вместо готовой авторизации — сама авторизация (django_login() в
+# Web, выдача JWT в API) происходит только в шаге 2, после верного кода.
+# Тикет подписан через django.core.signing (не Django-сессия): так шаг 2
+# одинаково работает и для контура с cookie (Web), и для контура без
+# состояния на сервере (API/JWT) — не пришлось заводить два разных
+# механизма "ожидания кода" под два контура.
+
+_TOTP_PENDING_TICKET_SALT = "apps.iam.services.totp_pending_ticket"
+_TOTP_PENDING_TICKET_MAX_AGE = 5 * 60  # 5 минут на ввод кода после шага 1
+
+
+class TotpEnrollmentNotStarted(Exception):
+    """confirm_totp_enrollment() вызван раньше start_totp_enrollment()."""
+
+
+@dataclass
+class CredentialCheckResult:
+    user: User
+    totp_required: bool
+
+
+def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
+    """Шаг 1. None — неверный табельный номер, неверный пароль или
+    пользователь заблокирован (is_active=False уже отсекается
+    authenticate() через ModelBackend) — вызывающий код должен отвечать
+    ОДНИМ сообщением на все три случая, не раскрывая, какой именно."""
+    user = authenticate(request, username=personnel_number, password=password)
+    if user is None:
+        return None
+    return CredentialCheckResult(user=user, totp_required=user.totp_enabled)
+
+
+def make_totp_pending_ticket(user: User) -> str:
+    return signing.dumps({"user_id": str(user.pk)}, salt=_TOTP_PENDING_TICKET_SALT)
+
+
+def verify_totp_login(*, ticket: str, code: str) -> User | None:
+    """Шаг 2. None — тикет невалиден/подделан/просрочен, пользователя уже
+    нет, он не активен (заблокирован между шагом 1 и шагом 2 — окно
+    небольшое, но не нулевое), или код неверный."""
+    try:
+        data = signing.loads(ticket, salt=_TOTP_PENDING_TICKET_SALT, max_age=_TOTP_PENDING_TICKET_MAX_AGE)
+    except signing.BadSignature:
+        return None
+
+    user = User.objects.filter(pk=data.get("user_id")).first()
+    if user is None or not user.is_active:
+        return None
+    if not verify_totp_code(secret=user.totp_secret, code=code):
+        return None
+    return user
+
+
+def user_auth_summary(user: User) -> dict:
+    """Общий вид ответа после успешного входа — одинаковый в Web (JSON
+    для HTMX-фрагмента/редиректа) и API (тело JWT-ответа)."""
+    return {
+        "personnel_number": user.personnel_number,
+        "full_name": user.full_name,
+        "role": user.role,
+        "totp_enabled": user.totp_enabled,
+        # Роль требует 2FA (ТЗ 4.7), но enroll ещё не пройден — сигнал
+        # клиенту направить пользователя на start_totp_enrollment(),
+        # не блокировка самого входа.
+        "must_enroll_totp": user.requires_totp and not user.totp_enabled,
+        "password_change_required": user.status == User.Status.PASSWORD_CHANGE_REQUIRED,
+    }
+
+
+def record_session_login(user: User) -> None:
+    AuditLog.objects.create(
+        event_type=AuditLog.EventType.SESSION_LOGIN,
+        actor=user, actor_personnel_number=user.personnel_number,
+        object_type="User", object_id=str(user.pk),
+    )
+
+
+def record_session_logout(user: User) -> None:
+    AuditLog.objects.create(
+        event_type=AuditLog.EventType.SESSION_LOGOUT,
+        actor=user, actor_personnel_number=user.personnel_number,
+        object_type="User", object_id=str(user.pk),
+    )
+
+
+def start_totp_enrollment(user: User) -> dict:
+    """Генерирует новый секрет, но НЕ включает totp_enabled — включение
+    только через confirm_totp_enrollment(), иначе пользователь рискует
+    остаться без доступа, так и не убедившись, что приложение-
+    аутентификатор реально синхронизировано с сервером."""
+    secret = generate_totp_secret()
+    user.totp_secret = secret
+    user.save(update_fields=["totp_secret"])
+    return {
+        "secret": secret,
+        "provisioning_uri": totp_provisioning_uri(secret=secret, personnel_number=user.personnel_number),
+    }
+
+
+def confirm_totp_enrollment(user: User, *, code: str) -> bool:
+    """True — 2FA включена. False — неверный код (можно повторить).
+    Поднимает TotpEnrollmentNotStarted, если start_totp_enrollment() ещё
+    не вызывался — это ошибка порядка вызовов на стороне клиента, не
+    "неверный код"."""
+    if not user.totp_secret:
+        raise TotpEnrollmentNotStarted
+    if not verify_totp_code(secret=user.totp_secret, code=code):
+        return False
+    user.totp_enabled = True
+    user.save(update_fields=["totp_enabled"])
+    return True
