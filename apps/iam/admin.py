@@ -21,7 +21,7 @@ class UserAdmin(DjangoUserAdmin):
     )
     list_filter = ("role", "status", "department", "dsp_access")
     search_fields = ("personnel_number", "last_name", "first_name", "middle_name")
-    readonly_fields = ("full_name",)
+    readonly_fields = ("full_name", "totp_enabled")
     fieldsets = (
         (None, {"fields": ("personnel_number", "password")}),
         ("Персональные данные", {

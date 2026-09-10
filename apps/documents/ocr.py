@@ -57,7 +57,14 @@ def extract_text_and_confidence(
     (ненулевая) уверенность по распознанному слову тоже отбрасывается.
     """
     lang = getattr(settings, "OCR_LANGUAGE", "rus")
-    total_pages = pdfinfo_from_bytes(pdf_bytes)["Pages"]
+    if batch_size < 1 or batch_size > 10:
+        raise ValueError("batch_size must be in 1..10")
+    if len(pdf_bytes) > settings.OCR_MAX_BYTES:
+        raise ValueError("PDF exceeds OCR byte limit")
+    timeout = settings.OCR_PROCESS_TIMEOUT
+    total_pages = pdfinfo_from_bytes(pdf_bytes, timeout=timeout)["Pages"]
+    if not 1 <= total_pages <= settings.OCR_MAX_PAGES:
+        raise ValueError("PDF exceeds OCR page limit")
 
     page_texts = []
     confidence_sum = 0.0
@@ -67,6 +74,7 @@ def extract_text_and_confidence(
         batch_end = min(batch_start + batch_size - 1, total_pages)
         pages: list[Image.Image] = convert_from_bytes(
             pdf_bytes, dpi=DPI, first_page=batch_start, last_page=batch_end,
+            timeout=timeout, size=settings.OCR_MAX_DIMENSION, thread_count=1,
         )
 
         for page in pages:
@@ -74,9 +82,14 @@ def extract_text_and_confidence(
                 grayscale = np.array(page.convert("L"))
                 page = Image.fromarray(preprocess_page(grayscale))
 
-            page_texts.append(pytesseract.image_to_string(page, lang=lang))
-
-            data = pytesseract.image_to_data(page, lang=lang, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(page, lang=lang, timeout=timeout,
+                                            output_type=pytesseract.Output.DICT)
+            lines = {}
+            for i, word in enumerate(data["text"]):
+                if word.strip():
+                    key = tuple(data[k][i] for k in ("block_num", "par_num", "line_num"))
+                    lines.setdefault(key, []).append(word)
+            page_texts.append("\n".join(" ".join(words) for words in lines.values()))
             for word, conf in zip(data["text"], data["conf"]):
                 if not word.strip():
                     continue

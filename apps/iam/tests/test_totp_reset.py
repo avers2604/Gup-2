@@ -64,7 +64,7 @@ class ResetTotpServiceTests(TestCase):
         enrollment = services.start_totp_enrollment(self.user)
         self.assertTrue(enrollment["secret"])
         self.user.refresh_from_db()
-        self.assertEqual(self.user.totp_secret, enrollment["secret"])
+        self.assertEqual(__import__("apps.iam.totp_crypto", fromlist=["decrypt_totp_secret"]).decrypt_totp_secret(self.user.totp_pending_secret), enrollment["secret"])
 
 
 class ResetTotpAdminActionTests(TestCase):
@@ -75,7 +75,14 @@ class ResetTotpAdminActionTests(TestCase):
         self.user.totp_secret = generate_totp_secret()
         self.user.totp_enabled = True
         self.user.save()
+        self.admin.totp_secret = generate_totp_secret()
+        self.admin.totp_enabled = True
+        self.admin.save()
         self.client.force_login(self.admin)
+        from apps.iam.security import totp_stamp
+        session = self.client.session
+        session["totp_verified"] = totp_stamp(self.admin)
+        session.save()
 
     def test_action_resets_selected_user_totp(self):
         url = reverse("admin:iam_user_changelist")

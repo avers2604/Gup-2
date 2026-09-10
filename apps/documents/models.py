@@ -92,6 +92,11 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         max_length=16, choices=AccessLevel.choices, default=AccessLevel.GENERAL, verbose_name="Уровень доступа"
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    # Счётчик редакций для оптимистичной блокировки правки: форма правки
+    # несёт его скрытым полем и отвергается, если карточку успели
+    # изменить. Не поле ТЗ и не часть карточки — служебная отметка, отсюда
+    # editable=False (в формах и админке не показывается).
+    edit_version = models.PositiveIntegerField(default=0, editable=False)
 
     files_original = models.FileField(
         upload_to="documents/originals/%Y/%m/", storage=originals_storage,
@@ -173,41 +178,9 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
             })
 
     def save(self, *args, **kwargs):
-        # retention_until — юридическая дата, а не производное поле, которое
-        # можно пересчитывать на каждый save(): если бы она пересчитывалась
-        # безусловно (как раньше), достаточно было бы просто сохранить
-        # карточку ещё раз спустя время, чтобы дата "уехала" от исходной
-        # даты присвоения категории вперёд/назад — WORM-хранение подразумевает
-        # фиксированный срок, а не плавающий. Поэтому пересчёт происходит
-        # только при первом сохранении и при фактической смене
-        # retention_category; смена категории — это изменение юридической
-        # классификации и обязана попасть в WORM-журнал аудита (старое и
-        # новое значение), а не пройти тихо.
-        previous = (
-            type(self)
-            .objects.filter(pk=self.pk)
-            .values_list("retention_category", "status", "files_original")
-            .first()
-        )
-        previous_category = previous[0] if previous is not None else None
-        previous_status = previous[1] if previous is not None else None
-        previous_files_original = previous[2] if previous is not None else None
-        is_new = previous is None
-        category_changed = is_new or previous_category != self.retention_category
-        # Усиление аудита (решение Заказчика: «фиксировать все изменения
-        # документов — кто, что изменил, старый/новый статус»). Только на
-        # реальном изменении (не на первом сохранении — создание карточки
-        # не «изменение статуса», это его первое присвоение).
-        status_changed = not is_new and previous_status != self.status
-        # Запуск конвейера OCR (Этап 3) — при первой загрузке скана и при
-        # каждой его замене (files_original.name — имя файла в БД, то же
-        # сравнение "до/после super().save()", что и выше для остальных
-        # полей). bool(self.files_original) отсекает карточки без файла —
-        # files_original обязателен по ТЗ, но в тестах/фикстурах нередко не
-        # заполняется, и пустое имя не должно ставить задачу распознавания
-        # несуществующего файла в очередь.
-        files_original_changed = bool(self.files_original) and previous_files_original != self.files_original.name
-
+        # Rejected-upload evidence must survive the failed document transaction.
+        if kwargs.get("update_fields") is not None and not kwargs["update_fields"]:
+            return
         # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — ДО
         # super().save(), пока файл ещё не записан в storage: заражённый
         # файл не должен попасть в WORM-бакет originals, откуда его потом
@@ -228,6 +201,54 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 macro_check.reject_if_has_macros(
                     field_file, object_type="NormativeDocument", object_id=self.reg_number,
                 )
+
+        return self._save_validated(*args, **kwargs)
+
+    @transaction.atomic
+    def _save_validated(self, *args, **kwargs):
+        # retention_until — юридическая дата, а не производное поле, которое
+        # можно пересчитывать на каждый save(): если бы она пересчитывалась
+        # безусловно (как раньше), достаточно было бы просто сохранить
+        # карточку ещё раз спустя время, чтобы дата "уехала" от исходной
+        # даты присвоения категории вперёд/назад — WORM-хранение подразумевает
+        # фиксированный срок, а не плавающий. Поэтому пересчёт происходит
+        # только при первом сохранении и при фактической смене
+        # retention_category; смена категории — это изменение юридической
+        # классификации и обязана попасть в WORM-журнал аудита (старое и
+        # новое значение), а не пройти тихо.
+        previous = (
+            type(self)
+            .objects.select_for_update().filter(pk=self.pk)
+            .values_list("retention_category", "status", "files_original", "edit_version")
+            .first()
+        )
+        previous_category = previous[0] if previous is not None else None
+        previous_status = previous[1] if previous is not None else None
+        previous_files_original = previous[2] if previous is not None else None
+        is_new = previous is None
+        update_fields = kwargs.get("update_fields")
+        # Every normal write, including Django admin, invalidates stale edit forms.
+        # Background OCR-only persistence does not invalidate an editorial revision.
+        ocr_only = update_fields is not None and set(update_fields) <= {
+            "ocr_body", "ocr_confidence", "ocr_status", "updated_at"}
+        if not is_new and not ocr_only:
+            self.edit_version = previous[3] + 1
+            if update_fields is not None:
+                kwargs["update_fields"] = set(update_fields) | {"edit_version"}
+        category_changed = is_new or previous_category != self.retention_category
+        # Усиление аудита (решение Заказчика: «фиксировать все изменения
+        # документов — кто, что изменил, старый/новый статус»). Только на
+        # реальном изменении (не на первом сохранении — создание карточки
+        # не «изменение статуса», это его первое присвоение).
+        status_changed = not is_new and previous_status != self.status
+        # Запуск конвейера OCR (Этап 3) — при первой загрузке скана и при
+        # каждой его замене (files_original.name — имя файла в БД, то же
+        # сравнение "до/после super().save()", что и выше для остальных
+        # полей). bool(self.files_original) отсекает карточки без файла —
+        # files_original обязателен по ТЗ, но в тестах/фикстурах нередко не
+        # заполняется, и пустое имя не должно ставить задачу распознавания
+        # несуществующего файла в очередь.
+        files_original_changed = bool(self.files_original) and previous_files_original != self.files_original.name
 
         if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
@@ -321,16 +342,20 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 )
 
             if files_original_changed:
-                # on_commit — воркер Celery читает файл отдельным
-                # соединением/процессом; если поставить задачу в очередь
-                # до коммита, она может стартовать раньше, чем строка (и
-                # сам файл в originals-бакете) станут видны снаружи текущей
-                # транзакции.
-                from .tasks import run_ocr_for_document
+                # Через outbox, а не прямым .delay(): воркер Celery читает
+                # файл отдельным соединением/процессом, и задача,
+                # поставленная до коммита, может стартовать раньше, чем
+                # строка и сам файл в originals-бакете станут видны
+                # снаружи транзакции. Раньше от этого спасал
+                # transaction.on_commit(), но он же и терял постановку
+                # при отказе Redis: коммит уже прошёл, задача не ушла, и
+                # следов не осталось. Запись outbox коммитится вместе с
+                # документом, отправку берёт на себя dispatch (см.
+                # apps/core/outbox.py) — доставка не реже одного раза,
+                # обработчик обязан быть идемпотентным.
+                from apps.core.outbox import enqueue
 
-                pk = self.pk
-                transaction.on_commit(lambda: run_ocr_for_document.delay(str(pk)))
-
+                enqueue("apps.documents.tasks.run_ocr_for_document", [str(self.pk)])
 
     def _open_status_period(self):
         """Текущий, ещё не закрытый срез статуса (valid_to = NULL)."""

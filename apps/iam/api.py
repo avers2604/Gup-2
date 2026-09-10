@@ -8,7 +8,7 @@ apps/iam/views.py не обращаются к User.objects/verify_totp_code
 """
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
@@ -16,12 +16,16 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
 
 from . import services
-from .serializers import LogoutRequestSerializer, TokenObtainRequestSerializer, TotpVerifyRequestSerializer
+from .security import PolicyTokenRefreshSerializer, totp_stamp
+from .serializers import UserSummarySerializer, LogoutRequestSerializer, TokenObtainRequestSerializer, TotpVerifyRequestSerializer
 from .throttles import MeThrottle, TokenObtainThrottle, TokenRefreshThrottle, TotpVerifyThrottle
 
 
 def _issue_tokens(user) -> dict:
     refresh = RefreshToken.for_user(user)
+    refresh["auth_version"] = user.auth_version
+    if user.totp_enabled:
+        refresh["totp_stamp"] = totp_stamp(user)
     return {
         "access": str(refresh.access_token),
         "refresh": str(refresh),
@@ -117,6 +121,8 @@ class LogoutView(APIView):
     предъявитель, что и выходящий пользователь; сам access при этом
     продолжает жить до истечения своего TTL, см. честную границу там же."""
 
+    permission_classes = [IsAuthenticated]
+
     @extend_schema(
         request=LogoutRequestSerializer,
         responses={205: OpenApiResponse(description="Refresh-токен отозван")},
@@ -126,7 +132,10 @@ class LogoutView(APIView):
         serializer.is_valid(raise_exception=True)
 
         try:
-            RefreshToken(serializer.validated_data["refresh"]).blacklist()
+            token = RefreshToken(serializer.validated_data["refresh"])
+            if str(token.get("user_id")) != str(request.user.pk):
+                return Response({"detail": "Токен принадлежит другому пользователю."}, status=400)
+            token.blacklist()
         except TokenError:
             return Response({"detail": "Неверный или уже отозванный refresh-токен."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -135,6 +144,7 @@ class LogoutView(APIView):
 
 
 class TokenRefreshView(BaseTokenRefreshView):
+    serializer_class = PolicyTokenRefreshSerializer
     throttle_classes = [TokenRefreshThrottle]
 
 
@@ -146,5 +156,6 @@ class MeView(APIView):
 
     throttle_classes = [MeThrottle]
 
+    @extend_schema(responses=UserSummarySerializer)
     def get(self, request):
         return Response(services.user_auth_summary(request.user))

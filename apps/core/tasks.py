@@ -44,3 +44,9 @@ def queue_acceptance_probe(self, probe_id: int, sleep_seconds: int = 15):
         "task_id": self.request.id,
         "duplicate_delivery_suppressed": False,
     }
+
+
+@shared_task
+def dispatch_task_outbox():
+    from .outbox import dispatch_pending
+    return dispatch_pending()

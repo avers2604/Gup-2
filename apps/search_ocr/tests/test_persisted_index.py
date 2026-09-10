@@ -12,13 +12,7 @@ from apps.search_ocr.search_index import DocumentSearchIndex
 
 
 class PersistedSearchIndexTests(TransactionTestCase):
-    """Persistent search-index integration tests.
-
-    Cold rebuild uses TRUNCATE intentionally. TransactionTestCase mirrors the
-    standalone management-command execution model; regular TestCase wraps the
-    whole test in an outer transaction and PostgreSQL correctly refuses
-    TRUNCATE when earlier FK trigger events are still pending there.
-    """
+    """Persistent index integration and bounded online rebuild."""
 
     reset_sequences = True
 

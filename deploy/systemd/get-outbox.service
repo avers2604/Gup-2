@@ -1,0 +1,12 @@
+[Unit]
+Description=BZ GET durable outbox delivery
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=get
+Group=get
+WorkingDirectory=/opt/get
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+EnvironmentFile=/opt/get/.env
+ExecStart=/opt/get/venv/bin/python manage.py dispatch_outbox

@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.utils import timezone
 
 
 class UUIDPKModel(models.Model):
@@ -83,3 +84,18 @@ class QueueDrillProbe(models.Model):
 
     def __str__(self):
         return f"{self.run_id}:{self.sequence} ({self.completion_count})"
+
+
+class TaskOutbox(models.Model):
+    """Durable broker delivery intent, committed with the source mutation."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    task_name = models.CharField(max_length=200)
+    args = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["delivered_at", "next_attempt_at"], name="outbox_pending_idx")]

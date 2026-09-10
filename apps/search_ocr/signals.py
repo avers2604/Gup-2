@@ -19,4 +19,5 @@ def schedule_search_index_refresh(sender, instance, **kwargs):
         # real commit while assertions run. Keep eager mode deterministic.
         refresh_document_index(document_id)
         return
-    transaction.on_commit(lambda: refresh_document_search_index.delay(document_id))
+    from apps.core.outbox import enqueue
+    enqueue("apps.search_ocr.tasks.refresh_document_search_index", [document_id])

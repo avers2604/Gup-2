@@ -188,7 +188,7 @@ class _WriteTestSetup:
             "summary": "", "issuer_dept": self.document.issuer_dept_id,
             "access_level": NormativeDocument.AccessLevel.GENERAL,
             "retention_category": self.document.retention_category,
-            "ocr_category": "",
+            "ocr_category": "", "revision": self.document.edit_version,
         }
         data.update(overrides)
         return data

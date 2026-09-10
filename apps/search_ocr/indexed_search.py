@@ -100,5 +100,5 @@ def search_documents_indexed(
     return (
         queryset.annotate(score=ExpressionWrapper(score, output_field=FloatField()))
         .filter(score__gt=0)
-        .order_by("-score", "-reg_date")
+        .order_by("-score", "-reg_date", "pk")
     )

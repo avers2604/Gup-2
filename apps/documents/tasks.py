@@ -52,9 +52,11 @@ def run_ocr_for_document(self, document_id):
         logger.warning("run_ocr_for_document: документ %s не найден, задача пропущена", document_id)
         return
 
+    source_name = document.files_original.name
     try:
         with document.files_original.open("rb") as fh:
-            pdf_bytes = fh.read()
+            from django.conf import settings
+            pdf_bytes = fh.read(settings.OCR_MAX_BYTES + 1)
         text, confidence = extract_text_and_confidence(pdf_bytes)
     except Exception as exc:
         if self.request.retries < self.max_retries:
@@ -62,6 +64,8 @@ def run_ocr_for_document(self, document_id):
 
         with transaction.atomic():
             document = NormativeDocument.objects.select_for_update().get(pk=document_id)
+            if document.files_original.name != source_name:
+                return
             if _already_finalized(task_id):
                 return
             document.ocr_status = NormativeDocument.OcrStatus.NEEDS_REVIEW
@@ -89,6 +93,8 @@ def run_ocr_for_document(self, document_id):
 
     with transaction.atomic():
         document = NormativeDocument.objects.select_for_update().get(pk=document_id)
+        if document.files_original.name != source_name:
+            return
         if _already_finalized(task_id):
             return
         document.ocr_body = text

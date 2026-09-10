@@ -38,10 +38,22 @@ def consume_fixed_window(scope: str, identity: str, limit: int, window_seconds: 
 
 
 def client_ip(request) -> str:
-    forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "unknown")
+    from ipaddress import ip_address, ip_network
+    from django.conf import settings
+    networks = [ip_network(value) for value in getattr(settings, "TRUSTED_PROXIES", [])]
+    remote = request.META.get("REMOTE_ADDR", "")
+    try:
+        current = ip_address(remote)
+        if not any(current in network for network in networks):
+            return str(current)
+        chain = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")
+        for value in reversed(chain):
+            if not any(current in network for network in networks):
+                break
+            current = ip_address(value.strip())
+        return str(current)
+    except ValueError:
+        return remote or "unknown"
 
 
 def request_identity(request, *parts: object) -> str:

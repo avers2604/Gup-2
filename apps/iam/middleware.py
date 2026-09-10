@@ -1,19 +1,8 @@
-"""По запросу ревью анти-фрода: превращает status=PASSWORD_CHANGE_REQUIRED
-и User.is_password_expired из чисто информационных флагов (какими они
-были честно задокументированы в STACK.md) в реальное ограничение —
-единственная вьюха смены пароля в проекте появилась в этой же партии
-(apps/iam/views.PasswordChangeView). Web-only (session-контур) —
-External API/JWT сознательно не тронут: там это по-прежнему только флаг
-в user_auth_summary (services.py), то же разделение контуров, что и
-everywhere else в проекте (см. STACK.md про Web SSR vs External API JWT)."""
+"""Enforce account policy on every session-based entry point, including admin."""
 from django.shortcuts import redirect
 from django.urls import reverse
 
-# /accounts/ целиком (не только сам password/change/) — иначе цикл
-# редиректов на login/logout/2FA-эндпоинтах для ещё не подтвердившего
-# смену пароля пользователя. /admin/ и /api/ — вне области действия этой
-# партии (см. её docstring выше про Web-only).
-_EXEMPT_PREFIXES = ("/accounts/", "/admin/", "/api/")
+from .security import session_totp_verified
 
 
 class PasswordChangeRequiredMiddleware:
@@ -22,10 +11,21 @@ class PasswordChangeRequiredMiddleware:
 
     def __call__(self, request):
         user = getattr(request, "user", None)
-        if (
-            user is not None and user.is_authenticated
-            and not request.path.startswith(_EXEMPT_PREFIXES)
-            and (user.status == user.Status.PASSWORD_CHANGE_REQUIRED or user.is_password_expired)
-        ):
-            return redirect(reverse("iam:password-change"))
+        # API policy is evaluated after JWT authentication, in DRF permissions.
+        if request.path.startswith("/api/"):
+            return self.get_response(request)
+        if request.path == reverse("admin:login"):
+            return redirect(reverse("iam:login"))
+        if user is not None and user.is_authenticated:
+            allowed = {reverse("iam:login"), reverse("iam:logout"),
+                       reverse("iam:login-verify-totp")}
+            if request.path not in allowed:
+                if user.totp_enabled and not session_totp_verified(request):
+                    return redirect(reverse("iam:login"))
+                if user.status == user.Status.PASSWORD_CHANGE_REQUIRED or user.is_password_expired:
+                    if request.path != reverse("iam:password-change"):
+                        return redirect(reverse("iam:password-change"))
+                elif user.requires_totp and not user.totp_enabled:
+                    if request.path not in {reverse("iam:totp-enroll"), reverse("iam:totp-confirm")}:
+                        return redirect(reverse("iam:totp-enroll"))
         return self.get_response(request)

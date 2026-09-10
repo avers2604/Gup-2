@@ -190,7 +190,8 @@ class TotpEnrollmentWebTests(TestCase):
         self.assertTemplateUsed(response, "iam/_totp_enroll_result.html")
 
         self.user.refresh_from_db()
-        self.assertTrue(self.user.totp_secret)
+        self.assertTrue(self.user.totp_pending_secret)
+        self.assertFalse(self.user.totp_secret)
         self.assertFalse(self.user.totp_enabled)
 
     def test_confirm_with_correct_code_enables_2fa(self):
@@ -198,7 +199,8 @@ class TotpEnrollmentWebTests(TestCase):
 
         self.client.post(reverse("iam:totp-enroll"))
         self.user.refresh_from_db()
-        code = pyotp.TOTP(self.user.totp_secret).now()
+        from apps.iam.totp_crypto import decrypt_totp_secret
+        code = pyotp.TOTP(decrypt_totp_secret(self.user.totp_pending_secret)).now()
 
         response = self.client.post(reverse("iam:totp-confirm"), {"code": code})
         self.assertEqual(response.status_code, 200)
