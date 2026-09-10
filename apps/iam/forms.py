@@ -13,6 +13,13 @@ class LoginForm(forms.Form):
     password = forms.CharField(
         label="Пароль", strip=False, widget=forms.PasswordInput(attrs=_FIELD_ATTRS),
     )
+    # Дифференцированный таймаут неактивности (решение Заказчика): 15 минут
+    # вместо 30, если это компьютер общего доступа — см.
+    # apps/iam/views.py (request.session.set_expiry()).
+    shared_terminal = forms.BooleanField(
+        label="Это компьютер общего доступа (терминал)", required=False,
+        widget=forms.CheckboxInput(),
+    )
 
 
 class TotpCodeForm(forms.Form):

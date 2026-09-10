@@ -41,7 +41,14 @@
         <a href="/">Бланки</a>
         <a href="/admin/">Администрирование</a>
         {% if user.is_authenticated %}
-          <span class="caption">{{ user.full_name }}</span>
+          {# п.8.2 решения Заказчика: название роли в «личном кабинете» —
+             отдельной страницы профиля в проекте ещё нет (Этап 2 только
+             начат), это единственное место, где пользователь вообще видит
+             себя во всех Web-шаблонах. get_role_display() берёт название
+             прямо из User.Role.choices — обновляется автоматически при
+             любом будущем изменении списка ролей, отдельно править
+             шаблон не потребуется. #}
+          <span class="caption">{{ user.full_name }} · {{ user.get_role_display }}</span>
           <form method="post" action="{% url 'iam:logout' %}" style="display:inline;">
             {% csrf_token %}
             <button class="btn btn--ghost" type="submit">Выйти</button>

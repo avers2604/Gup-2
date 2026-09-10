@@ -17,6 +17,15 @@ from . import services
 from .forms import LoginForm, TotpCodeForm
 
 _SESSION_PENDING_TICKET = "totp_pending_ticket"
+# Значение shared_terminal со ШАГА 1 нужно донести до момента реальной
+# авторизации (шаг 2, если включена 2FA) — django_login() переживает
+# ключи сессии (cycle_key(), не flush()), так что положить их в
+# неавторизованную pending-сессию и прочитать после — безопасно.
+_SESSION_SHARED_TERMINAL = "shared_terminal_login"
+# Дифференцированный таймаут неактивности (решение Заказчика) — 15 минут
+# для терминала общего доступа вместо личного рабочего места
+# (settings.SESSION_COOKIE_AGE, 30 минут).
+_SHARED_TERMINAL_SESSION_AGE = 15 * 60
 
 
 class LoginView(FormView):
@@ -33,12 +42,15 @@ class LoginView(FormView):
             form.add_error(None, "Неверный табельный номер или пароль.")
             return self.form_invalid(form)
 
+        shared_terminal = form.cleaned_data["shared_terminal"]
         if result.totp_required:
             self.request.session[_SESSION_PENDING_TICKET] = services.make_totp_pending_ticket(result.user)
+            self.request.session[_SESSION_SHARED_TERMINAL] = shared_terminal
             return redirect("iam:login-verify-totp")
 
         django_login(self.request, result.user)
-        services.record_session_login(result.user)
+        self.request.session.set_expiry(_SHARED_TERMINAL_SESSION_AGE if shared_terminal else None)
+        services.record_session_login(result.user, self.request)
         return redirect(self.get_success_url())
 
     def get_success_url(self):
@@ -64,14 +76,16 @@ class TotpVerifyView(FormView):
         if not ticket:
             return redirect("iam:login")
 
-        user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"])
+        user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"], request=self.request)
         if user is None:
             form.add_error(None, "Неверный код.")
             return self.form_invalid(form)
 
+        shared_terminal = self.request.session.pop(_SESSION_SHARED_TERMINAL, False)
         del self.request.session[_SESSION_PENDING_TICKET]
         django_login(self.request, user)
-        services.record_session_login(user)
+        self.request.session.set_expiry(_SHARED_TERMINAL_SESSION_AGE if shared_terminal else None)
+        services.record_session_login(user, self.request)
         return redirect(settings.LOGIN_REDIRECT_URL)
 
 
@@ -82,7 +96,7 @@ class LogoutView(LoginRequiredMixin, View):
     def post(self, request):
         user = request.user
         django_logout(request)
-        services.record_session_logout(user)
+        services.record_session_logout(user, request)
         return redirect("iam:login")
 
 

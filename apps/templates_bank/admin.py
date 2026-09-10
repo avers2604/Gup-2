@@ -34,8 +34,10 @@ class TemplateAdmin(admin.ModelAdmin):
 
     @staticmethod
     def _can_manage(request):
+        # Роль «Куратор службы» упразднена — функционал унаследован
+        # CONTROLLER_LAWYER (решение Заказчика, см. apps/iam/models.py).
         return request.user.is_superuser or request.user.role in {
-            request.user.Role.CURATOR,
+            request.user.Role.CONTROLLER_LAWYER,
             request.user.Role.ADMINISTRATOR,
         }
 
@@ -53,4 +55,10 @@ class TemplateAdmin(admin.ModelAdmin):
     def save_model(self, request, obj, form, change):
         if change or not self._can_manage(request):
             raise PermissionDenied("Опубликованную версию шаблона нельзя изменять.")
+        # Транзитный атрибут (не поле модели) — Template.save() читает его
+        # для комплексного аудита смены статуса (усиление аудита, решение
+        # Заказчика). На создании (единственный путь сюда — change=False)
+        # смены статуса ещё нет и писать нечего, но выставляем заранее —
+        # на будущее, когда появится механизм редактирования/отката.
+        obj._audit_actor = request.user
         super().save_model(request, obj, form, change)

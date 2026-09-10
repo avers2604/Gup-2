@@ -164,3 +164,69 @@ class TokenObtainWithTotpTests(APITestCase):
             "ticket": obtain.data["ticket"], "code": self._current_code(),
         })
         self.assertEqual(response.status_code, 401)
+
+
+class FailedLoginAuditApiTests(APITestCase):
+    """Усиление аудита (решение Заказчика): SESSION_LOGIN_FAILED пишется
+    и в API-контуре — та же apps.iam.services, что и Web."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = _make_user()
+
+    def test_wrong_password_writes_session_login_failed(self):
+        self.client.post(reverse("iam_api:token-obtain"), {
+            "personnel_number": "0001", "password": "wrong",
+        })
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().actor_personnel_number, "0001")
+
+    def test_correct_login_writes_no_failed_entry(self):
+        self.client.post(reverse("iam_api:token-obtain"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        self.assertFalse(
+            AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED).exists()
+        )
+
+
+class FailedTotpAuditApiTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.secret = generate_totp_secret()
+        self.user = _make_user(totp_enabled=True, totp_secret=self.secret)
+
+    def test_wrong_totp_code_writes_session_login_failed(self):
+        obtain = self.client.post(reverse("iam_api:token-obtain"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        self.client.post(reverse("iam_api:token-verify-totp"), {
+            "ticket": obtain.data["ticket"], "code": "000000",
+        })
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().actor_personnel_number, "0001")
+
+    def test_garbage_ticket_writes_session_login_failed_without_actor(self):
+        self.client.post(reverse("iam_api:token-verify-totp"), {
+            "ticket": "not-a-real-ticket", "code": "000000",
+        })
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().actor_personnel_number, "")
+
+
+class TokenObtainSessionLoginDetailsTests(APITestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = _make_user(role=User.Role.SECURITY_OFFICER)
+
+    def test_login_details_contain_full_name_and_role(self):
+        self.client.post(reverse("iam_api:token-obtain"), {
+            "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
+        })
+        entry = AuditLog.objects.get(event_type=AuditLog.EventType.SESSION_LOGIN)
+        self.assertEqual(entry.details["full_name"], self.user.full_name)
+        self.assertEqual(entry.details["role"], User.Role.SECURITY_OFFICER)
+        self.assertIn("ip_address", entry.details)

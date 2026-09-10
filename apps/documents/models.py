@@ -142,11 +142,18 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # retention_category; смена категории — это изменение юридической
         # классификации и обязана попасть в WORM-журнал аудита (старое и
         # новое значение), а не пройти тихо.
-        previous_category = (
-            type(self).objects.filter(pk=self.pk).values_list("retention_category", flat=True).first()
+        previous = (
+            type(self).objects.filter(pk=self.pk).values_list("retention_category", "status").first()
         )
-        is_new = previous_category is None
+        previous_category = previous[0] if previous is not None else None
+        previous_status = previous[1] if previous is not None else None
+        is_new = previous is None
         category_changed = is_new or previous_category != self.retention_category
+        # Усиление аудита (решение Заказчика: «фиксировать все изменения
+        # документов — кто, что изменил, старый/новый статус»). Только на
+        # реальном изменении (не на первом сохранении — создание карточки
+        # не «изменение статуса», это его первое присвоение).
+        status_changed = not is_new and previous_status != self.status
 
         if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
@@ -164,39 +171,61 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         with transaction.atomic():
             super().save(*args, **kwargs)
 
-            if not category_changed:
-                return
+            if category_changed:
+                if is_new:
+                    # Обратная загрузка старого документа с уже истёкшим по матрице
+                    # сроком хранения — не ошибка данных (см. retention.is_expired_at_intake),
+                    # но и не то, что должно пройти незамеченным: пишем
+                    # предупреждающую запись в журнал аудита.
+                    if is_expired_at_intake(self.retention_until):
+                        from apps.audit.models import AuditLog
 
-            if is_new:
-                # Обратная загрузка старого документа с уже истёкшим по матрице
-                # сроком хранения — не ошибка данных (см. retention.is_expired_at_intake),
-                # но и не то, что должно пройти незамеченным: пишем
-                # предупреждающую запись в журнал аудита.
-                if is_expired_at_intake(self.retention_until):
+                        AuditLog.objects.create(
+                            event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
+                            object_type="NormativeDocument",
+                            object_id=self.reg_number,
+                            details={
+                                "retention_category": self.retention_category,
+                                "retention_until": self.retention_until.isoformat(),
+                            },
+                        )
+                else:
                     from apps.audit.models import AuditLog
 
                     AuditLog.objects.create(
-                        event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
+                        event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
                         object_type="NormativeDocument",
                         object_id=self.reg_number,
                         details={
-                            "retention_category": self.retention_category,
-                            "retention_until": self.retention_until.isoformat(),
+                            "old_category": previous_category,
+                            "new_category": self.retention_category,
                         },
                     )
-                return
 
-            from apps.audit.models import AuditLog
+            if status_changed:
+                # Усиление аудита (решение Заказчика). Событие выбирается по
+                # НОВОМУ статусу — только два самых однозначных случая
+                # получают уже существовавшие (ранее ни разу не написанные)
+                # специализированные типы DOCUMENT_PUBLISHED/DOCUMENT_REVOKED;
+                # любой другой переход (DRAFT -> ACTIVE_AMENDED, ACTIVE ->
+                # ARCHIVED и т.д.) — новый общий DOCUMENT_STATUS_CHANGED, а
+                # не досочинённая под него семантика специализированных типов.
+                from apps.audit.models import AuditLog
 
-            AuditLog.objects.create(
-                event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
-                object_type="NormativeDocument",
-                object_id=self.reg_number,
-                details={
-                    "old_category": previous_category,
-                    "new_category": self.retention_category,
-                },
-            )
+                event_type = {
+                    self.Status.ACTIVE: AuditLog.EventType.DOCUMENT_PUBLISHED,
+                    self.Status.REVOKED: AuditLog.EventType.DOCUMENT_REVOKED,
+                }.get(self.status, AuditLog.EventType.DOCUMENT_STATUS_CHANGED)
+
+                actor = getattr(self, "_audit_actor", None)
+                AuditLog.objects.create(
+                    event_type=event_type,
+                    actor=actor,
+                    actor_personnel_number=getattr(actor, "personnel_number", ""),
+                    object_type="NormativeDocument",
+                    object_id=self.reg_number,
+                    details={"old_status": previous_status, "new_status": self.status},
+                )
 
 
 class DocumentRelationQuerySet(models.QuerySet):

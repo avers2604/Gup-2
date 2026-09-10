@@ -14,7 +14,7 @@ def _make_user(role, personnel_number="0001"):
     )
     return User.objects.create(
         personnel_number=personnel_number, last_name="Иванов", first_name="Пётр",
-        position="Куратор", department=dept, role=role,
+        position="Контролёр", department=dept, role=role,
     )
 
 
@@ -28,7 +28,9 @@ def _make_entry(entry_id="term", status=ThesaurusStatus.DRAFT):
 class ThesaurusAdminCurationPermissionTests(TestCase):
     """cb0713a добавил проверку роли на mark_verified/mark_rejected —
     здесь проверяем, что она реально блокирует «Читателя» и реально
-    пропускает «Куратора», а не просто существует как мёртвый код."""
+    пропускает «Контролёра/Юриста» (роль, унаследовавшая функционал
+    упразднённого «Куратора службы», см. apps/iam/models.py), а не просто
+    существует как мёртвый код."""
 
     def setUp(self):
         self.factory = RequestFactory()
@@ -48,10 +50,10 @@ class ThesaurusAdminCurationPermissionTests(TestCase):
         entry.refresh_from_db()
         self.assertEqual(entry.status, ThesaurusStatus.DRAFT)
 
-    def test_curator_can_verify(self):
+    def test_controller_lawyer_can_verify(self):
         entry = _make_entry()
-        curator = _make_user(User.Role.CURATOR)
-        self.admin.mark_verified(self._request_as(curator), ThesaurusEntry.objects.filter(pk=entry.pk))
+        controller = _make_user(User.Role.CONTROLLER_LAWYER)
+        self.admin.mark_verified(self._request_as(controller), ThesaurusEntry.objects.filter(pk=entry.pk))
         entry.refresh_from_db()
         self.assertEqual(entry.status, ThesaurusStatus.VERIFIED)
 
@@ -77,8 +79,8 @@ class ThesaurusAdminCurationAuditTests(TestCase):
 
     def test_verify_writes_audit_entry_with_operator_and_diff(self):
         entry = _make_entry()
-        curator = _make_user(User.Role.CURATOR, personnel_number="0042")
-        self.admin.mark_verified(self._request_as(curator), ThesaurusEntry.objects.filter(pk=entry.pk))
+        controller = _make_user(User.Role.CONTROLLER_LAWYER, personnel_number="0042")
+        self.admin.mark_verified(self._request_as(controller), ThesaurusEntry.objects.filter(pk=entry.pk))
 
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.THESAURUS_UPDATED)
         self.assertEqual(entries.count(), 1)
@@ -98,8 +100,8 @@ class ThesaurusAdminCurationAuditTests(TestCase):
         # Идемпотентность действия: повторный клик "подтвердить" на уже
         # подтверждённой записи не должен создавать шум в WORM-журнале.
         entry = _make_entry(status=ThesaurusStatus.VERIFIED)
-        curator = _make_user(User.Role.CURATOR)
-        self.admin.mark_verified(self._request_as(curator), ThesaurusEntry.objects.filter(pk=entry.pk))
+        controller = _make_user(User.Role.CONTROLLER_LAWYER)
+        self.admin.mark_verified(self._request_as(controller), ThesaurusEntry.objects.filter(pk=entry.pk))
         self.assertFalse(
             AuditLog.objects.filter(event_type=AuditLog.EventType.THESAURUS_UPDATED).exists()
         )

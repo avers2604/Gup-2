@@ -2,11 +2,19 @@ import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
+from django.utils import timezone
 
 from apps.core.models import TimeStampedModel, UUIDPKModel
 
 from .managers import UserManager
 from .validators import cyrillic_name_validator, personnel_number_validator
+
+# Срок действия пароля (решение Заказчика: усиление аудита/парольной
+# политики) — 365 дней с момента последней смены.
+PASSWORD_EXPIRY_DAYS = 365
+# Глубина истории паролей, которую нельзя повторно использовать (решение
+# Заказчика) — см. PasswordHistoryEntry и apps.iam.validators.PasswordHistoryValidator.
+PASSWORD_HISTORY_DEPTH = 10
 
 
 class Department(UUIDPKModel, TimeStampedModel):
@@ -67,8 +75,22 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     не придуманы отдельно от него."""
 
     class Role(models.TextChoices):
+        # «Куратор службы» упразднён отдельным решением Заказчика (ТЗ-БЗ-ГЭТ-
+        # 2026-V2.2, доп. решение — не отдельная ревизия ТЗ, а прямое указание
+        # в рамках этой сессии): весь функционал роли передан на роль выше по
+        # ROLE_PRIVILEGE_ORDER — CONTROLLER_LAWYER (см. миграцию
+        # 0006_remove_curator_add_methodist, переносящую существующих
+        # пользователей с role=curator, и STACK.md → раздел про упразднение
+        # роли). Ни в одном месте кода роль CURATOR намеренно не оставлена —
+        # вырезана полностью, а не помечена deprecated.
         READER = "reader", "Читатель"
-        CURATOR = "curator", "Куратор службы"
+        # «Методист подразделения» — новая роль (п.8.1 решения Заказчика,
+        # «для Б1»). Приложение Б1 самого ТЗ сюда не передано, поэтому явный
+        # численный уровень привилегий роли не специфицирован документом —
+        # размещение в ROLE_PRIVILEGE_ORDER сразу после READER (вместо
+        # упразднённого CURATOR) это самостоятельное, а не вычитанное из ТЗ
+        # решение; см. открытый вопрос в STACK.md.
+        METHODIST = "methodist", "Методист подразделения"
         CONTROLLER_LAWYER = "controller_lawyer", "Контролёр / Юрист"
         SECURITY_OFFICER = "security_officer", "Офицер ИБ"
         ADMINISTRATOR = "administrator", "Администратор"
@@ -108,6 +130,16 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     # не блокирует включение 2FA сейчас.
     totp_secret = models.CharField(max_length=64, blank=True, editable=False, verbose_name="Секрет TOTP")
 
+    # Момент последней фактической смены пароля (включая первую установку
+    # при создании учётной записи) — источник для is_password_expired.
+    # editable=False: выставляется только из save() по факту реального
+    # изменения хэша, а не через форму. NULL — учётная запись, для которой
+    # это ещё ни разу не отслеживалось (например, создана до появления
+    # этого поля) — см. is_password_expired про честную границу такого случая.
+    password_changed_at = models.DateTimeField(
+        null=True, blank=True, editable=False, verbose_name="Пароль изменён",
+    )
+
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
 
@@ -116,10 +148,15 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     USERNAME_FIELD = "personnel_number"
     REQUIRED_FIELDS = ["last_name", "first_name", "position", "department"]
 
-    # Порядок privilege-уровней ролей — дословно порядок перечисления в ТЗ
-    # 4.6 («Читатель … Куратор … Контролёр/Юрист … Офицер ИБ …
-    # Администратор»). Используется для определения «повышения роли» при
-    # импорте персонала — не придуман отдельно, только формализован.
+    # Порядок privilege-уровней ролей — изначально дословно порядок
+    # перечисления в ТЗ 4.6 («Читатель … Куратор … Контролёр/Юрист … Офицер
+    # ИБ … Администратор»); CURATOR с этой сессии упразднён отдельным
+    # решением Заказчика, METHODIST добавлен на его место в порядке (см.
+    # Role выше — размещение METHODIST здесь НЕ из ТЗ, самостоятельное
+    # решение, задокументировано в STACK.md). Используется для определения
+    # «повышения роли» при импорте персонала и для комплексного аудита
+    # изменений ролей (User.save()) — не придуман отдельно, только
+    # формализован.
     #
     # ВАЖНО: Офицер ИБ и Контролёр/Юрист по смыслу — параллельные ветки
     # аудита (безопасность vs юридическая проверка), а не один выше
@@ -129,7 +166,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     # линейный порядок привилегий ролей», нужно решение Заказчика/ЧТЗ
     # до того, как такой переход реально пройдёт через импорт.
     ROLE_PRIVILEGE_ORDER = [
-        Role.READER, Role.CURATOR, Role.CONTROLLER_LAWYER, Role.SECURITY_OFFICER, Role.ADMINISTRATOR,
+        Role.READER, Role.METHODIST, Role.CONTROLLER_LAWYER, Role.SECURITY_OFFICER, Role.ADMINISTRATOR,
     ]
 
     class Meta:
@@ -145,8 +182,10 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
 
     @property
     def requires_totp(self):
-        """Роли, для которых TOTP обязателен (ТЗ 4.7)."""
-        return self.role in {self.Role.ADMINISTRATOR, self.Role.CONTROLLER_LAWYER, self.Role.CURATOR}
+        """Роли, для которых TOTP обязателен. Сужено решением Заказчика:
+        раньше — Администратор/Контролёр-Юрист/Куратор, теперь — только
+        Администратор (роль Куратор при этом упразднена, см. Role)."""
+        return self.role == self.Role.ADMINISTRATOR
 
     def role_rank(self):
         try:
@@ -154,17 +193,50 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         except ValueError:
             return -1
 
+    @property
+    def is_password_expired(self):
+        """365-дневный срок действия пароля (решение Заказчика) — ТОЛЬКО
+        информационный флаг, той же честной границы, что и
+        status=PASSWORD_CHANGE_REQUIRED (см. STACK.md): ни один Web/API
+        эндпоинт сейчас его не проверяет и не блокирует вход по нему,
+        потому что в проекте ещё нет ни одной вьюхи смены пароля, на
+        которую можно было бы принудительно перенаправить. password_changed_at
+        = NULL (учётная запись без отслеживаемой истории смены пароля,
+        например импортированная до появления этого поля) трактуется как
+        «не просрочен» — а не наоборот: в отличие от retention_until (где
+        NULL = «под блокировкой», ошибка в обратную сторону опасна для
+        WORM), здесь ложное «не просрочен» на нетипичной записи — не
+        угроза безопасности сама по себе, только повод администратору
+        поднять историю вручную."""
+        if self.password_changed_at is None:
+            return False
+        return (timezone.now() - self.password_changed_at).days >= PASSWORD_EXPIRY_DAYS
+
     def save(self, *args, **kwargs):
         # status — источник истины для жизненного цикла учётной записи;
         # is_active синхронизируется от него, а не задаётся отдельно, чтобы
         # два поля не могли разъехаться (is_active нужен Django-аутентификации
         # как есть — под него нельзя просто подставить свойство).
-        was_blocked = (
-            type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
-            == self.Status.BLOCKED
+        previous = (
+            type(self).objects.filter(pk=self.pk)
+            .values_list("status", "role", "password", flat=False)
+            .first()
         )
+        was_blocked = previous is not None and previous[0] == self.Status.BLOCKED
+        previous_role = previous[1] if previous is not None else None
+        previous_password_hash = previous[2] if previous is not None else None
+        is_new = previous is None
+        role_changed = not is_new and previous_role != self.role
+        password_changed = is_new or previous_password_hash != self.password
+
         self.is_active = self.status != self.Status.BLOCKED
+        if password_changed:
+            self.password_changed_at = timezone.now()
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"] = set(kwargs["update_fields"]) | {"password_changed_at"}
+
         super().save(*args, **kwargs)
+
         # Принудительный сброс сессий при блокировке (ТЗ 4.7) — is_active
         # сам по себе не выкидывает уже вошедшего пользователя, только
         # запрещает будущий вход. Срабатывает именно на ПЕРЕХОД в blocked,
@@ -173,3 +245,74 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
             from .sessions import force_logout_user
 
             force_logout_user(self.pk)
+
+        # Комплексный аудит изменений ролей (решение Заказчика: «фиксировать
+        # все изменения ролей — кто изменил, кому, какая роль, метка
+        # времени») — любое реальное изменение role, независимо от
+        # направления (не только повышение) и независимо от HTTP-контура
+        # или его отсутствия (admin, будущий API управления пользователями).
+        # actor берётся из необязательного транзитного атрибута _audit_actor
+        # (не поле модели — не должен персистироваться), который обязан
+        # выставить вызывающий код ДО save(), если знает, кто выполняет
+        # изменение (см. UserAdmin.save_model, apps.iam.services.import_personnel)
+        # — у save() самого по себе нет доступа к HTTP-запросу/оператору.
+        # Не заменяет собой более узкое AuditLog.EventType.USER_ROLE_ELEVATED
+        # (apps.iam.services._is_role_elevated, только для импорта, только
+        # повышение) — оба события могут быть записаны на одно и то же
+        # изменение, это намеренное пересечение под разных потребителей
+        # (комплексный аудит vs узкий сигнал повышения при импорте), см.
+        # STACK.md.
+        if role_changed:
+            from apps.audit.models import AuditLog
+
+            actor = getattr(self, "_audit_actor", None)
+            AuditLog.objects.create(
+                event_type=AuditLog.EventType.USER_ROLE_CHANGED,
+                actor=actor,
+                actor_personnel_number=getattr(actor, "personnel_number", ""),
+                object_type="User",
+                object_id=str(self.pk),
+                details={
+                    "target_personnel_number": self.personnel_number,
+                    "previous_role": previous_role,
+                    "new_role": self.role,
+                },
+            )
+
+        # Парольная политика (решение Заказчика): история последних
+        # PASSWORD_HISTORY_DEPTH паролей — нельзя использовать повторно
+        # (apps.iam.validators.PasswordHistoryValidator). В историю
+        # попадает именно ЗАМЕНЯЕМЫЙ (старый) хэш, а не новый — на новый
+        # смотреть пока не на что, а старый в этот момент как раз
+        # становится «использованным ранее» для будущих проверок. На
+        # создании учётной записи (is_new) писать нечего — предыдущего
+        # пароля не существовало.
+        if password_changed and not is_new and previous_password_hash:
+            PasswordHistoryEntry.objects.create(user=self, password_hash=previous_password_hash)
+            stale_ids = list(
+                PasswordHistoryEntry.objects.filter(user=self)
+                .order_by("-created_at")
+                .values_list("id", flat=True)[PASSWORD_HISTORY_DEPTH:]
+            )
+            if stale_ids:
+                PasswordHistoryEntry.objects.filter(id__in=stale_ids).delete()
+
+
+class PasswordHistoryEntry(UUIDPKModel):
+    """Хэши ранее использованных паролей — под запрет повторного
+    использования последних PASSWORD_HISTORY_DEPTH (решение Заказчика).
+    Хранится только хэш (тот же алгоритм, что и User.password — Argon2id),
+    не сам пароль — проверка через django.contrib.auth.hashers.check_password(),
+    та же функция, что и обычная аутентификация."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="password_history")
+    password_hash = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Запись истории паролей"
+        verbose_name_plural = "История паролей"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.user.personnel_number} · {self.created_at:%Y-%m-%d %H:%M}"

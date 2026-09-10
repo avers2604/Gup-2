@@ -60,7 +60,7 @@ class TokenObtainView(APIView):
         # SESSION_LOGIN здесь же, что и в Web-контуре — событие означает
         # "пользователь вошёл", не буквально "создана Django-сессия"; для
         # JWT это выдача пары токенов.
-        services.record_session_login(result.user)
+        services.record_session_login(result.user, request)
         return Response({"totp_required": False, **_issue_tokens(result.user)})
 
 
@@ -80,11 +80,12 @@ class TotpVerifyView(APIView):
         user = services.verify_totp_login(
             ticket=serializer.validated_data["ticket"],
             code=serializer.validated_data["code"],
+            request=request,
         )
         if user is None:
             return Response({"detail": "Неверный код."}, status=status.HTTP_401_UNAUTHORIZED)
 
-        services.record_session_login(user)
+        services.record_session_login(user, request)
         return Response(_issue_tokens(user))
 
 

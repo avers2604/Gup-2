@@ -44,3 +44,11 @@ class UserAdmin(DjangoUserAdmin):
         if not request.user.is_superuser:
             fields += ("is_staff", "is_superuser", "groups", "user_permissions")
         return fields
+
+    def save_model(self, request, obj, form, change):
+        # Транзитный атрибут (не поле модели) — User.save() читает его,
+        # чтобы записать оператора в комплексный аудит смены роли
+        # (усиление аудита, решение Заказчика). save() сам по себе не
+        # видит HTTP-запрос/текущего администратора.
+        obj._audit_actor = request.user
+        super().save_model(request, obj, form, change)
