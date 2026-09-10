@@ -1,59 +1,17 @@
+"""Обработчики доменных событий учётной записи (apps.core.domain_events).
+
+Побочные эффекты, выходящие за границу самой записи User: принудительный
+сброс сессий при блокировке и ведение истории паролей. Сами события
+публикует User.save() (apps/iam/models.py) — этот модуль ничего не
+подменяет и не патчит, только подписывается; подключается один раз из
+IamConfig.ready().
+"""
 from __future__ import annotations
 
-from django.db import models as dj_models
-from django.utils import timezone
+from apps.core.domain_events import register
 
-from apps.core.domain_events import publish, register
-
-from .models import PASSWORD_HISTORY_DEPTH, PasswordHistoryEntry, User
+from .models import PASSWORD_HISTORY_DEPTH, PasswordHistoryEntry
 from .sessions import force_logout_user
-
-
-def _save_without_side_effects(self, *args, **kwargs):
-    """Persist User state and emit domain events; handlers own side effects."""
-    previous = (
-        type(self).objects.filter(pk=self.pk)
-        .values_list("status", "role", "password", flat=False)
-        .first()
-    )
-    was_blocked = previous is not None and previous[0] == self.Status.BLOCKED
-    previous_role = previous[1] if previous is not None else None
-    previous_password_hash = previous[2] if previous is not None else None
-    is_new = previous is None
-    role_changed = not is_new and previous_role != self.role
-    password_changed = is_new or previous_password_hash != self.password
-
-    self.is_active = self.status != self.Status.BLOCKED
-    if password_changed:
-        self.password_changed_at = timezone.now()
-        if kwargs.get("update_fields") is not None:
-            kwargs["update_fields"] = set(kwargs["update_fields"]) | {"password_changed_at"}
-
-    dj_models.Model.save(self, *args, **kwargs)
-
-    if self.status == self.Status.BLOCKED and not was_blocked:
-        publish("user.blocked", user=self)
-
-    if role_changed:
-        publish(
-            "user.role.changed",
-            user=self,
-            actor=getattr(self, "_audit_actor", None),
-            previous_role=previous_role,
-            new_role=self.role,
-        )
-
-    if password_changed and not is_new and previous_password_hash:
-        publish(
-            "user.password.changed",
-            user=self,
-            previous_password_hash=previous_password_hash,
-        )
-
-
-# The model keeps state-transition mechanics only at runtime; cross-cutting
-# effects are registered below / in apps.audit.handlers.
-User.save = _save_without_side_effects  # type: ignore[method-assign]
 
 
 @register("user.blocked")

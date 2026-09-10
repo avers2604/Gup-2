@@ -29,6 +29,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.audit.models import AuditLog
+from apps.core.domain_events import publish
 
 from .models import Department, User
 from .totp import generate_totp_secret, totp_provisioning_uri, verify_totp_code
@@ -244,19 +245,20 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
                 # цикл работает только с tab_number, реально присутствующими
                 # в текущем файле. Единственный способ деактивировать
                 # учётную запись — status=blocked явно в файле (выше).
+                # Узкий сигнал «роль повышена при импорте» — отдельно от
+                # комплексного "user.role.changed", который публикует сам
+                # User.save() на любое изменение роли (намеренное
+                # пересечение под разных потребителей, см. STACK.md).
+                # Запись в WORM-журнал делает обработчик события
+                # (apps/audit/handlers.py), не этот модуль.
                 if is_update and _is_role_elevated(previous_role, role):
-                    AuditLog.objects.create(
-                        event_type=AuditLog.EventType.USER_ROLE_ELEVATED,
+                    publish(
+                        "user.role.elevated",
+                        user=user,
                         actor=actor,
-                        actor_personnel_number=actor.personnel_number if actor else "",
-                        object_type="User",
-                        object_id=str(user.pk),
-                        details={
-                            "target_personnel_number": tab_number,
-                            "previous_role": previous_role,
-                            "new_role": role,
-                            "source": "personnel_import",
-                        },
+                        previous_role=previous_role,
+                        new_role=role,
+                        source="personnel_import",
                     )
         except (ValueError, ValidationError, IntegrityError) as exc:
             report.errors.append(ImportRowResult(row_number, tab_number, _format_error(exc)))
