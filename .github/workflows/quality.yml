@@ -8,6 +8,15 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      POSTGRES_DB: bz_get
+      POSTGRES_USER: bz_get
+      POSTGRES_PASSWORD: ci-postgres-password
+      MINIO_ACCESS_KEY: ci-minio-access-key
+      MINIO_SECRET_KEY: ci-minio-secret-key
+      MINIO_BUCKET_ORIGINALS: originals
+      MINIO_BUCKET_WORKING: working
+      GRAFANA_ADMIN_PASSWORD: ci-grafana-password
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
