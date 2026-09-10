@@ -3,6 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 bash -n "$SCRIPT_DIR/acceptance-cycle.sh"
+bash -n "$SCRIPT_DIR/extended-checks.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -92,6 +93,18 @@ bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 preflight >/dev/null
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 checkpoint planned-switchover-complete >/dev/null
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 checkpoint pitr-validated >/dev/null
 
+cat >"$tmp/evidence/ci-stage4/extended-results.env" <<'EOF'
+search_reindex_documents=10000
+search_reindex_seconds=3599
+search_reindex_limit_seconds=3600
+search_reindex_result=PASS
+queue_worker_kill_result=PASS
+queue_redis_kill_result=PASS
+minio_hash_sample_count=500
+minio_hash_mismatches=0
+minio_hash_result=PASS
+EOF
+
 env \
   ACCEPTANCE_ENV="$tmp/acceptance.env" \
   ACCEPTANCE_DB_RESULT=PASS \
@@ -106,23 +119,55 @@ env \
 grep -q 'Overall: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'observed_rpo_seconds: 10' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-stage4/RESULT.md"
-grep -q 'planned-switchover-complete' "$tmp/evidence/ci-stage4/checkpoints.csv"
-grep -q 'pitr-validated' "$tmp/evidence/ci-stage4/checkpoints.csv"
+grep -q 'Cold search reindex documents: 10000' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Cold search reindex seconds: 3599' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'MinIO SHA-256 sample files: 500' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Celery worker kill -9 / redelivery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Redis kill -9 / recovery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 
-# A failed subsystem must make finalize fail closed and report overall FAIL.
+# Reindex over the 60-minute threshold must be a hard discrepancy, even if all
+# legacy DB/MinIO/Alert/Application flags are PASS.
+bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-slow preflight >/dev/null
+cat >"$tmp/evidence/ci-stage4-slow/extended-results.env" <<'EOF'
+search_reindex_documents=10000
+search_reindex_seconds=3601
+search_reindex_limit_seconds=3600
+search_reindex_result=FAIL
+queue_worker_kill_result=PASS
+queue_redis_kill_result=PASS
+minio_hash_sample_count=500
+minio_hash_mismatches=0
+minio_hash_result=PASS
+EOF
 if env \
   ACCEPTANCE_ENV="$tmp/acceptance.env" \
   ACCEPTANCE_DB_RESULT=PASS \
-  ACCEPTANCE_MINIO_RESULT=FAIL \
+  ACCEPTANCE_MINIO_RESULT=PASS \
   ACCEPTANCE_ALERT_RESULT=PASS \
   ACCEPTANCE_APP_RESULT=PASS \
   ACCEPTANCE_INCIDENT_UTC=2026-09-10T20:00:00Z \
   ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T19:59:55Z \
   ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T20:01:00Z \
-  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-fail finalize >/dev/null 2>&1; then
-  echo 'ERROR: finalize accepted a failed subsystem' >&2
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-slow finalize >/dev/null 2>&1; then
+  echo 'ERROR: finalize accepted cold reindex > 60 minutes' >&2
   exit 1
 fi
-grep -q 'Overall: \*\*FAIL\*\*' "$tmp/evidence/ci-stage4-fail/RESULT.md"
+grep -q 'DISCREPANCY: cold reindex' "$tmp/evidence/ci-stage4-slow/RESULT.md"
+
+# Any missing extended check must also fail closed.
+bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-missing preflight >/dev/null
+if env \
+  ACCEPTANCE_ENV="$tmp/acceptance.env" \
+  ACCEPTANCE_DB_RESULT=PASS \
+  ACCEPTANCE_MINIO_RESULT=PASS \
+  ACCEPTANCE_ALERT_RESULT=PASS \
+  ACCEPTANCE_APP_RESULT=PASS \
+  ACCEPTANCE_INCIDENT_UTC=2026-09-10T21:00:00Z \
+  ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T20:59:55Z \
+  ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T21:01:00Z \
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-missing finalize >/dev/null 2>&1; then
+  echo 'ERROR: finalize accepted NOT_RUN extended checks' >&2
+  exit 1
+fi
 
 echo 'Stage 4 acceptance harness validation passed.'

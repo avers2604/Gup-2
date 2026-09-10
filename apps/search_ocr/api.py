@@ -6,8 +6,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.business_metrics import record_search
+
 from .forms import SearchForm
-from .search import search_documents
+from .indexed_search import search_documents_indexed
 from .throttles import SearchApiThrottle
 
 
@@ -35,7 +37,7 @@ class DocumentSearchAPIView(APIView):
         if not query:
             return Response({"count": 0, "next": None, "previous": None, "results": []})
 
-        queryset = search_documents(
+        queryset = search_documents_indexed(
             request.user,
             query,
             category=form.cleaned_data.get("category") or None,
@@ -46,6 +48,10 @@ class DocumentSearchAPIView(APIView):
         page = paginator.paginate_queryset(queryset, request, view=self)
         if page is None:
             page = []
+            count = len(page)
+        else:
+            count = paginator.page.paginator.count
+        record_search(count)
 
         results = [
             {
