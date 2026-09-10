@@ -43,10 +43,9 @@ class ClamdTestServer:
         db_dir = Path(self._tmpdir) / "db"
         db_dir.mkdir()
 
-        # .hdb — сигнатура по точному MD5+размеру файла (не по фрагменту
-        # содержимого) — простейший формат, которого достаточно, чтобы
-        # детектировать ровно EICAR_BYTES и ничего больше.
-        md5 = hashlib.md5(EICAR_BYTES).hexdigest()
+        # ClamAV .hdb requires MD5+size as its signature format. This digest
+        # is deliberately not used for authentication/integrity/security.
+        md5 = hashlib.md5(EICAR_BYTES, usedforsecurity=False).hexdigest()
         (db_dir / "eicar.hdb").write_text(f"{md5}:{len(EICAR_BYTES)}:Eicar-Test-Signature\n")
 
         conf_path = Path(self._tmpdir) / "clamd.conf"
