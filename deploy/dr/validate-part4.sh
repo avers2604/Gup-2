@@ -72,16 +72,16 @@ common_env=(
   PGBACKREST_BIN="$tmp/bin/pgbackrest"
 )
 
-env "${common_env[@]}" "$SCRIPT_DIR/rebuild-replica.sh" db2 >/dev/null
+env "${common_env[@]}" bash "$SCRIPT_DIR/rebuild-replica.sh" db2 >/dev/null
 if [[ -s "$FAKE_REINIT_LOG" ]]; then
   echo 'ERROR: dry-run executed patronictl reinit' >&2
   exit 1
 fi
 
-env "${common_env[@]}" "$SCRIPT_DIR/rebuild-replica.sh" db2 --execute >/dev/null
+env "${common_env[@]}" bash "$SCRIPT_DIR/rebuild-replica.sh" db2 --execute >/dev/null
 grep -q 'reinit bz-get db2 --wait --force' "$FAKE_REINIT_LOG"
 
-if env "${common_env[@]}" "$SCRIPT_DIR/rebuild-replica.sh" db1 --execute >/dev/null 2>&1; then
+if env "${common_env[@]}" bash "$SCRIPT_DIR/rebuild-replica.sh" db1 --execute >/dev/null 2>&1; then
   echo 'ERROR: leader rebuild was not rejected' >&2
   exit 1
 fi
@@ -92,7 +92,7 @@ env \
   PATRONI_EXPECTED_SCOPE=bz-get \
   PGBACKREST_BIN="$tmp/bin/pgbackrest" \
   FAKE_RESTORE_LOG="$FAKE_RESTORE_LOG" \
-  "$SCRIPT_DIR/patroni-pgbackrest-restore.sh" \
+  bash "$SCRIPT_DIR/patroni-pgbackrest-restore.sh" \
   --scope=bz-get --datadir="$tmp/data" --role=replica --connstring='host=db1' >/dev/null
 
 grep -q -- '--stanza=bz-get' "$FAKE_RESTORE_LOG"
@@ -109,7 +109,7 @@ if env \
   PATRONI_ALLOWED_DATA_ROOT="$tmp" \
   PATRONI_EXPECTED_SCOPE=bz-get \
   PGBACKREST_BIN="$tmp/bin/pgbackrest" \
-  "$SCRIPT_DIR/patroni-pgbackrest-restore.sh" \
+  bash "$SCRIPT_DIR/patroni-pgbackrest-restore.sh" \
   --scope=bz-get --datadir="$tmp/data" --role=replica >/dev/null 2>&1; then
   echo 'ERROR: restore wrapper ran with an unapproved marker' >&2
   exit 1
@@ -123,7 +123,7 @@ env \
   PGBACKREST_BIN="$tmp/bin/pgbackrest" \
   MINIO_DR_ENV="$tmp/missing-minio.env" \
   ALERTMANAGER_URL='' \
-  "$SCRIPT_DIR/combined-drill.sh" preflight >/dev/null
+  bash "$SCRIPT_DIR/combined-drill.sh" preflight >/dev/null
 
 env \
   DRILL_ID=ci-part4 \
@@ -133,7 +133,7 @@ env \
   PGBACKREST_BIN="$tmp/bin/pgbackrest" \
   MINIO_DR_ENV="$tmp/missing-minio.env" \
   ALERTMANAGER_URL='' \
-  "$SCRIPT_DIR/combined-drill.sh" checkpoint failover-complete >/dev/null
+  bash "$SCRIPT_DIR/combined-drill.sh" checkpoint failover-complete >/dev/null
 
 env \
   DRILL_ID=ci-part4 \
@@ -146,21 +146,21 @@ env \
   DRILL_INCIDENT_UTC=2026-09-10T19:00:00Z \
   DRILL_LAST_DURABLE_UTC=2026-09-10T18:59:50Z \
   DRILL_SERVICE_RESTORED_UTC=2026-09-10T19:03:00Z \
-  "$SCRIPT_DIR/combined-drill.sh" finish >/dev/null
+  bash "$SCRIPT_DIR/combined-drill.sh" finish >/dev/null
 
 grep -q 'observed_rpo_upper_bound_seconds: 10' "$tmp/evidence/ci-part4/RESULT.md"
 grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-part4/RESULT.md"
 grep -q 'failover-complete' "$tmp/evidence/ci-part4/checkpoints.csv"
 
 # Approval helper must refuse TBD and accept exactly one signed PASS decision.
-if env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
+if env DRILL_EVIDENCE_ROOT="$tmp/evidence" bash "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
   echo 'ERROR: approval helper accepted an unsigned/TBD drill' >&2
   exit 1
 fi
 sed -i 's/^PASS\/FAIL: TBD.*/PASS\/FAIL: PASS/' "$tmp/evidence/ci-part4/RESULT.md"
-env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null
+env DRILL_EVIDENCE_ROOT="$tmp/evidence" bash "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null
 printf '\nPASS/FAIL: PASS\n' >>"$tmp/evidence/ci-part4/RESULT.md"
-if env DRILL_EVIDENCE_ROOT="$tmp/evidence" "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
+if env DRILL_EVIDENCE_ROOT="$tmp/evidence" bash "$SCRIPT_DIR/approve-pgbackrest-rebuild.sh" ci-part4 ci-reviewer >/dev/null 2>&1; then
   echo 'ERROR: approval helper accepted multiple PASS/FAIL decisions' >&2
   exit 1
 fi
