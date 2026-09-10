@@ -42,13 +42,11 @@ done
 }
 
 cluster_json="$(patronictl -c "$PATRONI_CONFIG" list "$PATRONI_SCOPE" --format=json)"
-python3 - "$member" <<'PY' <<<"$cluster_json"
+python3 -c '
 import json, sys
 member = sys.argv[1]
 rows = json.load(sys.stdin)
-normalized = []
-for row in rows:
-    normalized.append({str(k).strip().lower(): v for k, v in row.items()})
+normalized = [{str(k).strip().lower(): v for k, v in row.items()} for row in rows]
 selected = next((r for r in normalized if str(r.get("member", "")) == member), None)
 if selected is None:
     raise SystemExit(f"member {member!r} not found in Patroni cluster")
@@ -61,24 +59,24 @@ if "replica" not in role and "standby" not in role:
 leaders = [r for r in normalized if str(r.get("role", "")).strip().lower() in {"leader", "primary"}]
 if len(leaders) != 1:
     raise SystemExit(f"expected exactly one writable leader before replica rebuild, found {len(leaders)}")
-print(f"Preflight Patroni: target={member} role={role} state={state}; leader={leaders[0].get('member')}")
-PY
+print(f"Preflight Patroni: target={member} role={role} state={state}; leader={leaders[0].get(chr(109)+chr(101)+chr(109)+chr(98)+chr(101)+chr(114))}")
+' "$member" <<<"$cluster_json"
 
 info_json="$("$PGBACKREST_BIN" --stanza="$PATRONI_SCOPE" info --output=json)"
-python3 - <<'PY' <<<"$info_json"
+python3 -c '
 import json, sys
 payload = json.load(sys.stdin)
 if not payload:
     raise SystemExit("pgBackRest info returned no stanza")
 stanza = payload[0]
 if stanza.get("status", {}).get("code") not in (0, None):
-    raise SystemExit(f"pgBackRest stanza unhealthy: {stanza.get('status')}")
+    raise SystemExit(f"pgBackRest stanza unhealthy: {stanza.get(chr(115)+chr(116)+chr(97)+chr(116)+chr(117)+chr(115))}")
 backups = stanza.get("backup") or []
 if not backups:
     raise SystemExit("pgBackRest repository has no backup sets")
 latest = backups[-1]
 print("Preflight pgBackRest: backup sets=%d latest=%s" % (len(backups), latest.get("label", "unknown")))
-PY
+' <<<"$info_json"
 
 cmd=(patronictl -c "$PATRONI_CONFIG" reinit "$PATRONI_SCOPE" "$member" --wait --force)
 printf 'Planned command:'
@@ -95,7 +93,7 @@ echo "EXECUTE: replica rebuild started at $start_utc"
 "${cmd[@]}"
 
 post_json="$(patronictl -c "$PATRONI_CONFIG" list "$PATRONI_SCOPE" --format=json)"
-python3 - "$member" <<'PY' <<<"$post_json"
+python3 -c '
 import json, sys
 member = sys.argv[1]
 rows = [{str(k).strip().lower(): v for k, v in row.items()} for row in json.load(sys.stdin)]
@@ -109,7 +107,7 @@ if "replica" not in role and "standby" not in role:
 if state not in {"running", "streaming"}:
     raise SystemExit(f"post-check failed: state={state!r}")
 print(f"Post-check Patroni: target={member} role={role} state={state}")
-PY
+' "$member" <<<"$post_json"
 
 end_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "SUCCESS: replica rebuild completed at $end_utc"
