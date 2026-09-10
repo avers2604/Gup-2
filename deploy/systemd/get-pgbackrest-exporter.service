@@ -1,0 +1,21 @@
+[Unit]
+Description=BZ GET pgBackRest Prometheus exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+EnvironmentFile=/etc/bz-get/pgbackrest-exporter.env
+ExecStart=/usr/bin/python3 /usr/local/libexec/bz-get/pgbackrest_exporter.py
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/pgbackrest /var/lib/pgbackrest
+
+[Install]
+WantedBy=multi-user.target

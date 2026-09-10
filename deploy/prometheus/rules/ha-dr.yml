@@ -1,0 +1,217 @@
+groups:
+  - name: bz-get-patroni-ha
+    rules:
+      - alert: PatroniTargetDown
+        expr: up{job="patroni"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: patroni
+        annotations:
+          summary: "Patroni endpoint {{ $labels.instance }} недоступен"
+          description: "Prometheus не может опросить Patroni более минуты. Проверить сеть, Patroni и PostgreSQL на узле."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniPrimaryCountInvalid
+        expr: (sum(patroni_primary{scope="bz-get"}) != 1) or absent(patroni_primary{scope="bz-get"})
+        for: 30s
+        labels:
+          severity: critical
+          component: patroni
+        annotations:
+          summary: "В кластере не ровно один primary"
+          description: "Нормальное состояние Patroni — ровно один primary. Значение 0 означает потерю leader, >1 требует немедленной проверки split-brain/метрик."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniPostgresDown
+        expr: patroni_postgres_running{scope="bz-get"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: postgresql
+        annotations:
+          summary: "PostgreSQL не запущен на {{ $labels.name }}"
+          description: "Patroni доступен, но сообщает patroni_postgres_running=0."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniSyncStandbyMissing
+        expr: (sum(patroni_sync_standby{scope="bz-get"}) < 1) or absent(patroni_sync_standby{scope="bz-get"})
+        for: 2m
+        labels:
+          severity: warning
+          component: replication
+        annotations:
+          summary: "Нет синхронной standby-реплики"
+          description: "Baseline Этапа 4 требует одну sync standby. При synchronous_mode_strict=false запись продолжится, но RPO=0 больше не гарантируется."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniReplicaReplayLagHigh
+        expr: ((scalar(max(patroni_xlog_location{scope="bz-get"})) - patroni_xlog_replayed_location{scope="bz-get"}) > 16777216) and on(scope,name) (patroni_replica{scope="bz-get"} == 1)
+        for: 2m
+        labels:
+          severity: warning
+          component: replication
+        annotations:
+          summary: "Высокий replay lag на {{ $labels.name }}"
+          description: "Replica отстаёт от текущего primary более чем примерно на 16 MiB WAL в течение 2 минут."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniDCSStale
+        expr: time() - patroni_dcs_last_seen{scope="bz-get"} > 60
+        for: 1m
+        labels:
+          severity: critical
+          component: etcd
+        annotations:
+          summary: "Patroni {{ $labels.name }} давно не видел DCS"
+          description: "Последний успешный контакт Patroni с DCS был более 60 секунд назад. Проверить etcd quorum и сеть."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniFailsafeModeActive
+        expr: patroni_failsafe_mode_is_active{scope="bz-get"} == 1
+        for: 30s
+        labels:
+          severity: critical
+          component: patroni
+        annotations:
+          summary: "Patroni failsafe mode активен на {{ $labels.name }}"
+          description: "Кластер работает в аварийном режиме доступа к DCS; автоматические действия должны сопровождаться ручной проверкой quorum."
+          runbook: "deploy/ha/README.md"
+
+      - alert: PatroniPendingRestart
+        expr: patroni_pending_restart{scope="bz-get"} == 1
+        for: 15m
+        labels:
+          severity: warning
+          component: patroni
+        annotations:
+          summary: "Patroni {{ $labels.name }} ожидает restart"
+          description: "Изменение конфигурации требует перезапуска PostgreSQL. Планировать rolling restart через patronictl."
+          runbook: "deploy/ha/README.md"
+
+  - name: bz-get-postgresql
+    rules:
+      - alert: PostgresExporterDown
+        expr: up{job="postgres_exporter"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: postgres_exporter
+        annotations:
+          summary: "postgres_exporter {{ $labels.instance }} недоступен"
+          description: "Нет телеметрии PostgreSQL с узла более 2 минут."
+          runbook: "deploy/monitoring/README.md"
+
+      - alert: PostgreSQLExporterCannotQuery
+        expr: pg_up{job="postgres_exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: postgresql
+        annotations:
+          summary: "postgres_exporter не может опросить PostgreSQL {{ $labels.instance }}"
+          description: "Exporter отвечает, но pg_up=0. Проверить PostgreSQL, TLS и роль postgres_exporter."
+          runbook: "deploy/monitoring/README.md"
+
+  - name: bz-get-pgbouncer
+    rules:
+      - alert: PgBouncerExporterDown
+        expr: up{job="pgbouncer_exporter"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: pgbouncer
+        annotations:
+          summary: "PgBouncer exporter {{ $labels.instance }} недоступен"
+          description: "Нет метрик пула соединений с app-узла."
+          runbook: "deploy/monitoring/README.md"
+
+      - alert: PgBouncerClientsWaiting
+        expr: sum by(instance) (pgbouncer_pools_client_waiting_connections) > 0
+        for: 2m
+        labels:
+          severity: warning
+          component: pgbouncer
+        annotations:
+          summary: "Клиенты ждут свободное соединение PgBouncer на {{ $labels.instance }}"
+          description: "Очередь не исчезает более 2 минут. Проверить pool size, DB latency и число workers приложения."
+          runbook: "deploy/monitoring/README.md"
+
+      - alert: PgBouncerClientMaxWaitHigh
+        expr: max by(instance) (pgbouncer_pools_client_maxwait_seconds) > 5
+        for: 1m
+        labels:
+          severity: critical
+          component: pgbouncer
+        annotations:
+          summary: "PgBouncer max wait > 5 секунд на {{ $labels.instance }}"
+          description: "Старейший ожидающий клиент не получает server connection более 5 секунд."
+          runbook: "deploy/monitoring/README.md"
+
+  - name: bz-get-pgbackrest-dr
+    rules:
+      - alert: PgBackRestExporterDown
+        expr: up{job="pgbackrest"} == 0 or pgbackrest_exporter_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: pgbackrest
+        annotations:
+          summary: "pgBackRest monitoring недоступен"
+          description: "Prometheus не получает валидный pgBackRest info. Проверить repository, credential и exporter."
+          runbook: "deploy/dr/README.md"
+
+      - alert: PgBackRestStanzaUnhealthy
+        expr: pgbackrest_stanza_ok{stanza="bz-get"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: pgbackrest
+        annotations:
+          summary: "pgBackRest stanza bz-get не в состоянии ok"
+          description: "pgBackRest info сообщает нездоровое состояние stanza/repository."
+          runbook: "deploy/dr/README.md"
+
+      - alert: PgBackRestNoBackup
+        expr: absent(pgbackrest_last_backup_age_seconds{stanza="bz-get",type="any"})
+        for: 5m
+        labels:
+          severity: critical
+          component: pgbackrest
+        annotations:
+          summary: "В repository нет успешного backup"
+          description: "Exporter не видит ни одного завершённого backup для stanza bz-get."
+          runbook: "deploy/dr/README.md"
+
+      - alert: PgBackRestBackupStale
+        expr: pgbackrest_last_backup_age_seconds{stanza="bz-get",type="any"} > 28800
+        for: 15m
+        labels:
+          severity: critical
+          component: pgbackrest
+        annotations:
+          summary: "Последний backup старше 8 часов"
+          description: "Bootstrap schedule предполагает incremental backup каждые 6 часов. Порог 8 часов — стартовый до утверждения SLA/RPO."
+          runbook: "deploy/dr/README.md"
+
+      - alert: PgBackRestFullBackupStale
+        expr: pgbackrest_last_backup_age_seconds{stanza="bz-get",type="full"} > 691200
+        for: 1h
+        labels:
+          severity: warning
+          component: pgbackrest
+        annotations:
+          summary: "Последний full backup старше 8 суток"
+          description: "Bootstrap schedule предполагает full backup раз в неделю. Порог 8 суток должен быть заменён утверждённой политикой."
+          runbook: "deploy/dr/README.md"
+
+      - alert: PgBackRestArchiveMissing
+        expr: pgbackrest_archive_present{stanza="bz-get"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: pgbackrest
+        annotations:
+          summary: "pgBackRest не сообщает архив WAL"
+          description: "В pgBackRest info отсутствует текущий WAL archive range; PITR может быть невозможен."
+          runbook: "deploy/dr/README.md"

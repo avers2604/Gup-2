@@ -17,6 +17,10 @@ min_pool_size = 5
 reserve_pool_size = 10
 reserve_pool_timeout = 3
 
+# PgBouncer exporter sends the driver parameter extra_float_digits. The
+# community exporter requires PgBouncer to ignore it on the admin connection.
+ignore_startup_parameters = extra_float_digits
+
 # PgBouncer 1.21+ can safely track named prepared statements in transaction
 # pooling when this is non-zero. Revisit the value under production load.
 max_prepared_statements = 100
@@ -33,13 +37,15 @@ client_idle_timeout = 0
 server_tls_sslmode = verify-ca
 server_tls_ca_file = /etc/bz-get/pki/ca.crt
 
-# Generate a SCRAM verifier for the application role; do not put a plaintext
-# database password in this repository.
+# Generate SCRAM verifiers; do not put plaintext passwords in this repository.
+# userlist.txt needs both the application user and pgbouncer_exporter.
 auth_type = scram-sha-256
 auth_file = /etc/pgbouncer/userlist.txt
 
 admin_users = postgres
-stats_users = postgres
+# Monitoring does not need administrative commands. Keep the exporter in the
+# narrower stats_users list instead of reusing postgres credentials.
+stats_users = pgbouncer_exporter
 
 log_connections = 1
 log_disconnections = 1

@@ -1,99 +1,142 @@
-# Этап 4 — статус после перепроверки репозитория
+# Этап 4 — фактический статус репозитория
 
 Дата перепроверки: 2026-09-10.
 
-Этот файл фиксирует именно состояние репозитория, а не желаемую архитектуру.
-Нужен, чтобы README/STACK и инфраструктурные шаблоны не воспринимались как
-доказательство уже проведённых HA/DR испытаний.
+Этот файл фиксирует состояние кода и эксплуатационных шаблонов. Наличие
+конфигураций в Git не считается доказательством пройденного HA/DR испытания и
+не подтверждает RPO/RTO без стендовых измерений.
 
-## Что было в `main` до начала Этапа 4
+## Что было до начала Этапа 4
 
-Уже присутствовало:
+В `main` уже были одиночные PostgreSQL/PgBouncer/etcd для разработки, MinIO,
+Redis, ClamAV, Prometheus и Grafana. `STACK.md` фиксировал Patroni и pgBackRest
+как целевые компоненты, но production/reference-конфигураций HA и DR в
+репозитории не было. Prometheus выполнял только self-scrape.
 
-- одиночный PostgreSQL 18.6 в `docker-compose.yml`;
-- PgBouncer 1.21.0, но приложение в dev подключалось к PostgreSQL напрямую;
-- одноузловой etcd v3.5.17 — только dev-заготовка для будущего Patroni;
-- MinIO, Redis, ClamAV, Prometheus, Grafana;
-- `STACK.md` с выбранными версиями Patroni 4.1.5 и pgBackRest 2.59.x;
-- Prometheus self-scrape без реального мониторинга Patroni/PostgreSQL;
-- README с честной пометкой, что HA/DR — ещё «дальше по плану».
+## Партия 1 — HA PostgreSQL + DR bootstrap
 
-Не было:
+После merge PR #29 в `main` присутствуют:
 
-- Patroni-конфигурации;
-- трёхузлового etcd production/reference-контура;
-- механизма маршрутизации приложения на текущий primary;
-- pgBackRest-конфигурации;
-- backup/restore/PITR runbook;
-- утверждённых RPO/RTO;
-- отработанного failover/restore drill;
-- DR-схемы MinIO.
+### `deploy/ha/`
 
-## Что добавляет первая партия Этапа 4
-
-`deploy/ha/`:
-
-- `patroni.yml.example` — 3-node PostgreSQL/Patroni baseline;
-- `etcd.env.example` — 3-node etcd/TLS baseline;
-- `haproxy.cfg.example` — определение current primary через Patroni REST;
+- `patroni.yml.example` — baseline для 3 PostgreSQL/Patroni узлов;
+- `etcd.env.example` — трёхузловой etcd/TLS baseline;
+- `haproxy.cfg.example` — выбор current primary через Patroni REST;
 - `pgbouncer.ini.example` — локальный transaction pool приложения;
-- `README.md` — порядок bootstrap, switchover/failover и DoD.
+- `validate.sh` — неразрушающая проверка конфигурации;
+- `README.md` — bootstrap, switchover/failover и Definition of Done.
 
-`deploy/dr/`:
+### `deploy/dr/`
 
-- `pgbackrest.conf.example` — WAL archive + encrypted remote repository;
-- `README.md` — DR/PITR runbook, restore drill и форма требований RPO/RTO.
+- `pgbackrest.conf.example` — encrypted remote repository + WAL archive;
+- `check-backup.sh` — штатная проверка stanza/repository;
+- `README.md` — PITR, полная потеря DB-кластера, restore drill и форма
+  фиксации фактических RPO/RTO.
 
-`.env.example` теперь явно разделяет dev-подключение `localhost:5432` и HA
-production endpoint `127.0.0.1:6432` через локальные PgBouncer/HAProxy.
+Django в HA-среде должен подключаться к стабильной локальной точке
+`127.0.0.1:6432`:
 
-## Документационные расхождения, найденные при аудите
+```text
+Django -> PgBouncer -> HAProxy -> current Patroni primary
+```
 
-### 1. README начинается как будто репозиторий всё ещё только «каркас Этапа 1»
+## Партия 2 — monitoring HA/DR
 
-Это исторически устаревшая формулировка: в репозитории уже есть существенная
-реализация Этапов 2–3 и открыта следующая партия рабочего места НРД. При
-следующем общем редактировании README заголовочную формулировку нужно заменить
-на нейтральное описание текущего состояния, а не номера одного этапа.
+Текущая ветка добавляет monitoring/reference implementation поверх партии 1.
 
-### 2. `STACK.md` помечает Patroni и pgBackRest как «Этап 4, вне репозитория»
+### Patroni
 
-После merge этой партии это станет неверно: reference configs и runbook уже
-будут в `deploy/ha`/`deploy/dr`. Само наличие файлов, однако, не означает, что
-кластер развёрнут или испытан.
+Используется нативный endpoint Patroni 4.1.x `GET /metrics`. Prometheus
+опрашивает все три DB-узла и контролирует:
 
-### 3. `docker-compose.yml` нельзя называть HA-контуром
+- ровно один primary;
+- наличие sync standby;
+- состояние PostgreSQL;
+- replay lag;
+- свежесть связи Patroni с DCS;
+- failsafe mode;
+- pending restart.
 
-Один etcd и один PostgreSQL в Compose остаются **dev-средой**. Их не следует
-«размножать» и выдавать за production Patroni cluster: для HA нужны отдельные
-failure domains, сетевой/PKI план и реальные испытания потери узла.
+### PostgreSQL
 
-### 4. MinIO в Compose — не DR
+На каждом DB-узле предусматривается `postgres_exporter` под отдельной
+read-only учётной записью с predefined role `pg_monitor`. Application user и
+PostgreSQL superuser для мониторинга не используются.
 
-Четыре data directory в одном контейнере/на одном host не защищают от потери
-узла. PostgreSQL DR и MinIO DR должны испытываться совместно, потому что БД
-хранит метаданные, а файлы находятся в S3-совместимом хранилище.
+### PgBouncer
 
-### 5. Monitoring Этапа 4 ещё не завершён
+На каждом app-узле предусматривается community `pgbouncer_exporter`. Для него
+в PgBouncer выделен отдельный `stats_users = pgbouncer_exporter`, без выдачи
+`admin_users`. Контролируются waiting clients и max client wait.
 
-`deploy/prometheus/prometheus.yml` пока мониторит только сам Prometheus. В
-следующей партии нужно добавить Patroni `/metrics`, PostgreSQL exporter,
-PgBouncer exporter/метрики, freshness pgBackRest backup/WAL и алерты на
-отсутствие quorum/replica/backup.
+### pgBackRest
 
-## Честная граница этой партии
+Добавлен небольшой read-only exporter `deploy/monitoring/pgbackrest_exporter.py`.
+Он использует стабильный JSON интерфейс `pgbackrest info --output=json`, не
+запускает backup/restore и отдаёт:
 
-Первая партия **создаёт проверяемую конфигурационную основу и регламент**, но
-не может доказать RPO/RTO без реальных серверов и отказных испытаний.
+- exporter/stanza health;
+- наличие WAL archive range;
+- число backup по типам;
+- timestamp/age последних full/diff/incr/any backup.
 
-До закрытия Этапа 4 обязательно нужны как минимум:
+### Prometheus / Grafana
 
-1. развёртывание 3x etcd + 3x Patroni/PostgreSQL на стенде;
-2. автоматический failover drill;
-3. planned switchover drill;
-4. pgBackRest full/diff/incr + continuous WAL;
-5. PITR на отдельный recovery host;
-6. восстановление после потери всего тестового DB-кластера;
-7. DR для MinIO;
-8. Prometheus/Grafana monitoring;
-9. утверждённые Заказчиком RPO/RTO и подтверждение измерениями.
+Добавлены:
+
+- `deploy/prometheus/prometheus.stage4.yml.example`;
+- `deploy/prometheus/rules/ha-dr.yml`;
+- Grafana datasource `Infrastructure Prometheus`;
+- provisioned dashboard `BZ GET — Stage 4 HA / DR`;
+- systemd units и env-шаблоны exporter'ов;
+- `deploy/monitoring/validate.sh`.
+
+Пороговые значения в alert rules — **bootstrap для стенда**, а не утверждённый
+SLA. Например, backup >8 часов считается stale исходя из временного стендового
+schedule incremental-раз-в-6-часов; после утверждения RPO/RTO пороги должны
+быть пересчитаны.
+
+## Что документация больше не должна утверждать
+
+### Dev Compose не является HA
+
+Один PostgreSQL и один etcd в `docker-compose.yml` остаются только dev-средой.
+Их нельзя выдавать за production HA-кластер независимо от количества volume.
+
+### Реплика не является backup
+
+Streaming replication защищает от отказа узла, но не от логической ошибки.
+DR PostgreSQL опирается на отдельный pgBackRest repository и PITR.
+
+### MinIO в одном host не является DR
+
+Четыре data directory одного MinIO-контейнера не защищают от потери узла.
+Полное восстановление АИС требует согласованной пары PostgreSQL metadata + S3
+objects; MinIO DR остаётся отдельной незакрытой подпартией Этапа 4.
+
+### Monitoring не равен operational alerting
+
+Prometheus уже может вычислять правила, Grafana — отображать состояние. Но
+корпоративный канал доставки critical/warning уведомлений ещё не выбран.
+Пока не настроен и не испытан Alertmanager/Grafana contact point, нельзя
+считать оповещение дежурной смены завершённым.
+
+## Что остаётся до закрытия Этапа 4
+
+1. Развернуть 3x etcd + 3x Patroni/PostgreSQL на реальном стенде.
+2. Выполнить planned switchover и unplanned failover с измерением времени.
+3. Проверить exporter'ы и алерты во время фактического отказа узла.
+4. Настроить и испытать канал доставки alert notifications.
+5. Выполнить full/diff/incr backup и непрерывный WAL archive.
+6. Выполнить PITR на отдельный recovery host.
+7. Выполнить восстановление после полной потери тестового DB-кластера.
+8. Реализовать MinIO replication/backup/restore с учётом WORM `originals`.
+9. После проверенного ручного restore автоматизировать rebuild Patroni из
+   pgBackRest.
+10. Утвердить RPO/RTO и заменить bootstrap thresholds на SLA-derived значения.
+
+## Ближайшая следующая партия
+
+**MinIO DR + доставка alert notifications.** После этого — автоматизация
+Patroni rebuild из pgBackRest и объединённый failover/restore drill с
+измерением фактических RPO/RTO.
