@@ -11,7 +11,8 @@ usage() {
   cat <<'EOF'
 Usage: approve-pgbackrest-rebuild.sh DRILL_ID APPROVER [--execute]
 
-The drill RESULT.md must contain exactly: PASS/FAIL: PASS
+The drill RESULT.md must contain exactly one PASS/FAIL line and it must be:
+PASS/FAIL: PASS
 Without --execute this command only validates and prints the intended action.
 EOF
 }
@@ -20,15 +21,19 @@ drill_id="${1:-}"
 approver="${2:-}"
 mode="${3:-}"
 [[ "$drill_id" =~ ^[A-Za-z0-9._-]+$ ]] || { usage >&2; exit 64; }
-[[ -n "$approver" ]] || { usage >&2; exit 64; }
+[[ "$approver" =~ ^[A-Za-z0-9._@:-]+$ ]] || {
+  echo "ERROR: APPROVER must be a stable identifier without spaces/newlines" >&2
+  exit 64
+}
 [[ -z "$mode" || "$mode" == "--execute" ]] || { usage >&2; exit 64; }
 
 result="$DRILL_EVIDENCE_ROOT/$drill_id/RESULT.md"
 [[ -r "$result" ]] || { echo "ERROR: drill result not readable: $result" >&2; exit 66; }
-grep -Fxq 'PASS/FAIL: PASS' "$result" || {
-  echo "ERROR: drill is not explicitly signed PASS in $result" >&2
+status_count="$(grep -c '^PASS/FAIL:' "$result" || true)"
+if [[ "$status_count" -ne 1 ]] || ! grep -Fxq 'PASS/FAIL: PASS' "$result"; then
+  echo "ERROR: drill must contain exactly one explicit 'PASS/FAIL: PASS' line: $result" >&2
   exit 78
-}
+fi
 
 if [[ "$mode" != "--execute" ]]; then
   echo "DRY-RUN: drill $drill_id is signed PASS; approval marker would be written to $APPROVAL_FILE"
