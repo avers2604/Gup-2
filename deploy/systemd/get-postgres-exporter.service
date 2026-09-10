@@ -1,0 +1,22 @@
+[Unit]
+Description=BZ GET PostgreSQL Prometheus exporter
+After=network-online.target patroni.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=postgres_exporter
+Group=postgres_exporter
+EnvironmentFile=/etc/bz-get/postgres-exporter.env
+ExecStart=/usr/local/bin/postgres_exporter \
+  --web.listen-address=${POSTGRES_EXPORTER_WEB_LISTEN_ADDRESS}
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/bz-get/pki
+
+[Install]
+WantedBy=multi-user.target
