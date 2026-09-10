@@ -4,6 +4,7 @@ from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.db import models
 from django.utils import timezone
 
+from apps.core.domain_events import publish
 from apps.core.models import TimeStampedModel, UUIDPKModel
 
 from . import totp_crypto
@@ -235,6 +236,24 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         return (timezone.now() - self.password_changed_at).days >= PASSWORD_EXPIRY_DAYS
 
     def save(self, *args, **kwargs):
+        """Переходы состояния учётной записи + публикация доменных событий.
+
+        Здесь остаётся только то, что меняет СОСТОЯНИЕ самой записи
+        (синхронизация is_active со status, отметка password_changed_at).
+        Всё, что выходит за границу этой модели — WORM-аудит смены роли,
+        история паролей, принудительный сброс сессий — вынесено в
+        обработчики событий (apps/iam/handlers.py, apps/audit/handlers.py)
+        и подключается через шину apps.core.domain_events. Это же снимает
+        прямой импорт apps.audit из apps.iam: доменные границы (README →
+        «модульный монолит (DDD), границы доменов — отдельные
+        Django-приложения без прямых импортов друг в друга») соблюдаются
+        через событие, а не через импорт чужой модели.
+
+        publish() диспатчит СИНХРОННО в текущей транзакции (не
+        on_commit) — запись аудита и истории паролей обязана быть
+        атомарной со сменой состояния: откат транзакции должен откатывать
+        и её, см. docstring apps/core/domain_events.py.
+        """
         # status — источник истины для жизненного цикла учётной записи;
         # is_active синхронизируется от него, а не задаётся отдельно, чтобы
         # два поля не могли разъехаться (is_active нужен Django-аутентификации
@@ -264,9 +283,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         # запрещает будущий вход. Срабатывает именно на ПЕРЕХОД в blocked,
         # не на каждое сохранение уже заблокированной записи.
         if self.status == self.Status.BLOCKED and not was_blocked:
-            from .sessions import force_logout_user
-
-            force_logout_user(self.pk)
+            publish("user.blocked", user=self)
 
         # Комплексный аудит изменений ролей (решение Заказчика: «фиксировать
         # все изменения ролей — кто изменил, кому, какая роль, метка
@@ -278,27 +295,19 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         # выставить вызывающий код ДО save(), если знает, кто выполняет
         # изменение (см. UserAdmin.save_model, apps.iam.services.import_personnel)
         # — у save() самого по себе нет доступа к HTTP-запросу/оператору.
-        # Не заменяет собой более узкое AuditLog.EventType.USER_ROLE_ELEVATED
-        # (apps.iam.services._is_role_elevated, только для импорта, только
+        # Не заменяет собой более узкое событие "user.role.elevated"
+        # (apps.iam.services.import_personnel, только для импорта, только
         # повышение) — оба события могут быть записаны на одно и то же
         # изменение, это намеренное пересечение под разных потребителей
         # (комплексный аудит vs узкий сигнал повышения при импорте), см.
         # STACK.md.
         if role_changed:
-            from apps.audit.models import AuditLog
-
-            actor = getattr(self, "_audit_actor", None)
-            AuditLog.objects.create(
-                event_type=AuditLog.EventType.USER_ROLE_CHANGED,
-                actor=actor,
-                actor_personnel_number=getattr(actor, "personnel_number", ""),
-                object_type="User",
-                object_id=str(self.pk),
-                details={
-                    "target_personnel_number": self.personnel_number,
-                    "previous_role": previous_role,
-                    "new_role": self.role,
-                },
+            publish(
+                "user.role.changed",
+                user=self,
+                actor=getattr(self, "_audit_actor", None),
+                previous_role=previous_role,
+                new_role=self.role,
             )
 
         # Парольная политика (решение Заказчика): история последних
@@ -310,14 +319,11 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         # создании учётной записи (is_new) писать нечего — предыдущего
         # пароля не существовало.
         if password_changed and not is_new and previous_password_hash:
-            PasswordHistoryEntry.objects.create(user=self, password_hash=previous_password_hash)
-            stale_ids = list(
-                PasswordHistoryEntry.objects.filter(user=self)
-                .order_by("-created_at")
-                .values_list("id", flat=True)[PASSWORD_HISTORY_DEPTH:]
+            publish(
+                "user.password.changed",
+                user=self,
+                previous_password_hash=previous_password_hash,
             )
-            if stale_ids:
-                PasswordHistoryEntry.objects.filter(id__in=stale_ids).delete()
 
 
 class PasswordHistoryEntry(UUIDPKModel):
