@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Статус {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">
+    <a href="{% url 'documents:list' %}">Реестр НРД</a> ·
+    <a href="{% url 'documents:detail' document.pk %}">{{ document.reg_number }}</a>
+  </p>
+  <h1 class="title">Смена статуса</h1>
+  <p>
+    {{ document.title }} — текущий статус:
+    <span class="status-pill
+      {% if document.status == 'active' %}status-pill--active
+      {% elif document.status == 'active_amended' %}status-pill--amended
+      {% elif document.status == 'revoked' %}status-pill--revoked
+      {% else %}status-pill--draft{% endif %}">{{ document.get_status_display }}</span>
+  </p>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    {% if allowed %}
+      <form method="post" novalidate>
+        {% csrf_token %}
+        {% if form.non_field_errors %}
+          <div class="notice notice--error" role="alert">
+            {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+          </div>
+        {% endif %}
+        {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
+        <p class="caption">
+          Переход записывается в WORM-журнал аудита и закрывает текущий
+          период в истории статусов (ТЗ 4.2.3) — отменить его нельзя.
+        </p>
+        <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4);">
+          <button class="btn btn--primary" type="submit">Изменить статус</button>
+          <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Отмена</a>
+        </div>
+      </form>
+    {% else %}
+      <p>Из статуса «{{ document.get_status_display }}» переходов не предусмотрено — это конечное состояние карточки.</p>
+      <p style="margin-top: var(--space-4);">
+        <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Вернуться к карточке</a>
+      </p>
+    {% endif %}
+  </div>
+{% endblock %}

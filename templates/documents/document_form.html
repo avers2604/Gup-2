@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{% if document %}Правка {{ document.reg_number }}{% else %}Новая карточка НРД{% endif %} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">
+    <a href="{% url 'documents:list' %}">Реестр НРД</a>
+    {% if document %} · <a href="{% url 'documents:detail' document.pk %}">{{ document.reg_number }}</a>{% endif %}
+  </p>
+  <h1 class="title">
+    {% if document %}Правка карточки{% else %}Регистрация документа{% endif %}
+  </h1>
+  <p class="caption">
+    {% if document %}
+      Правка доступна только черновику: документ, уже имеющий силу, изменяется
+      новой редакцией со связью версионности (ТЗ 4.2.2).
+    {% else %}
+      Карточка создаётся черновиком. Придание документу силы — отдельное
+      действие на его странице.
+    {% endif %}
+  </p>
+
+  <form method="post" enctype="multipart/form-data" novalidate>
+    {% csrf_token %}
+    {% if form.non_field_errors %}
+      <div class="notice notice--error" role="alert">
+        {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+      </div>
+    {% endif %}
+
+    {% for group in form.fieldsets %}
+      <div class="card" style="margin-top: var(--space-6);">
+        <p class="label">{{ group.title }}</p>
+        {% if group.hint %}<p class="caption">{{ group.hint }}</p>{% endif %}
+        {% for field in group.fields %}{% include "documents/_form_field.html" %}{% endfor %}
+      </div>
+    {% endfor %}
+
+    <div style="display:flex; gap: var(--space-3); margin-top: var(--space-6);">
+      <button class="btn btn--primary" type="submit">Сохранить</button>
+      <a class="btn btn--ghost"
+         href="{% if document %}{% url 'documents:detail' document.pk %}{% else %}{% url 'documents:list' %}{% endif %}">Отмена</a>
+    </div>
+  </form>
+{% endblock %}

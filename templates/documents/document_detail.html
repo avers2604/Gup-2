@@ -168,13 +168,22 @@
   </div>
 
   {% if can_edit or can_change_status %}
-    <p class="caption" style="margin-top: var(--space-6);">
-      {% comment %}
-        Редактирование и смена статуса — следующая партия Этапа 2; здесь
-        показано только наличие права, чтобы кнопки появились ровно там,
-        где они и должны быть, а не в неожиданном месте.
-      {% endcomment %}
-      Доступные действия: {% if can_edit %}редактирование черновика{% endif %}{% if can_edit and can_change_status %}, {% endif %}{% if can_change_status %}смена статуса{% endif %} — интерфейс в следующей партии, пока через <a href="/admin/documents/normativedocument/{{ document.pk }}/change/">админку</a>.
-    </p>
+    <div class="card" style="margin-top: var(--space-6);">
+      <p class="label">Доступные действия</p>
+      <div style="display:flex; gap: var(--space-3); flex-wrap: wrap;">
+        {% if can_edit %}
+          <a class="btn btn--primary" href="{% url 'documents:edit' document.pk %}">Править черновик</a>
+        {% endif %}
+        {% if can_change_status %}
+          <a class="btn btn--accent" href="{% url 'documents:status' document.pk %}">Изменить статус</a>
+        {% endif %}
+      </div>
+      {% if can_change_status and not can_edit and document.status != 'draft' %}
+        <p class="caption" style="margin-top: var(--space-3);">
+          Правка недоступна: документ уже имеет силу и изменяется новой
+          редакцией со связью версионности (ТЗ 4.2.2), а не на месте.
+        </p>
+      {% endif %}
+    </div>
   {% endif %}
 {% endblock %}

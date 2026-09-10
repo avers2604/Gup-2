@@ -49,3 +49,130 @@ class DocumentFilterForm(forms.Form):
             # решил бы, что документов нет, а не что интервал перевёрнут.
             raise forms.ValidationError("Начало периода позже его окончания.")
         return cleaned
+
+
+class DocumentForm(forms.ModelForm):
+    """Создание и правка карточки НРД (ТЗ 4.2.1).
+
+    Статуса в форме нет намеренно: создание всегда даёт черновик, а смена
+    статуса — отдельное действие с другим кругом полномочий
+    (`permissions.can_change_status`, `StatusChangeForm` ниже). Нет и
+    `retention_mode`/`retention_until` — они `editable=False` и считаются
+    в `save()` из категории хранения; показать их редактируемыми значило
+    бы предложить пользователю править юридически значимую дату руками.
+    """
+
+    class Meta:
+        model = NormativeDocument
+        fields = [
+            "reg_number", "reg_date", "effective_date", "doc_type", "title", "summary",
+            "issuer_dept", "applied_depts", "category_tags",
+            "access_level", "declassification_date",
+            "retention_category", "ocr_category",
+            "files_original", "files_editable",
+        ]
+        widgets = {
+            "reg_date": forms.DateInput(attrs={"type": "date"}),
+            "effective_date": forms.DateInput(attrs={"type": "date"}),
+            "declassification_date": forms.DateInput(attrs={"type": "date"}),
+            "summary": forms.Textarea(attrs={"rows": 4}),
+        }
+
+    # Группировка полей для шаблона. Живёт рядом со списком полей, а не в
+    # шаблоне: добавив поле в Meta.fields и забыв про шаблон, легко
+    # получить поле, которое валидируется и сохраняется, но не
+    # показывается — fieldsets() ниже такое поле обнаружит.
+    FIELDSETS = (
+        ("Реквизиты", "", [
+            "reg_number", "reg_date", "effective_date", "doc_type",
+            "title", "summary", "issuer_dept", "applied_depts", "category_tags",
+        ]),
+        ("Доступ и хранение", "", [
+            "access_level", "declassification_date", "retention_category", "ocr_category",
+        ]),
+        ("Файлы", (
+            "Скан-оригинал уходит в WORM-хранилище и запускает распознавание. "
+            "Оба файла проверяются антивирусом и на встроенные макросы до записи "
+            "в хранилище — заражённый файл не сохраняется вовсе."
+        ), ["files_original", "files_editable"]),
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        for field in self.fields.values():
+            widget = field.widget
+            if isinstance(widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple)):
+                continue
+            widget.attrs["class"] = f"{widget.attrs.get('class', '')} field".strip()
+
+    def fieldsets(self):
+        """Поля, разложенные по группам для шаблона.
+
+        Поле, объявленное в Meta.fields, но не попавшее ни в одну группу,
+        выводится последней группой «Прочее», а не теряется молча:
+        невидимое поле формы — это поле, которое пользователь не может
+        заполнить, но которое от него требуют.
+        """
+        grouped = set()
+        for title, hint, names in self.FIELDSETS:
+            fields = [self[name] for name in names if name in self.fields]
+            grouped.update(field.name for field in fields)
+            if fields:
+                yield {"title": title, "hint": hint, "fields": fields}
+
+        rest = [self[name] for name in self.fields if name not in grouped]
+        if rest:
+            yield {"title": "Прочее", "hint": "", "fields": rest}
+
+    def clean(self):
+        cleaned = super().clean()
+        access_level = cleaned.get("access_level")
+        declassification_date = cleaned.get("declassification_date")
+        if (
+            declassification_date
+            and access_level != NormativeDocument.AccessLevel.RESTRICTED
+        ):
+            # Дата рассекречивания у документа без грифа не имеет смысла и
+            # молча искажает расчёт срока хранения: retention.py
+            # отсчитывает срок ДСП-документа именно от неё.
+            self.add_error(
+                "declassification_date",
+                "Дата рассекречивания указывается только для документов с грифом «ДСП».",
+            )
+
+        reg_date = cleaned.get("reg_date")
+        effective_date = cleaned.get("effective_date")
+        if reg_date and effective_date and effective_date < reg_date:
+            self.add_error(
+                "effective_date",
+                "Документ не может вступить в силу раньше даты своей регистрации.",
+            )
+        return cleaned
+
+
+class StatusChangeForm(forms.Form):
+    """Смена статуса карточки. Список вариантов строится из графа
+    переходов (`transitions.py`) для ТЕКУЩЕГО статуса документа —
+    недопустимый переход невозможно даже выбрать. Сервис всё равно
+    проверяет переход заново: форму можно обойти, отправив запрос
+    напрямую."""
+
+    new_status = forms.ChoiceField(
+        label="Новый статус", choices=(),
+        widget=forms.Select(attrs=_FIELD_ATTRS),
+    )
+    comment = forms.CharField(
+        label="Основание", required=False,
+        widget=forms.Textarea(attrs={**_FIELD_ATTRS, "rows": 3}),
+        help_text="Необязательное пояснение для журнала аудита.",
+    )
+
+    def __init__(self, *args, document=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .transitions import target_choices
+
+        self.document = document
+        choices = target_choices(document.status) if document is not None else []
+        self.fields["new_status"].choices = choices
+        if not choices:
+            self.fields["new_status"].widget.attrs["disabled"] = True

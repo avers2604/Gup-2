@@ -15,13 +15,29 @@ def _dt(*args):
     return timezone.datetime(*args, tzinfo=datetime.timezone.utc)
 
 
+def _document_without_history(*args, **kwargs):
+    """Карточка с пустой историей статусов.
+
+    С партии 2 Этапа 2 `NormativeDocument.save()` сам открывает первый
+    срез SCD-2 — `[сейчас, NULL)`. Тестам ниже это мешает: они проверяют
+    само ограничение БД на произвольных, заведомо заданных периодах, и
+    открытый «по настоящее время» срез пересекался бы с половиной из них
+    просто потому, что «сейчас» попадает внутрь выбранных интервалов.
+    Поведение самого механизма ведения истории проверяется отдельно, в
+    test_status_history.py.
+    """
+    document = _make_document(*args, **kwargs)
+    document.status_history.all().delete()
+    return document
+
+
 class DocumentStatusHistoryExclusionConstraintTests(TestCase):
     """SCD-2: периоды действия статуса одного документа не должны пересекаться (ТЗ 4.2.3)."""
 
     def test_touching_boundary_not_considered_overlap(self):
         # tstzrange по умолчанию полуинтервал [) — valid_to одного периода,
         # совпадающий с valid_from следующего, НЕ считается пересечением.
-        doc = _make_document()
+        doc = _document_without_history()
         t0, t1, t2 = _dt(2026, 1, 1), _dt(2026, 6, 1), _dt(2027, 1, 1)
 
         DocumentStatusHistory.objects.create(
@@ -33,7 +49,7 @@ class DocumentStatusHistoryExclusionConstraintTests(TestCase):
         self.assertEqual(doc.status_history.count(), 2)
 
     def test_overlapping_periods_rejected(self):
-        doc = _make_document()
+        doc = _document_without_history()
         t0, t2 = _dt(2026, 1, 1), _dt(2027, 1, 1)
         t_mid, t_later = _dt(2026, 6, 1), _dt(2027, 6, 1)
 
@@ -46,8 +62,8 @@ class DocumentStatusHistoryExclusionConstraintTests(TestCase):
             )
 
     def test_overlapping_periods_allowed_for_different_documents(self):
-        doc_a = _make_document(reg_number="142-п")
-        doc_b = _make_document(reg_number="143-п")
+        doc_a = _document_without_history(reg_number="142-п")
+        doc_b = _document_without_history(reg_number="143-п")
         t0, t1 = _dt(2026, 1, 1), _dt(2027, 1, 1)
 
         DocumentStatusHistory.objects.create(
@@ -63,7 +79,7 @@ class DocumentStatusHistoryExclusionConstraintTests(TestCase):
         # граница не задана (в Postgres это НЕ то же самое, что литерал
         # 'infinity', но для EXCLUDE-проверки пересечения ведёт себя так же:
         # всё, что начинается после valid_from, считается пересекающимся).
-        doc = _make_document()
+        doc = _document_without_history()
         t0 = _dt(2026, 1, 1)
         DocumentStatusHistory.objects.create(
             document=doc, status=NormativeDocument.Status.ACTIVE, period=(t0, None)
@@ -75,7 +91,7 @@ class DocumentStatusHistoryExclusionConstraintTests(TestCase):
             )
 
     def test_open_ended_period_touching_boundary_allowed(self):
-        doc = _make_document()
+        doc = _document_without_history()
         t0, t1 = _dt(2026, 1, 1), _dt(2026, 6, 1)
         DocumentStatusHistory.objects.create(
             document=doc, status=NormativeDocument.Status.DRAFT, period=(t0, t1)
@@ -200,16 +216,22 @@ class DocumentRelationConstraintTests(TestCase):
 
 
 class ConcurrentStatusTransitionTests(TransactionTestCase):
-    """Даже без явной блокировки строки документа (SELECT ... FOR UPDATE —
-    см. предупреждение в docstring DocumentStatusHistory), EXCLUDE USING
-    gist в БД не даёт двум параллельным транзакциям закоммитить
-    пересекающиеся периоды: одна из них гарантированно получит
-    IntegrityError. TestCase здесь не подходит — он оборачивает тест в одну
-    транзакцию на одном соединении, что делает параллельность невозможной;
-    нужен TransactionTestCase с реальными отдельными соединениями по потокам."""
+    """Даже без явной блокировки строки документа EXCLUDE USING gist в БД
+    не даёт двум параллельным транзакциям закоммитить пересекающиеся
+    периоды: одна из них гарантированно получит IntegrityError.
+
+    Штатный путь смены статуса (`services.change_document_status`) строку
+    документа блокирует — но именно поэтому этот тест обходит сервис и
+    пишет в историю напрямую: он проверяет последний рубеж, ограничение
+    БД, которое обязано держать и тогда, когда до него добрался код без
+    блокировки (миграция данных, management-команда, чужая интеграция).
+
+    TestCase здесь не подходит — он оборачивает тест в одну транзакцию на
+    одном соединении, что делает параллельность невозможной; нужен
+    TransactionTestCase с реальными отдельными соединениями по потокам."""
 
     def test_concurrent_overlapping_inserts_only_one_succeeds(self):
-        doc = _make_document()
+        doc = _document_without_history()
         period = (_dt(2026, 1, 1), _dt(2026, 6, 1))
         results = []
         barrier = threading.Barrier(2)
