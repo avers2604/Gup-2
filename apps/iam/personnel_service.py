@@ -18,6 +18,10 @@ from apps.audit.models import AuditLog
 from .models import Department, User
 
 MAX_ROWS = 5000
+HEADER = [
+    "tab_number", "last_name", "first_name", "middle_name", "position",
+    "department_path", "role", "dsp_access", "email", "status",
+]
 REQUIRED_COLUMNS = {
     "tab_number", "last_name", "first_name", "position",
     "department_path", "role", "dsp_access",
