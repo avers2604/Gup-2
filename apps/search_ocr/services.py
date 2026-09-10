@@ -18,7 +18,14 @@ from django.db import IntegrityError, transaction
 from apps.audit.models import AuditLog
 from apps.iam.models import User
 
-from .models import ThesaurusAmbiguity, ThesaurusCategory, ThesaurusEntry, ThesaurusService, ThesaurusStatus
+from .models import (
+    ThesaurusAmbiguity,
+    ThesaurusAmbiguityCandidate,
+    ThesaurusCategory,
+    ThesaurusEntry,
+    ThesaurusService,
+    ThesaurusStatus,
+)
 from .normalization import normalize_term
 
 # Поля записи, которые реально копируются из JSON в модель — дословно
@@ -253,23 +260,61 @@ def import_thesaurus(file_obj, *, actor: User | None = None) -> ThesaurusImportR
         abbr = item.get("abbr")
         if not abbr:
             continue
-        candidates = item.get("candidates", []) or []
+        candidates_data = item.get("candidates", []) or []
         disambiguation = item.get("disambiguation", "") or ""
         normalized = normalize_term(abbr)
         existing = ThesaurusAmbiguity.objects.filter(abbr_normalized=normalized).first()
-        if (
-            existing is not None
-            and existing.abbr == abbr
-            and existing.candidates == candidates
-            and existing.disambiguation == disambiguation
-        ):
-            continue
+        is_new = existing is None
         obj = existing or ThesaurusAmbiguity()
+        changed = is_new or obj.abbr != abbr or obj.disambiguation != disambiguation
         obj.abbr = abbr
-        obj.candidates = candidates
         obj.disambiguation = disambiguation
         obj.save()
-        report.ambiguity_updated.append(abbr)
+
+        # Кандидаты — отдельная модель с FK на ThesaurusEntry (не JSONField,
+        # см. докстринг ThesaurusAmbiguity), синхронизируются как "полная
+        # замена набора": обновляются/создаются присутствующие в файле,
+        # удаляются те, что пропали из файла между импортами.
+        seen_entry_ids: set[str] = set()
+        for cand in candidates_data:
+            entry_id = cand.get("id")
+            if not entry_id:
+                continue
+            weight = cand.get("weight", 1.0)
+            reason = cand.get("reason", "") or ""
+            try:
+                entry_obj = ThesaurusEntry.objects.get(pk=entry_id)
+            except ThesaurusEntry.DoesNotExist:
+                # ambiguity_registry ссылается на id, которого нет среди
+                # entries файла (например опечатка) — не должно молча
+                # потеряться и не должно валить весь импорт целиком.
+                report.warnings.append(
+                    f"ambiguity_registry: «{abbr}» ссылается на несуществующую запись «{entry_id}»."
+                )
+                continue
+            seen_entry_ids.add(entry_id)
+            existing_candidate = ThesaurusAmbiguityCandidate.objects.filter(
+                ambiguity=obj, entry=entry_obj,
+            ).first()
+            if (
+                existing_candidate is None
+                or existing_candidate.weight != weight
+                or existing_candidate.reason != reason
+            ):
+                changed = True
+            ThesaurusAmbiguityCandidate.objects.update_or_create(
+                ambiguity=obj, entry=entry_obj, defaults={"weight": weight, "reason": reason},
+            )
+
+        stale_candidates = ThesaurusAmbiguityCandidate.objects.filter(ambiguity=obj).exclude(
+            entry_id__in=seen_entry_ids
+        )
+        if stale_candidates.exists():
+            changed = True
+            stale_candidates.delete()
+
+        if changed:
+            report.ambiguity_updated.append(abbr)
 
     if report.created or report.updated or report.ambiguity_updated:
         AuditLog.objects.create(

@@ -1,45 +1,55 @@
 """
 Поисковый движок Smart Search (ТЗ 4.4.1): расширение запроса по
 тезаурусу (`expand_query`) + полнотекстовый поиск по карточкам НРД
-(`search_documents`) с гибридным ранжированием (прямое совпадение +
-расширенные термины).
+(`search_documents`), ранжирование — дословно формула ТЗ 2.2 §4.4.1:
 
-ЧЕСТНАЯ ГРАНИЦА: файл тезауруса (docs/thesaurus/thesaurus_v0.9_draft.json)
-несколько раз ссылается на «гибридную формулу ранжирования ТЗ 2.2 §4.4.1»
-(например disambiguation записи «ТО» в ambiguity_registry), но буквальный
-текст этой формулы в эту сессию не передавался. Формула ниже —
-СОБСТВЕННАЯ реализация по духу доступных структурированных данных
-(entry.weight, TH-06 вес synonyms_legacy=0.3, candidates[].weight у
-неоднозначных аббревиатур), а не транскрипция текста ТЗ. Нужна сверка с
-оригиналом при первой возможности — см. STACK.md, раздел про Smart Search.
+    score = ExactMatch(reg_number) * 1.0
+          + FTS(title)             * 0.8
+          + FTS(summary)           * 0.5
+          + FTS(ocr_body)          * 0.2
+
+Расширение по тезаурусу — НЕ отдельное слагаемое формулы, а подмешивается
+ВНУТРЬ каждого компонента: список терминов поиска = [сам запрос
+пользователя (вес 1.0)] + expand_query(запрос) (веса по TH-06 —
+short_forms/synonyms дают entry.weight, synonyms_legacy — фиксированные
+0.3, неоднозначные аббревиатуры — candidates[].weight или 1.0 при
+совпадении факультативного фасета категория/служба). Каждый термин
+проверяется на точное совпадение с reg_number (вклад в ExactMatch) и
+участвует в полнотекстовом поиске по каждому из title/summary/ocr_body
+(вклад термин.weight * SearchRank, просуммированный по всем терминам,
+затем домноженный на вес соответствующего поля).
 """
 import re
 from dataclasses import dataclass
 
 from django.contrib.postgres.search import SearchQuery, SearchRank, SearchVector
-from django.db.models import ExpressionWrapper, F, FloatField, QuerySet
+from django.db.models import Case, ExpressionWrapper, F, FloatField, QuerySet, Value, When
+from django.db.models.functions import Greatest
 
 from apps.documents.models import NormativeDocument
 
-from .models import ThesaurusAmbiguity, ThesaurusEntry, ThesaurusStatus
+from .models import ThesaurusEntry, ThesaurusStatus
 from .normalization import normalize_term
 
-# Константы гибридной формулы (см. честную границу выше) — не из ТЗ
-# буквально, отдельно подобранные значения с понятным намерением: прямое
-# совпадение запроса всегда весомее любого расширения по синониму (иначе
-# документ, совпавший только по редкому синониму, мог бы обогнать
-# документ с точным попаданием в запрос — контринтуитивно для поиска).
-DIRECT_MATCH_WEIGHT = 1.0
-EXPANSION_WEIGHT = 0.5
-# TH-06 (validation_rules файла) дословно: "synonyms_legacy расширяют
-# запрос только с весом 0.3" — фиксированное значение, а не entry.weight * 0.3.
+# Веса компонентов формулы — дословно ТЗ 2.2 §4.4.1.
+EXACT_MATCH_WEIGHT = 1.0
+TITLE_WEIGHT = 0.8
+SUMMARY_WEIGHT = 0.5
+OCR_BODY_WEIGHT = 0.2
+
+# TH-06 (validation_rules файла тезауруса) дословно: "synonyms_legacy
+# расширяют запрос только с весом 0.3" — фиксированное значение, а не
+# entry.weight * 0.3.
 LEGACY_SYNONYM_WEIGHT = 0.3
-# Верхняя граница числа расширенных терминов на один запрос — каждый термин
-# это отдельная SearchRank-аннотация (отдельный проход tsquery по
-# вычисляемому на лету tsvector, см. search_documents) — без границы длинный
-# запрос с множеством совпадений в тезаурусе превратился бы в вектор для
-# перегрузки БД количеством аннотаций на один HTTP-запрос.
-MAX_EXPANDED_TERMS = 8
+
+# Верхняя граница числа терминов расширения на один запрос — каждый
+# термин даёт 1 (ExactMatch) + 3 (title/summary/ocr_body) SQL-аннотации;
+# без границы запрос, совпадающий с большим числом записей тезауруса, дал
+# бы неограниченно тяжёлый SQL-запрос на один HTTP-запрос пользователя.
+# Ниже, чем было до появления трёх FTS-полей вместо одного общего вектора
+# (было 8) — та же осторожность, но с поправкой на утроившуюся цену
+# одного термина.
+MAX_EXPANDED_TERMS = 5
 SEARCH_CONFIG = "russian"
 
 
@@ -48,7 +58,7 @@ class ExpandedTerm:
     text: str
     weight: float
     source_entry_id: str
-    via: str  # "short_form" | "synonym" | "synonym_legacy" | "canonical"
+    via: str  # "short_form" | "synonym" | "synonym_legacy" | "canonical" | "direct"
 
 
 def _contains_term(normalized_query: str, term: str) -> bool:
@@ -75,26 +85,22 @@ def expand_query(
     результаты поиска для всех пользователей.
 
     category/service — опциональные фасеты для разрешения неоднозначных
-    аббревиатур (ThesaurusAmbiguity): если совпадают с полями .category/
-    .service самого́ кандидата-записи, кандидат получает вес 1.0
-    (однозначно выбран), иначе используется его собственный
-    candidates[].weight из ambiguity_registry (структурные данные — не
-    парсинг свободного текста disambiguation, см. докстринг
+    аббревиатур (ThesaurusAmbiguity/ThesaurusAmbiguityCandidate): если
+    совпадают с полями .category/.service самого́ кандидата-записи,
+    кандидат получает вес 1.0 (однозначно выбран), иначе используется его
+    собственный candidate.weight из ambiguity_registry (структурные
+    данные — не парсинг свободного текста disambiguation, см. докстринг
     ThesaurusAmbiguity)."""
     normalized_query = normalize_term(raw_query)
     if not normalized_query:
         return []
 
-    ambiguity_by_entry_id: dict[str, ThesaurusAmbiguity] = {}
-    for amb in ThesaurusAmbiguity.objects.all():
-        for cand in amb.candidates:
-            entry_id = cand.get("id")
-            if entry_id:
-                ambiguity_by_entry_id.setdefault(entry_id, amb)
-
     matches: dict[str, ExpandedTerm] = {}  # canonical -> лучший найденный ExpandedTerm
 
-    for entry in ThesaurusEntry.objects.filter(status=ThesaurusStatus.VERIFIED):
+    verified_entries = ThesaurusEntry.objects.filter(status=ThesaurusStatus.VERIFIED).prefetch_related(
+        "ambiguity_candidates"
+    )
+    for entry in verified_entries:
         via = None
         for sf in entry.short_forms:
             if _contains_term(normalized_query, sf):
@@ -120,18 +126,17 @@ def expand_query(
 
         weight = LEGACY_SYNONYM_WEIGHT if legacy_match else entry.weight
 
-        ambiguity = ambiguity_by_entry_id.get(entry.id)
-        if ambiguity is not None:
+        # ambiguity_candidates уже prefetch'нут выше — обращение к .all()
+        # здесь не даёт дополнительного запроса к БД.
+        candidates = list(entry.ambiguity_candidates.all())
+        if candidates:
+            # На практике у записи не больше одного кандидата на одну
+            # аббревиатуру (одна запись = одно значение в реестре).
+            candidate = candidates[0]
             facet_matched = bool(
                 (category and entry.category == category) or (service and entry.service == service)
             )
-            if facet_matched:
-                weight = 1.0
-            else:
-                for cand in ambiguity.candidates:
-                    if cand.get("id") == entry.id:
-                        weight = cand.get("weight", weight)
-                        break
+            weight = 1.0 if facet_matched else candidate.weight
 
         # Канонической формой расширяем поиск (не самим совпавшим
         # short_form/synonym — при вводе «ТП» искать по документам нужно
@@ -151,11 +156,10 @@ def expand_query(
 def search_documents(
     user, raw_query: str, *, category: str | None = None, service: str | None = None,
 ) -> QuerySet:
-    """Полнотекстовый поиск по карточкам НРД (ТЗ 4.4.1) — прямой запрос
-    пользователя + термины расширения (expand_query), объединённые в один
-    гибридный score (см. честную границу в докстринге модуля). Возвращает
-    QuerySet NormativeDocument с аннотацией .score, отсортированный по
-    убыванию; документы без единого совпадения (score <= 0) не включены.
+    """Полнотекстовый поиск по карточкам НРД — формула ранжирования
+    дословно ТЗ 2.2 §4.4.1 (см. докстринг модуля). Возвращает QuerySet
+    NormativeDocument с аннотацией .score, отсортированный по убыванию;
+    документы без единого совпадения (score <= 0) не включены.
 
     Доступ к ДСП: документы с access_level=RESTRICTED видны только
     пользователям с dsp_access=True или суперпользователям — то же
@@ -165,8 +169,13 @@ def search_documents(
 
     Черновики (status=DRAFT) исключены из результатов — САМОСТОЯТЕЛЬНОЕ,
     НЕ подтверждённое Заказчиком допущение («база знаний» ищет то, что
-    когда-либо было официально зарегистрировано, не рабочие черновики),
-    см. STACK.md."""
+    когда-либо было официально зарегистрировано, не рабочие черновики).
+    Кому именно, помимо общего исключения, должны быть видны черновики в
+    поиске (матрица доступа по ролям) — нигде не специфицировано: роль
+    «Куратор», которая упоминалась в более ранних формулировках такого
+    правила, в проекте упразднена (см. STACK.md), замены ей для этого
+    конкретного случая Заказчик не называл — оставлено как есть, а не
+    придумано самостоятельно."""
     normalized_query = normalize_term(raw_query)
     if not normalized_query:
         return NormativeDocument.objects.none()
@@ -175,28 +184,56 @@ def search_documents(
     if not (getattr(user, "is_authenticated", False) and (user.is_superuser or user.dsp_access)):
         queryset = queryset.filter(access_level=NormativeDocument.AccessLevel.GENERAL)
 
-    vector = (
-        SearchVector("title", weight="A", config=SEARCH_CONFIG)
-        + SearchVector("reg_number", weight="A", config=SEARCH_CONFIG)
-        + SearchVector("summary", weight="B", config=SEARCH_CONFIG)
-    )
-    # websearch_to_tsquery — прямой пользовательский ввод, произвольный
-    # текст (учитывает кавычки/операторы так, как ожидает обычный
-    # пользователь поисковика).
-    direct_query = SearchQuery(raw_query, config=SEARCH_CONFIG, search_type="websearch")
-    queryset = queryset.annotate(direct_rank=SearchRank(vector, direct_query))
-    score = F("direct_rank") * DIRECT_MATCH_WEIGHT
+    # Термины поиска: сам запрос (вес 1.0, websearch_to_tsquery — свободный
+    # пользовательский текст) + расширение по тезаурусу (веса по TH-06,
+    # phraseto_tsquery — устойчивые словосочетания из canonical).
+    direct_term = ExpandedTerm(text=raw_query.strip(), weight=1.0, source_entry_id="", via="direct")
+    all_terms = [direct_term] + expand_query(raw_query, category=category, service=service)
 
-    expanded_terms = expand_query(raw_query, category=category, service=service)
-    for i, term in enumerate(expanded_terms):
-        field_name = f"expansion_rank_{i}"
-        # phrase — термины расширения это устойчивые словосочетания из
-        # тезауруса (canonical), не свободный пользовательский текст:
-        # нужно совпадение как фразы («тяговая подстанция» целиком), а не
-        # AND отдельных слов где угодно в документе.
-        term_query = SearchQuery(term.text, config=SEARCH_CONFIG, search_type="phrase")
-        queryset = queryset.annotate(**{field_name: SearchRank(vector, term_query)})
-        score = score + F(field_name) * (term.weight * EXPANSION_WEIGHT)
+    # 1. ExactMatch(reg_number) * 1.0 — точное совпадение (регистронезависимо)
+    # с любым из терминов, максимум по всем терминам. На практике обычно
+    # срабатывает только на прямом запросе (термины расширения — фразы из
+    # тезауруса, не номера документов), но формула проверяется единообразно
+    # для всех терминов, не только для прямого запроса.
+    exact_terms = []
+    for i, term in enumerate(all_terms):
+        field_name = f"exact_{i}"
+        queryset = queryset.annotate(**{field_name: Case(
+            When(reg_number__iexact=term.text, then=Value(term.weight * EXACT_MATCH_WEIGHT)),
+            default=Value(0.0),
+            output_field=FloatField(),
+        )})
+        exact_terms.append(F(field_name))
+    exact_score = Greatest(*exact_terms) if len(exact_terms) > 1 else exact_terms[0]
+
+    score = exact_score
+
+    # 2-4. FTS(title)*0.8 + FTS(summary)*0.5 + FTS(ocr_body)*0.2 — КАЖДОЕ
+    # поле своим SearchVector (не общий вектор с внутренними весами A/B/C/D
+    # Postgres: веса полей здесь берутся из самой формулы ТЗ). Каждый
+    # термин — отдельная SearchRank-аннотация: ts_rank не позволяет
+    # взвесить отдельные лексемы внутри одного tsquery, поэтому вклад
+    # термин.weight * ts_rank(термин) суммируется по терминам вручную.
+    for field_name, field_weight in (
+        ("title", TITLE_WEIGHT), ("summary", SUMMARY_WEIGHT), ("ocr_body", OCR_BODY_WEIGHT),
+    ):
+        field_vector = SearchVector(field_name, config=SEARCH_CONFIG)
+        field_terms = []
+        for i, term in enumerate(all_terms):
+            rank_field = f"{field_name}_rank_{i}"
+            # phrase — термины расширения это устойчивые словосочетания
+            # тезауруса (canonical), не свободный пользовательский текст:
+            # нужно совпадение как фразы целиком, а не AND отдельных слов
+            # где угодно в документе. Прямой запрос — websearch, обычный
+            # пользовательский свободный текст.
+            search_type = "websearch" if term.via == "direct" else "phrase"
+            term_query = SearchQuery(term.text, config=SEARCH_CONFIG, search_type=search_type)
+            queryset = queryset.annotate(**{rank_field: SearchRank(field_vector, term_query)})
+            field_terms.append(F(rank_field) * term.weight)
+        field_score = field_terms[0]
+        for extra in field_terms[1:]:
+            field_score = field_score + extra
+        score = score + field_score * field_weight
 
     queryset = queryset.annotate(
         score=ExpressionWrapper(score, output_field=FloatField()),

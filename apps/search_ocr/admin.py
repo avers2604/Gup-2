@@ -3,7 +3,7 @@ from django.contrib import messages
 
 from apps.audit.models import AuditLog
 
-from .models import ThesaurusAmbiguity, ThesaurusEntry, ThesaurusStatus
+from .models import ThesaurusAmbiguity, ThesaurusAmbiguityCandidate, ThesaurusEntry, ThesaurusStatus
 
 
 @admin.register(ThesaurusEntry)
@@ -67,6 +67,21 @@ class ThesaurusEntryAdmin(admin.ModelAdmin):
         self._apply_status(request, queryset, ThesaurusStatus.REJECTED, "mark_rejected")
 
 
+class ThesaurusAmbiguityCandidateInline(admin.TabularInline):
+    model = ThesaurusAmbiguityCandidate
+    extra = 0
+    fields = ("entry", "weight", "reason")
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(ThesaurusAmbiguity)
 class ThesaurusAmbiguityAdmin(admin.ModelAdmin):
     """Только для чтения — реестр наполняется исключительно import_thesaurus()
@@ -75,6 +90,7 @@ class ThesaurusAmbiguityAdmin(admin.ModelAdmin):
 
     list_display = ("abbr", "disambiguation")
     search_fields = ("abbr",)
+    inlines = [ThesaurusAmbiguityCandidateInline]
 
     def has_add_permission(self, request):
         return False
