@@ -9,6 +9,17 @@
 На operations/bastion host нужны `patronictl`, `etcdctl`, `pgbackrest`, `curl`,
 Python 3, MinIO Client (`mc`) и checkout приложения с рабочим virtualenv.
 
+Цикл запускается от учётной записи ОС, которой соответствует роль PostgreSQL,
+либо конфигурация pgBackRest задаёт `pgN-user` явно: `pgbackrest check`
+подключается к БД под именем вызывающего пользователя ОС. Запуск из-под root на
+типовой конфигурации даёт `FATAL: role "root" does not exist`
+(docs/STAGE4_LAB_REHEARSAL.md, Ф-3).
+
+Конфигурация pgBackRest на этом хосте обязана объявлять ВСЕ узлы кластера
+(`pg1`/`pg2`/`pg3`). После switchover/failover primary оказывается на другом
+узле, и объявление единственного `pg1` роняет проверку с
+`ERROR: [027]: primary database not found` (Ф-5).
+
 ```bash
 sudo install -d -o root -g root -m 0750 /etc/bz-get
 sudo install -o root -g root -m 0600 \
@@ -137,6 +148,26 @@ DR site, считает SHA-256 и пишет `minio-hash-sample.csv`. PASS тр
 отдельной строкой, поэтому снижение выборки — это видимое в отчёте решение
 Заказчика, а не правка скрипта. Если в контрольном bucket меньше объектов, чем
 требуется, проверка завершается FAIL.
+
+## 5a. Измерение RTO с точки зрения приложения
+
+Подключение psql к HAProxy даёт НЕ ТОТ показатель, который переживает АИС. На
+репетиции (docs/STAGE4_LAB_REHEARSAL.md, Ф-4) прямое подключение к HAProxy
+восстановилось за 0.4 с, а приложение, ходящее через PgBouncer, ещё 62 секунды
+получало сессии с узлом в recovery, где падает любая запись. Разница в 150 раз.
+
+Поэтому на каждом переключении RTO измеряется отдельным инструментом:
+
+```bash
+PGPASSWORD=... bash deploy/acceptance/write-path-probe.sh \
+  --dsn-port 6432 --user bz_get --db bz_get --duration 180 \
+  --out "$EVIDENCE/RUN_ID/write-path-switchover.csv"
+```
+
+Проба различает три состояния: `OK`, `READ_ONLY` (сессия есть, запись падает) и
+`FAIL`. Для приёмки значимо окно `write unavailable` — сумма двух последних.
+Любое ненулевое окно `READ_ONLY` означает, что переключение НЕ считается
+успешным до решения Заказчика по Ф-4.
 
 ## 6. Alertmanager и application smoke
 
