@@ -1,0 +1,38 @@
+# HAProxy reference configuration for an APPLICATION node.
+# Run one local instance per application node; Django never connects to this
+# port directly. PgBouncer connects to 127.0.0.1:6433 and exposes :6432 to
+# Django. Patroni REST health checks select only the writable primary.
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    user haproxy
+    group haproxy
+    daemon
+
+    # Admin socket is local/root-only by filesystem permissions.
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+
+ defaults
+    log global
+    mode tcp
+    option tcplog
+    timeout connect 5s
+    timeout client 1m
+    timeout server 1m
+    timeout check 3s
+
+listen postgres_primary
+    bind 127.0.0.1:6433
+    mode tcp
+
+    # Patroni returns HTTP 200 from /primary only on the current writable
+    # leader. The check itself goes to REST :8008 while traffic goes to
+    # PostgreSQL :5432.
+    option httpchk GET /primary
+    http-check expect status 200
+    default-server inter 2s fall 3 rise 2 on-marked-down shutdown-sessions
+
+    server db1 CHANGE_ME_DB1_IP:5432 check port 8008
+    server db2 CHANGE_ME_DB2_IP:5432 check port 8008
+    server db3 CHANGE_ME_DB3_IP:5432 check port 8008
