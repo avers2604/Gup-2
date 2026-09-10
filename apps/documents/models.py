@@ -173,8 +173,35 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 ),
             })
 
-    @transaction.atomic
     def save(self, *args, **kwargs):
+        # Rejected-upload evidence must survive the failed document transaction.
+        if kwargs.get("update_fields") is not None and not kwargs["update_fields"]:
+            return
+        # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — ДО
+        # super().save(), пока файл ещё не записан в storage: заражённый
+        # файл не должен попасть в WORM-бакет originals, откуда его потом
+        # может быть невозможно удалить. needs_scan() пропускает случай
+        # "поле — просто строка-имя уже существующего файла" (тесты,
+        # загрузка из БД) — сканировать там нечего, ничего нового не
+        # добавляется в хранилище.
+        # Структурная проверка на макросы (ТЗ 4.7, apps/core/macro_check.py)
+        # — рядом с антивирусом, тот же fail-closed: ClamAV ловит только
+        # ИЗВЕСТНЫЕ вредоносные макросы по сигнатурам, не сам факт наличия
+        # VBA-кода.
+        for field_name in ("files_original", "files_editable"):
+            field_file = getattr(self, field_name)
+            if antivirus.needs_scan(field_file):
+                antivirus.scan_uploaded_field(
+                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                )
+                macro_check.reject_if_has_macros(
+                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                )
+
+        return self._save_validated(*args, **kwargs)
+
+    @transaction.atomic
+    def _save_validated(self, *args, **kwargs):
         # retention_until — юридическая дата, а не производное поле, которое
         # можно пересчитывать на каждый save(): если бы она пересчитывалась
         # безусловно (как раньше), достаточно было бы просто сохранить
@@ -220,27 +247,6 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # заполняется, и пустое имя не должно ставить задачу распознавания
         # несуществующего файла в очередь.
         files_original_changed = bool(self.files_original) and previous_files_original != self.files_original.name
-
-        # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — ДО
-        # super().save(), пока файл ещё не записан в storage: заражённый
-        # файл не должен попасть в WORM-бакет originals, откуда его потом
-        # может быть невозможно удалить. needs_scan() пропускает случай
-        # "поле — просто строка-имя уже существующего файла" (тесты,
-        # загрузка из БД) — сканировать там нечего, ничего нового не
-        # добавляется в хранилище.
-        # Структурная проверка на макросы (ТЗ 4.7, apps/core/macro_check.py)
-        # — рядом с антивирусом, тот же fail-closed: ClamAV ловит только
-        # ИЗВЕСТНЫЕ вредоносные макросы по сигнатурам, не сам факт наличия
-        # VBA-кода.
-        for field_name in ("files_original", "files_editable"):
-            field_file = getattr(self, field_name)
-            if antivirus.needs_scan(field_file):
-                antivirus.scan_uploaded_field(
-                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
-                )
-                macro_check.reject_if_has_macros(
-                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
-                )
 
         if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
