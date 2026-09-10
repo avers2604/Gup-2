@@ -75,7 +75,7 @@
             <th>Скан-оригинал</th>
             <td>
               {% if document.files_original %}
-                <a href="{{ document.files_original.url }}">Скачать</a>
+                <a href="{% url 'documents:file-link' document.pk 'original' %}">Скачать</a>
                 {% if document.files_original_sha256 %}
                   <span class="caption data">SHA-256: {{ document.files_original_sha256 }}</span>
                 {% endif %}
@@ -84,7 +84,7 @@
           </tr>
           <tr>
             <th>Редактируемая версия</th>
-            <td>{% if document.files_editable %}<a href="{{ document.files_editable.url }}">Скачать</a>{% else %}—{% endif %}</td>
+            <td>{% if document.files_editable %}<a href="{% url 'documents:file-link' document.pk 'editable' %}">Скачать</a>{% else %}—{% endif %}</td>
           </tr>
           <tr>
             <th>Распознавание (OCR)</th>
