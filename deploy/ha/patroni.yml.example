@@ -56,6 +56,10 @@ bootstrap:
         wal_log_hints: "on"
         archive_mode: "on"
         archive_timeout: 60s
+        ssl: "on"
+        ssl_cert_file: /etc/bz-get/pki/postgresql.crt
+        ssl_key_file: /etc/bz-get/pki/postgresql.key
+        ssl_ca_file: /etc/bz-get/pki/ca.crt
         # pgBackRest must be installed/configured on every PostgreSQL node.
         archive_command: 'pgbackrest --stanza=bz-get archive-push %p'
 
@@ -64,11 +68,12 @@ bootstrap:
     - data-checksums
 
   # Replace CHANGE_ME_DB_CIDR with the private DB subnet. Do not expose
-  # PostgreSQL or replication to 0.0.0.0/0.
+  # PostgreSQL or replication to 0.0.0.0/0. Replication and remote clients
+  # must use TLS; local administration may use the Unix socket.
   pg_hba:
     - local all all peer
-    - host all all CHANGE_ME_DB_CIDR scram-sha-256
-    - host replication replicator CHANGE_ME_DB_CIDR scram-sha-256
+    - hostssl all all CHANGE_ME_DB_CIDR scram-sha-256
+    - hostssl replication replicator CHANGE_ME_DB_CIDR scram-sha-256
 
 postgresql:
   listen: CHANGE_ME_NODE_IP:5432
