@@ -77,6 +77,14 @@ jobs:
           bash -n deploy/alertmanager/validate.sh
           bash deploy/alertmanager/validate.sh
 
+      - name: Проверить Patroni rebuild и объединённый DR drill Этапа 4
+        # Runtime-style тесты используют fake patronictl/pgbackrest: проверяют
+        # dry-run, запрет rebuild leader, approval-marker, параметры restore и
+        # расчёт наблюдаемого RPO/RTO без подключения к production-инфре.
+        run: |
+          bash -n deploy/dr/validate-part4.sh
+          bash deploy/dr/validate-part4.sh
+
       - name: manage.py check
         run: python manage.py check
 
