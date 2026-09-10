@@ -11,7 +11,7 @@ class DocumentSearchIndex(models.Model):
     """CQRS-style read model for Smart Search.
 
     Source of truth remains documents.NormativeDocument. The read model stores
-    precomputed Russian FTS vectors and can be dropped/rebuilt independently.
+    precomputed Russian FTS vectors and can be truncated/rebuilt independently.
     """
 
     document = models.OneToOneField(
@@ -80,7 +80,11 @@ def refresh_document_index(document_id) -> bool:
 
 
 def rebuild_document_search_index(*, batch_size: int = 1000, require_count: int | None = None) -> dict:
-    """Cold-rebuild the whole read model using DB-side FTS calculation."""
+    """Cold-rebuild the whole read model using DB-side FTS calculation.
+
+    TRUNCATE makes this a real cold index-data rebuild instead of an incremental
+    refresh. The schema and GIN index remain provisioned by migrations.
+    """
     from apps.documents.models import NormativeDocument
 
     if batch_size < 1 or batch_size > 5000:
@@ -92,8 +96,10 @@ def rebuild_document_search_index(*, batch_size: int = 1000, require_count: int 
         raise ValueError(f"document corpus must contain exactly {require_count}, actual={total}")
 
     started = time.monotonic()
+    index_table, _ = _table_names()
     with transaction.atomic():
-        DocumentSearchIndex.objects.all().delete()
+        with connection.cursor() as cursor:
+            cursor.execute(f"TRUNCATE TABLE {index_table}")  # nosec B608: table name is Django metadata
         rebuilt = 0
         for offset in range(0, total, batch_size):
             rebuilt += _upsert_ids(document_ids[offset : offset + batch_size])
