@@ -17,6 +17,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 SECRET_KEY = os.environ.get("SECRET_KEY", "insecure-dev-key")
+# Отдельный ключ для шифрования секретов TOTP в БД (apps/iam/totp_crypto.py)
+# — намеренно НЕ совпадает с DJANGO_SECRET_KEY (компрометация одного не
+# должна автоматически раскрывать другой). Небезопасное значение по
+# умолчанию — только для dev, как и у SECRET_KEY выше; в проде обязателен
+# TOTP_ENCRYPTION_KEY из окружения (см. .env.example).
+TOTP_ENCRYPTION_KEY = os.environ.get(
+    "TOTP_ENCRYPTION_KEY", "5DVKKoTK7rYGmxTDJA3ASa9mGzjWwgqNl2HXSaq6sOA="
+)
 DEBUG = os.environ.get("DEBUG", "0") == "1"
 ALLOWED_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()]
 
@@ -29,6 +37,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.postgres",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
     "apps.core",
     "apps.iam",
@@ -46,6 +55,10 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # По запросу ревью анти-фрода — только Web-контур (см. docstring
+    # apps/iam/middleware.py), после AuthenticationMiddleware (нужен
+    # request.user).
+    "apps.iam.middleware.PasswordChangeRequiredMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -176,16 +189,35 @@ SPECTACULAR_SETTINGS = {
     "SERVE_INCLUDE_SCHEMA": False,
 }
 
-# Честная граница: logout в Web-контуре не отзывает уже выданные JWT —
-# access живёт своим TTL, refresh можно использовать до истечения, пока
-# не подключён blacklist (rest_framework_simplejwt.token_blacklist,
-# требует отдельного INSTALLED_APPS + миграции) — не сделано в этой
-# партии, короткий ACCESS_TOKEN_LIFETIME ниже снижает, а не убирает окно.
+# Blacklist (rest_framework_simplejwt.token_blacklist, по запросу ревью
+# анти-фрода) — apps.iam.api.LogoutView заносит предъявленный refresh в
+# чёрный список при выходе; ROTATE_REFRESH_TOKENS+BLACKLIST_AFTER_ROTATION
+# заодно блэклистит предыдущий refresh при каждом обновлении access через
+# token/refresh/. Честная граница, оставшаяся и после этого: access-токены
+# blacklist не проверяет (простая JWT-аутентификация в REST_FRAMEWORK
+# выше это не делает) — отозванный access живёт до истечения своего TTL
+# (15 минут); короткий ACCESS_TOKEN_LIFETIME — единственная защита в этом
+# окне, как и было до этой партии.
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
+}
+
+# Периодическая очистка истёкших/отозванных токенов из БД blacklist
+# (apps.iam.tasks.cleanup_expired_tokens, оборачивает встроенную команду
+# simplejwt flushexpiredtokens). Честная граница: расписание задано, но
+# ни один процесс `celery beat` в проекте не запускается (ни в
+# docker-compose.yml, ни в deploy/ — только celery worker), поэтому
+# запись ниже сейчас ничего не запускает сама по себе; тот же честный
+# разрыв, что и у AUDIT_LOG_EXPORTED в apps/audit/models.py.
+CELERY_BEAT_SCHEDULE = {
+    "cleanup-expired-jwt-tokens": {
+        "task": "apps.iam.tasks.cleanup_expired_tokens",
+        "schedule": timedelta(hours=24),
+    },
 }
 
 # Celery — очередь асинхронных задач конвейера OCR (Этап 3). Брокер — Redis

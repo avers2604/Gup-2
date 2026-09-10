@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.core.models import TimeStampedModel, UUIDPKModel
 
+from . import totp_crypto
 from .managers import UserManager
 from .validators import cyrillic_name_validator, personnel_number_validator
 
@@ -120,15 +121,20 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     status = models.CharField(max_length=32, choices=Status.choices, default=Status.ACTIVE)
 
     totp_enabled = models.BooleanField(default=False, verbose_name="2FA (TOTP) включена")
-    # base32-секрет TOTP (RFC 6238). editable=False — не должен появляться
-    # ни в форме админки, ни в сериализаторе API случайно; читается и
-    # пишется только через apps.iam.totp и вьюхи enroll/confirm.
-    # Заведомо честная граница: хранится в открытом виде в колонке БД, не
-    # зашифрован отдельным ключом — тот же уровень защиты, что у остальных
-    # данных этой таблицы (защита на уровне БД/бэкапов, не колонки).
-    # Шифрование секрета отдельным KMS-ключом — усиление для Этапа 3,
-    # не блокирует включение 2FA сейчас.
-    totp_secret = models.CharField(max_length=64, blank=True, editable=False, verbose_name="Секрет TOTP")
+    # base32-секрет TOTP (RFC 6238), зашифрован отдельным ключом
+    # (TOTP_ENCRYPTION_KEY, apps/iam/totp_crypto.py) — усиление, добавленное
+    # этой партией поверх ранее честно задокументированного пробела
+    # (открытое хранение). totp_secret_plaintext — переходное поле для
+    # учёток, заведённых до миграции (management-команда
+    # encrypt_totp_secrets): пока в нём есть значение, свойство totp_secret
+    # читает его как запасной вариант. Оба поля editable=False — доступны
+    # только через свойство totp_secret ниже и apps.iam.totp/services.
+    totp_secret_encrypted = models.CharField(
+        max_length=255, blank=True, editable=False, verbose_name="Секрет TOTP (зашифрован)",
+    )
+    totp_secret_plaintext = models.CharField(
+        max_length=64, blank=True, editable=False, verbose_name="Секрет TOTP (устар., открытый текст)",
+    )
 
     # Момент последней фактической смены пароля (включая первую установку
     # при создании учётной записи) — источник для is_password_expired.
@@ -179,6 +185,22 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     @property
     def full_name(self):
         return " ".join(part for part in (self.last_name, self.first_name, self.middle_name) if part)
+
+    @property
+    def totp_secret(self):
+        """Прозрачный доступ к секрету TOTP — вызывающий код (apps.iam.totp,
+        apps.iam.services) читает/пишет user.totp_secret как обычное поле;
+        шифрование/расшифровка и переходный fallback на устаревшее открытое
+        поле (totp_secret_plaintext, до прогона encrypt_totp_secrets)
+        скрыты здесь."""
+        if self.totp_secret_encrypted:
+            return totp_crypto.decrypt_totp_secret(self.totp_secret_encrypted)
+        return self.totp_secret_plaintext
+
+    @totp_secret.setter
+    def totp_secret(self, value):
+        self.totp_secret_encrypted = totp_crypto.encrypt_totp_secret(value) if value else ""
+        self.totp_secret_plaintext = ""
 
     @property
     def requires_totp(self):

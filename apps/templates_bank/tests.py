@@ -1,14 +1,28 @@
+import io
+import zipfile
+
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 
 from apps.audit.models import AuditLog
 from apps.core.antivirus import MalwareDetected
+from apps.core.macro_check import MacrosDetected
 from apps.core.storage import originals_storage
 from apps.core.tests.clamd_fixture import EICAR_BYTES, ClamdTestCase
 from apps.documents.retention import RetentionMode
 from apps.documents.tests.factories import make_document
 
 from .models import Template, TemplateFamily
+
+
+def _docx_bytes(with_macro: bool) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        zf.writestr("word/document.xml", "<document/>")
+        if with_macro:
+            zf.writestr("word/vbaProject.bin", b"fake vba bytecode")
+    return buf.getvalue()
 
 
 def _make_template(status=Template.Status.ACTIVE, version="v1.0", **kwargs):
@@ -115,3 +129,23 @@ class TemplateAntivirusTests(ClamdTestCase):
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED)
         self.assertEqual(entries.count(), 1)
         self.assertEqual(entries.first().details["field"], "file_sample")
+
+
+class TemplateMacroCheckTests(ClamdTestCase):
+    """Структурная проверка на макросы (ТЗ 4.7, apps/core/macro_check.py)
+    — тот же принцип, что и у NormativeDocument (см.
+    apps/documents/tests/test_macro_check_integration.py)."""
+
+    def test_docx_with_macro_blocks_save(self):
+        infected = SimpleUploadedFile("form.docx", _docx_bytes(with_macro=True))
+        with self.assertRaises(MacrosDetected):
+            _make_template(version="v-mc-1", file_editable=infected)
+        self.assertFalse(Template.objects.filter(version="v-mc-1").exists())
+
+    def test_macro_rejection_writes_audit_entry(self):
+        infected = SimpleUploadedFile("form.docx", _docx_bytes(with_macro=True))
+        with self.assertRaises(MacrosDetected):
+            _make_template(version="v-mc-2", file_editable=infected)
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.UPLOAD_MACRO_REJECTED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().details["field"], "file_editable")

@@ -6,7 +6,7 @@ import datetime
 from unittest.mock import patch
 
 import pyotp
-from django.test import Client, TestCase
+from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -16,6 +16,10 @@ from apps.audit.models import AuditLog
 from .. import services
 from ..models import Department, User
 from ..totp import generate_totp_secret
+
+
+def _request(ip="203.0.113.5"):
+    return RequestFactory().post("/", REMOTE_ADDR=ip)
 
 
 def _make_user(totp_enabled=False, **kwargs):
@@ -145,3 +149,87 @@ class ApiLockoutIntegrationTests(TestCase):
             reverse("iam_api:token-obtain"), {"personnel_number": "0001", "password": "Sup3r$ecret!Pass"},
         )
         self.assertEqual(response.status_code, 429)
+
+
+class IpLockoutTests(TestCase):
+    """Второй, независимый контур — по IP (энумерация множества табельных
+    номеров с одного источника, ТЗ 4.7 сам по себе такого порога не
+    задаёт — см. docstring IP_LOCKOUT_MAX_ATTEMPTS)."""
+
+    def test_many_different_personnel_numbers_same_ip_triggers_ip_lockout(self):
+        request = _request()
+        for i in range(services.IP_LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(request, personnel_number=f"999{i:04d}", password="wrong")
+        self.assertTrue(services.is_ip_locked_out("203.0.113.5"))
+
+    def test_ip_lockout_blocks_unrelated_account_from_same_source(self):
+        user = _make_user()
+        request = _request()
+        for i in range(services.IP_LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(request, personnel_number=f"999{i:04d}", password="wrong")
+        with self.assertRaises(services.LoginBlocked):
+            services.check_credentials(request, personnel_number=user.personnel_number, password="Sup3r$ecret!Pass")
+
+    def test_single_account_failures_do_not_trigger_ip_lockout(self):
+        # LOCKOUT_MAX_ATTEMPTS (5) < IP_LOCKOUT_MAX_ATTEMPTS (20) — брутфорс
+        # одной учётки блокирует её персонально, но не весь источник.
+        request = _request()
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(request, personnel_number="0001", password="wrong")
+        self.assertTrue(services.is_locked_out("0001"))
+        self.assertFalse(services.is_ip_locked_out("203.0.113.5"))
+
+    def test_different_ip_does_not_count_toward_ip_lockout(self):
+        for i in range(services.IP_LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(_request(f"198.51.100.{i % 250}"), personnel_number=f"888{i:04d}", password="wrong")
+        self.assertFalse(services.is_ip_locked_out("203.0.113.5"))
+
+    def test_empty_ip_is_never_locked_out(self):
+        for i in range(services.IP_LOCKOUT_MAX_ATTEMPTS * 2):
+            services.check_credentials(None, personnel_number=f"777{i:04d}", password="wrong")
+        self.assertFalse(services.is_ip_locked_out(""))
+
+
+class RetryAfterTests(TestCase):
+    def setUp(self):
+        _make_user()
+
+    def test_seconds_until_unlock_none_when_not_locked(self):
+        self.assertIsNone(services.seconds_until_unlock("0001"))
+
+    def test_seconds_until_unlock_positive_and_bounded_when_locked(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        seconds = services.seconds_until_unlock("0001")
+        self.assertIsNotNone(seconds)
+        self.assertGreater(seconds, 0)
+        self.assertLessEqual(seconds, int(services.LOCKOUT_WINDOW.total_seconds()))
+
+    def test_login_retry_after_seconds_combines_both_counters(self):
+        request = _request()
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(request, personnel_number="0001", password="wrong")
+        retry_after = services.login_retry_after_seconds("0001", "203.0.113.5")
+        self.assertGreater(retry_after, 0)
+
+    def test_login_retry_after_seconds_zero_when_not_locked(self):
+        self.assertEqual(services.login_retry_after_seconds("0001", "203.0.113.5"), 0)
+
+    def test_api_429_response_includes_retry_after_header(self):
+        client = APIClient()
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            client.post(reverse("iam_api:token-obtain"), {"personnel_number": "0001", "password": "wrong"})
+        response = client.post(
+            reverse("iam_api:token-obtain"), {"personnel_number": "0001", "password": "wrong"},
+        )
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("Retry-After", response.headers)
+        self.assertGreater(int(response.headers["Retry-After"]), 0)
+
+
+class LockoutQueryIndexTests(TestCase):
+    def test_composite_index_on_event_type_personnel_number_created_at(self):
+        index_field_sets = [tuple(idx.fields) for idx in AuditLog._meta.indexes]
+        self.assertIn(
+            ("event_type", "actor_personnel_number", "created_at"), index_field_sets,
+        )

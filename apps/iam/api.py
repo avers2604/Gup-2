@@ -11,10 +11,11 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from . import services
-from .serializers import TokenObtainRequestSerializer, TotpVerifyRequestSerializer
+from .serializers import LogoutRequestSerializer, TokenObtainRequestSerializer, TotpVerifyRequestSerializer
 
 
 def _issue_tokens(user) -> dict:
@@ -48,10 +49,11 @@ class TokenObtainView(APIView):
                 personnel_number=serializer.validated_data["personnel_number"],
                 password=serializer.validated_data["password"],
             )
-        except services.LoginBlocked:
+        except services.LoginBlocked as exc:
             return Response(
                 {"detail": "Слишком много неудачных попыток входа. Попробуйте позже."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(exc.retry_after)},
             )
         if result is None:
             return Response(
@@ -89,16 +91,43 @@ class TotpVerifyView(APIView):
                 code=serializer.validated_data["code"],
                 request=request,
             )
-        except services.LoginBlocked:
+        except services.LoginBlocked as exc:
             return Response(
                 {"detail": "Слишком много неудачных попыток входа. Попробуйте позже."},
                 status=status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(exc.retry_after)},
             )
         if user is None:
             return Response({"detail": "Неверный код."}, status=status.HTTP_401_UNAUTHORIZED)
 
         services.record_session_login(user, request)
         return Response(_issue_tokens(user))
+
+
+class LogoutView(APIView):
+    """Отзыв refresh-токена (blacklist, по запросу ревью анти-фрода) —
+    закрывает честную границу, что logout в External API/JWT-контуре
+    раньше не отзывал уже выданные токены (config/settings/base.py,
+    SIMPLE_JWT). Требует access-токен в Authorization (permission по
+    умолчанию — IsAuthenticated, REST_FRAMEWORK выше) — тот же
+    предъявитель, что и выходящий пользователь; сам access при этом
+    продолжает жить до истечения своего TTL, см. честную границу там же."""
+
+    @extend_schema(
+        request=LogoutRequestSerializer,
+        responses={205: OpenApiResponse(description="Refresh-токен отозван")},
+    )
+    def post(self, request):
+        serializer = LogoutRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            RefreshToken(serializer.validated_data["refresh"]).blacklist()
+        except TokenError:
+            return Response({"detail": "Неверный или уже отозванный refresh-токен."}, status=status.HTTP_400_BAD_REQUEST)
+
+        services.record_session_logout(request.user, request)
+        return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
 class MeView(APIView):

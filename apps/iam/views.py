@@ -8,13 +8,14 @@ services.py (общим с apps/iam/api.py, см. их docstring).
 from django.conf import settings
 from django.contrib.auth import login as django_login
 from django.contrib.auth import logout as django_logout
+from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import redirect, render
 from django.views import View
 from django.views.generic import FormView
 
 from . import services
-from .forms import LoginForm, TotpCodeForm
+from .forms import LoginForm, PasswordChangeForm, TotpCodeForm
 
 _SESSION_PENDING_TICKET = "totp_pending_ticket"
 # Значение shared_terminal со ШАГА 1 нужно донести до момента реальной
@@ -146,3 +147,29 @@ class TotpConfirmView(LoginRequiredMixin, View):
             return render(request, "iam/_totp_confirm_result.html", {"form": form}, status=400)
 
         return render(request, "iam/_totp_confirm_result.html", {"success": True})
+
+
+class PasswordChangeView(LoginRequiredMixin, FormView):
+    """Единственная вьюха смены пароля в проекте (по запросу ревью
+    анти-фрода) — цель PasswordChangeRequiredMiddleware (apps/iam/middleware.py)
+    для status=PASSWORD_CHANGE_REQUIRED/is_password_expired. Web-only —
+    API остаётся информационным флагом (services.user_auth_summary),
+    тем же разделением контуров, что и everywhere else в проекте (см.
+    STACK.md о Web SSR vs External API JWT)."""
+
+    template_name = "iam/password_change.html"
+    form_class = PasswordChangeForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["user"] = self.request.user
+        return kwargs
+
+    def form_valid(self, form):
+        form.save()
+        # PasswordChangeForm меняет пароль — сессия иначе была бы
+        # инвалидирована на СЛЕДУЮЩЕМ запросе (Django привязывает хэш
+        # сессии к хэшу пароля), разлогинив только что сменившего пароль
+        # пользователя на этой же странице.
+        update_session_auth_hash(self.request, form.user)
+        return redirect(settings.LOGIN_REDIRECT_URL)

@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models, transaction
 
-from apps.core import antivirus
+from apps.core import antivirus, macro_check
 from apps.core.models import TimeStampedModel, UUIDPKModel
 from apps.core.storage import originals_storage, working_storage
 from apps.iam.models import Department
@@ -212,10 +212,17 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # "поле — просто строка-имя уже существующего файла" (тесты,
         # загрузка из БД) — сканировать там нечего, ничего нового не
         # добавляется в хранилище.
+        # Структурная проверка на макросы (ТЗ 4.7, apps/core/macro_check.py)
+        # — рядом с антивирусом, тот же fail-closed: ClamAV ловит только
+        # ИЗВЕСТНЫЕ вредоносные макросы по сигнатурам, не сам факт наличия
+        # VBA-кода.
         for field_name in ("files_original", "files_editable"):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
                 antivirus.scan_uploaded_field(
+                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                )
+                macro_check.reject_if_has_macros(
                     field_file, object_type="NormativeDocument", object_id=self.reg_number,
                 )
 

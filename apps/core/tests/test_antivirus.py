@@ -27,3 +27,27 @@ class ScanFileTests(ClamdTestCase):
         with override_settings(CLAMAV_HOST="127.0.0.1", CLAMAV_PORT=1):
             with self.assertRaises(AntivirusUnavailable):
                 scan_file(io.BytesIO(b"whatever"))
+
+
+class StreamMaxLengthTests(ClamdTestCase):
+    """Проверяет вживую (реальный clamd, не мок) честную границу из
+    deploy/clamav/clamd.conf: заводской дефолт ClamAV (StreamMaxLength
+    25M) меньше лимита ТЗ 1.2 §4.2.1 (150 МБ) — что именно происходит,
+    когда поток БОЛЬШЕ настроенного лимита. Отдельный порт и намеренно
+    маленький лимит (1M), чтобы не гонять реальные мегабайты в тесте."""
+
+    clamd_port = 13311
+    clamd_stream_max_length = "1M"
+
+    def test_stream_within_limit_is_scanned_normally(self):
+        # Не должно раниться — поток меньше лимита сканируется как обычно.
+        scan_file(io.BytesIO(b"A" * (500 * 1024)))
+
+    def test_stream_over_limit_fails_closed_not_silently_clean(self):
+        # КЛЮЧЕВАЯ проверка риска из ревью: превышение StreamMaxLength не
+        # должно молча вернуть "чисто" (ложноотрицательный результат) —
+        # clamd рвёт соединение, clamd-клиент поднимает OSError
+        # (BrokenPipeError), scan_file() ловит это и требует
+        # AntivirusUnavailable (fail-closed), а не MalwareDetected=нет.
+        with self.assertRaises(AntivirusUnavailable):
+            scan_file(io.BytesIO(b"C" * (2 * 1024 * 1024)))
