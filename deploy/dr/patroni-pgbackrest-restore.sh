@@ -44,9 +44,19 @@ if [[ -n "$role" && "$role" != "replica" ]]; then
   exit 65
 fi
 
+command -v realpath >/dev/null 2>&1 || {
+  echo "ERROR: realpath is required to validate Patroni PGDATA" >&2
+  exit 69
+}
+allowed_root="$(realpath -m -- "$ALLOWED_DATA_ROOT")"
+datadir="$(realpath -m -- "$datadir")"
+if [[ "$allowed_root" == "/" || "$datadir" == "$allowed_root" ]]; then
+  echo "ERROR: unsafe allowed root/datadir combination: root='$allowed_root' datadir='$datadir'" >&2
+  exit 65
+fi
 case "$datadir" in
-  "$ALLOWED_DATA_ROOT"/*) ;;
-  *) echo "ERROR: datadir '$datadir' is outside allowed root '$ALLOWED_DATA_ROOT'" >&2; exit 65 ;;
+  "$allowed_root"/*) ;;
+  *) echo "ERROR: canonical datadir '$datadir' is outside allowed root '$allowed_root'" >&2; exit 65 ;;
 esac
 
 if [[ ! -r "$APPROVAL_FILE" ]] || ! grep -Fxq 'status=approved' "$APPROVAL_FILE"; then
