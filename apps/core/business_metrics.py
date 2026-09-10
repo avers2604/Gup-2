@@ -59,6 +59,7 @@ def _counter_values() -> dict[str, int]:
 
 def render_prometheus() -> str:
     """Render the four business indicators required by Stage 4 acceptance."""
+    from apps.documents.models import NormativeDocument
     from apps.templates_bank.models import Template
 
     now = timezone.now()
@@ -66,7 +67,13 @@ def render_prometheus() -> str:
     template_cutoff_date = (now - timedelta(days=365 * 3)).date()
     template_cutoff_dt = now - timedelta(days=365 * 3)
 
-    overdue_ocr = OcrReviewQueueEntry.objects.filter(required_at__lt=ocr_cutoff).count()
+    active_review_ids = NormativeDocument.objects.filter(
+        ocr_status=NormativeDocument.OcrStatus.NEEDS_REVIEW
+    ).values("pk")
+    overdue_ocr = OcrReviewQueueEntry.objects.filter(
+        required_at__lt=ocr_cutoff,
+        document_id__in=active_review_ids,
+    ).count()
     overdue_templates = Template.objects.filter(status=Template.Status.ACTIVE).filter(
         Q(last_reviewed_at__lt=template_cutoff_date)
         | Q(last_reviewed_at__isnull=True, created_at__lt=template_cutoff_dt)
