@@ -6,137 +6,151 @@
 конфигураций в Git не считается доказательством пройденного HA/DR испытания и
 не подтверждает RPO/RTO без стендовых измерений.
 
-## Что было до начала Этапа 4
-
-В `main` уже были одиночные PostgreSQL/PgBouncer/etcd для разработки, MinIO,
-Redis, ClamAV, Prometheus и Grafana. `STACK.md` фиксировал Patroni и pgBackRest
-как целевые компоненты, но production/reference-конфигураций HA и DR в
-репозитории не было. Prometheus выполнял только self-scrape.
-
 ## Партия 1 — HA PostgreSQL + DR bootstrap
 
 После merge PR #29 в `main` присутствуют:
 
-### `deploy/ha/`
+- `deploy/ha/` — Patroni/PostgreSQL 3-node baseline, 3-node etcd/TLS,
+  локальные HAProxy + PgBouncer, failover/switchover runbook;
+- `deploy/dr/` — pgBackRest, continuous WAL archive, PITR и сценарий полной
+  потери PostgreSQL-кластера;
+- стабильная DB-точка приложения `127.0.0.1:6432` через
+  `Django -> PgBouncer -> HAProxy -> Patroni primary`.
 
-- `patroni.yml.example` — baseline для 3 PostgreSQL/Patroni узлов;
-- `etcd.env.example` — трёхузловой etcd/TLS baseline;
-- `haproxy.cfg.example` — выбор current primary через Patroni REST;
-- `pgbouncer.ini.example` — локальный transaction pool приложения;
-- `validate.sh` — неразрушающая проверка конфигурации;
-- `README.md` — bootstrap, switchover/failover и Definition of Done.
-
-### `deploy/dr/`
-
-- `pgbackrest.conf.example` — encrypted remote repository + WAL archive;
-- `check-backup.sh` — штатная проверка stanza/repository;
-- `README.md` — PITR, полная потеря DB-кластера, restore drill и форма
-  фиксации фактических RPO/RTO.
-
-Django в HA-среде должен подключаться к стабильной локальной точке
-`127.0.0.1:6432`:
-
-```text
-Django -> PgBouncer -> HAProxy -> current Patroni primary
-```
+Честная граница: это reference implementation. Реальный кластер, failover drill
+и измеренные RPO/RTO требуют стенда.
 
 ## Партия 2 — monitoring HA/DR
 
-Текущая ветка добавляет monitoring/reference implementation поверх партии 1.
+После merge PR #30 в `main` присутствуют:
 
-### Patroni
+- native Patroni `/metrics`;
+- `postgres_exporter` под отдельной read-only ролью `pg_monitor`;
+- `pgbouncer_exporter` под отдельным `stats_users`;
+- read-only `pgbackrest_exporter.py`;
+- `deploy/prometheus/prometheus.stage4.yml.example`;
+- правила `deploy/prometheus/rules/ha-dr.yml`;
+- Grafana datasource + provisioned dashboard `BZ GET — Stage 4 HA / DR`;
+- systemd units/env templates и CI/static validation.
 
-Используется нативный endpoint Patroni 4.1.x `GET /metrics`. Prometheus
-опрашивает все три DB-узла и контролирует:
+Пороговые значения этих alert rules — bootstrap для стенда, а не SLA.
 
-- ровно один primary;
-- наличие sync standby;
-- состояние PostgreSQL;
-- replay lag;
-- свежесть связи Patroni с DCS;
-- failsafe mode;
-- pending restart.
+## Партия 3 — MinIO DR + Alertmanager delivery
 
-### PostgreSQL
+Текущая ветка добавляет два ранее незакрытых контура.
 
-На каждом DB-узле предусматривается `postgres_exporter` под отдельной
-read-only учётной записью с predefined role `pg_monitor`. Application user и
-PostgreSQL superuser для мониторинга не используются.
+### MinIO DR
 
-### PgBouncer
+`deploy/minio/dr/` реализует reference active-passive server-side bucket
+replication только для application-бакетов:
 
-На каждом app-узле предусматривается community `pgbouncer_exporter`. Для него
-в PgBouncer выделен отдельный `stats_users = pgbouncer_exporter`, без выдачи
-`admin_users`. Контролируются waiting clients и max client wait.
+```text
+active MinIO site                 passive DR MinIO site
+  bz-get-originals (WORM)   --->   bz-get-originals (WORM)
+  bz-get-working            --->   bz-get-working
+```
 
-### pgBackRest
-
-Добавлен небольшой read-only exporter `deploy/monitoring/pgbackrest_exporter.py`.
-Он использует стабильный JSON интерфейс `pgbackrest info --output=json`, не
-запускает backup/restore и отдаёт:
-
-- exporter/stanza health;
-- наличие WAL archive range;
-- число backup по типам;
-- timestamp/age последних full/diff/incr/any backup.
-
-### Prometheus / Grafana
+Выбран bucket replication, а не site replication: проекту не требуется
+автоматически реплицировать весь IAM и все бакеты MinIO. Направление только
+одно; reverse replication включается лишь после аварии, когда новый active site
+зафиксирован, а старый site изолирован/rebuild'ится.
 
 Добавлены:
 
-- `deploy/prometheus/prometheus.stage4.yml.example`;
-- `deploy/prometheus/rules/ha-dr.yml`;
-- Grafana datasource `Infrastructure Prometheus`;
-- provisioned dashboard `BZ GET — Stage 4 HA / DR`;
-- systemd units и env-шаблоны exporter'ов;
-- `deploy/monitoring/validate.sh`.
+- `dr.env.example` — endpoints/credentials вне Git;
+- минимальные source/target replication policies;
+- `configure-replication.sh` — Versioning + one-way replication существующих
+  объектов и delete semantics;
+- fail-closed проверка Object Lock capability на DR-копии `originals`;
+- `check-replication.sh` — неразрушающая проверка правил/status/count версий;
+- `validate.sh` — CI/static validation;
+- `README.md` — failover, failback/resync и совместный PostgreSQL + MinIO
+  restore drill.
 
-Пороговые значения в alert rules — **bootstrap для стенда**, а не утверждённый
-SLA. Например, backup >8 часов считается stale исходя из временного стендового
-schedule incremental-раз-в-6-часов; после утверждения RPO/RTO пороги должны
-быть пересчитаны.
+`.env.example` теперь явно разделяет dev endpoint MinIO и production DR
+endpoint: приложение должно использовать стабильное DNS/LB имя, а не знать,
+какая площадка active.
 
-## Что документация больше не должна утверждать
+Честная граница: bucket replication асинхронна, поэтому её наличие само по себе
+не доказывает RPO=0. Реальный RPO определяется backlog/задержкой и измеряется на
+DR drill.
 
-### Dev Compose не является HA
+### Alertmanager delivery
 
-Один PostgreSQL и один etcd в `docker-compose.yml` остаются только dev-средой.
-Их нельзя выдавать за production HA-кластер независимо от количества volume.
+Добавлен `deploy/alertmanager/` и systemd unit двухузлового Alertmanager HA.
+Prometheus отправляет каждый alert сразу обоим peers, без единственного LB между
+Prometheus и Alertmanager.
+
+Маршрутизация:
+
+- `severity=critical` -> dedicated critical webhook;
+- `severity=warning` -> warning webhook;
+- `send_resolved=true`;
+- critical ингибирует дублирующий warning того же события.
+
+Receiver URL читается из root-owned `url_file`; токены/секретные webhook URLs
+не хранятся в Git. Generic webhook оставляет выбор фактического канала
+Заказчику: корпоративный relay, Service Desk, Mattermost/Telegram bridge и т.п.
+
+Добавлены:
+
+- Alertmanager routing config + HA env template;
+- `get-alertmanager.service`;
+- synthetic `test-alert.sh` для warning/critical с авто-expire;
+- `validate.sh` с `amtool check-config`, если `amtool` установлен;
+- Prometheus targets обоих Alertmanager;
+- `deploy/prometheus/rules/alert-delivery.yml` — target down, degraded cluster,
+  notification failures.
+
+Честная граница: routing технически готов, но operational alerting считается
+принятым только после заполнения реальных receiver URL и подтверждённого
+synthetic delivery test на каждой площадке.
+
+## Документационные ограничения, которые остаются обязательными
+
+### Dev Compose не является HA/DR
+
+Один PostgreSQL, один etcd и один MinIO container в `docker-compose.yml` —
+только dev-среда. Несколько volume одного host не создают отдельный failure
+domain.
 
 ### Реплика не является backup
 
-Streaming replication защищает от отказа узла, но не от логической ошибки.
-DR PostgreSQL опирается на отдельный pgBackRest repository и PITR.
+PostgreSQL streaming replication и MinIO bucket replication защищают от разных
+классов отказов, но не заменяют независимый backup/restore. Ошибка приложения
+или оператора может распространиться на реплики.
 
-### MinIO в одном host не является DR
+### PostgreSQL и MinIO восстанавливаются согласованно
 
-Четыре data directory одного MinIO-контейнера не защищают от потери узла.
-Полное восстановление АИС требует согласованной пары PostgreSQL metadata + S3
-objects; MinIO DR остаётся отдельной незакрытой подпартией Этапа 4.
+БД хранит metadata/object keys, файлы находятся в S3. Успешный `pgbackrest
+restore` при отсутствующей соответствующей object version не считается
+успешным DR АИС.
 
-### Monitoring не равен operational alerting
+### Monitoring не равен SLA
 
-Prometheus уже может вычислять правила, Grafana — отображать состояние. Но
-корпоративный канал доставки critical/warning уведомлений ещё не выбран.
-Пока не настроен и не испытан Alertmanager/Grafana contact point, нельзя
-считать оповещение дежурной смены завершённым.
+Наличие alert rules/dashboard/Alertmanager не подтверждает время восстановления.
+SLA возникает только после утверждённых RPO/RTO и измеренных drills.
 
 ## Что остаётся до закрытия Этапа 4
 
 1. Развернуть 3x etcd + 3x Patroni/PostgreSQL на реальном стенде.
-2. Выполнить planned switchover и unplanned failover с измерением времени.
-3. Проверить exporter'ы и алерты во время фактического отказа узла.
-4. Настроить и испытать канал доставки alert notifications.
-5. Выполнить full/diff/incr backup и непрерывный WAL archive.
-6. Выполнить PITR на отдельный recovery host.
-7. Выполнить восстановление после полной потери тестового DB-кластера.
-8. Реализовать MinIO replication/backup/restore с учётом WORM `originals`.
-9. После проверенного ручного restore автоматизировать rebuild Patroni из
+2. Развернуть две физически разделённые MinIO площадки и проверить bucket
+   replication/Object Lock.
+3. Развернуть два Alertmanager и подключить реальные warning/critical receivers.
+4. Выполнить synthetic alert test с подтверждением доставки и отказом одного
+   Alertmanager.
+5. Выполнить planned switchover и unplanned PostgreSQL failover.
+6. Выполнить full/diff/incr pgBackRest + continuous WAL и PITR.
+7. Выполнить MinIO failover/failback с resync.
+8. Выполнить **совместный PostgreSQL + MinIO restore drill** и проверить UUID,
+   object keys, version IDs, checksums и WORM retention.
+9. После успешного ручного restore автоматизировать rebuild Patroni из
    pgBackRest.
 10. Утвердить RPO/RTO и заменить bootstrap thresholds на SLA-derived значения.
 
-## Ближайшая следующая партия
+## Следующая партия
 
-**MinIO DR + доставка alert notifications.** После этого — автоматизация
-Patroni rebuild из pgBackRest и объединённый failover/restore drill с
-измерением фактических RPO/RTO.
+**Автоматизация rebuild Patroni из pgBackRest + объединённый failover/restore
+drill.** Эта автоматизация должна появиться только после того, как ручной PITR
+и MinIO DR-процедура воспроизводимы на стенде: разрушительный recovery path
+нельзя автоматизировать раньше, чем доказана его корректность вручную.

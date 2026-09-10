@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConfigureReplicationTargets",
+      "Effect": "Allow",
+      "Action": [
+        "admin:SetBucketTarget",
+        "admin:GetBucketTarget"
+      ],
+      "Resource": ["*"]
+    },
+    {
+      "Sid": "ConfigureApplicationBucketReplication",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetReplicationConfiguration",
+        "s3:PutReplicationConfiguration",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:ListBucketMultipartUploads",
+        "s3:GetBucketLocation",
+        "s3:GetBucketVersioning"
+      ],
+      "Resource": [
+        "arn:aws:s3:::bz-get-originals",
+        "arn:aws:s3:::bz-get-working"
+      ]
+    },
+    {
+      "Sid": "ReadOriginalsObjectLockMetadataForReplication",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObjectRetention",
+        "s3:GetObjectLegalHold"
+      ],
+      "Resource": [
+        "arn:aws:s3:::bz-get-originals/*"
+      ]
+    }
+  ]
+}

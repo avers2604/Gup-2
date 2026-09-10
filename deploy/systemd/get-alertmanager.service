@@ -1,0 +1,30 @@
+[Unit]
+Description=BZ GET Alertmanager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alertmanager
+Group=alertmanager
+EnvironmentFile=/etc/bz-get/alertmanager/alertmanager.env
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/bz-get/alertmanager/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager \
+  --web.listen-address=${ALERTMANAGER_LISTEN_ADDRESS} \
+  --cluster.listen-address=${ALERTMANAGER_CLUSTER_LISTEN_ADDRESS} \
+  --cluster.advertise-address=${ALERTMANAGER_CLUSTER_ADVERTISE_ADDRESS} \
+  --cluster.peer=${ALERTMANAGER_PEER_1} \
+  --cluster.peer=${ALERTMANAGER_PEER_2}
+Restart=on-failure
+RestartSec=5s
+StateDirectory=alertmanager
+StateDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/bz-get/alertmanager
+
+[Install]
+WantedBy=multi-user.target

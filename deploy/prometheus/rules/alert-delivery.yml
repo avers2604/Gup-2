@@ -1,0 +1,30 @@
+groups:
+  - name: alertmanager-ha
+    interval: 30s
+    rules:
+      - alert: AlertmanagerTargetDown
+        expr: up{job="alertmanager"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager instance is unavailable"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for more than one minute. Delivery remains redundant only while another Alertmanager peer is healthy."
+
+      - alert: AlertmanagerClusterDegraded
+        expr: min(alertmanager_cluster_members{job="alertmanager"}) < 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager HA cluster has fewer than two members"
+          description: "At least one Alertmanager reports fewer than two cluster members. Check TCP/UDP 9094, peer addresses and gossip state."
+
+      - alert: AlertmanagerNotificationFailures
+        expr: sum(increase(alertmanager_notifications_failed_total{job="alertmanager"}[5m])) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alertmanager notification delivery is failing"
+          description: "Alertmanager recorded failed notification attempts during the last five minutes. Check receiver endpoint, authentication and network path."
