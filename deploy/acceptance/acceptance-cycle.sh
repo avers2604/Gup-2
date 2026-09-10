@@ -65,6 +65,7 @@ PGBACKREST_BIN="${PGBACKREST_BIN:-pgbackrest}"
 MAX_REPLICA_LAG_BYTES="${MAX_REPLICA_LAG_BYTES:-1048576}"
 MAX_BACKUP_AGE_SECONDS="${MAX_BACKUP_AGE_SECONDS:-90000}"
 APP_HEALTH_EXPECT_REGEX="${APP_HEALTH_EXPECT_REGEX:-^(ok|healthy|ready)$}"
+MINIO_CHECK_SCRIPT="${MINIO_CHECK_SCRIPT:-$REPO_ROOT/deploy/minio/dr/check-replication.sh}"
 
 run_dir="$ACCEPTANCE_EVIDENCE_ROOT/$run_id"
 mkdir -p "$run_dir"
@@ -202,11 +203,15 @@ check_minio() {
     echo "ERROR: MinIO DR env is not readable: $MINIO_DR_ENV" >&2
     exit 66
   }
+  [[ -r "$MINIO_CHECK_SCRIPT" ]] || {
+    echo "ERROR: MinIO DR check script is not readable: $MINIO_CHECK_SCRIPT" >&2
+    exit 66
+  }
   set -a
   # shellcheck disable=SC1090
   . "$MINIO_DR_ENV"
   set +a
-  bash "$REPO_ROOT/deploy/minio/dr/check-replication.sh" >"$run_dir/minio-preflight.txt" 2>&1
+  bash "$MINIO_CHECK_SCRIPT" >"$run_dir/minio-preflight.txt" 2>&1
   echo "MinIO DR OK"
 }
 
