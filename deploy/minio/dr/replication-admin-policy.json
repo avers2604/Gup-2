@@ -28,15 +28,14 @@
       ]
     },
     {
-      "Sid": "ReadObjectLockMetadataForReplication",
+      "Sid": "ReadOriginalsObjectLockMetadataForReplication",
       "Effect": "Allow",
       "Action": [
         "s3:GetObjectRetention",
         "s3:GetObjectLegalHold"
       ],
       "Resource": [
-        "arn:aws:s3:::bz-get-originals/*",
-        "arn:aws:s3:::bz-get-working/*"
+        "arn:aws:s3:::bz-get-originals/*"
       ]
     }
   ]
