@@ -127,9 +127,11 @@ GUI** (Django Templates + HTMX + Alpine.js, серверный рендерин�
   контуров: Web под `/accounts/` (`login/`, `login/verify-totp/`,
   `logout/`, `totp/enroll/`, `totp/confirm/`), API под `/api/v1/auth/`
   (`token/`, `token/verify-totp/`, `token/refresh/`, `me/`; схема —
-  `/api/v1/schema/`, Swagger UI — `/api/v1/docs/`). Подробности и
-  честные границы (нет rate limiting, нет админ-сброса TOTP, JWT без
-  blacklist) — STACK.md.
+  `/api/v1/schema/`, Swagger UI — `/api/v1/docs/`; выход API-контура —
+  `POST /api/v1/auth/logout/`, отзывает refresh-токен). Rate
+  limiting, шифрование `totp_secret`, админ-сброс TOTP, JWT blacklist,
+  принудительная смена пароля — реализованы (см. «Анти-фрод» ниже).
+  Подробности и честные границы — STACK.md.
 - **Smart Search — сам поиск** (ТЗ 4.4.1, `apps/search_ocr/search.py`) —
   расширение запроса по тезаурусу (`expand_query`, только VERIFIED-записи,
   веса TH-06, разрешение неоднозначных аббревиатур через
@@ -185,20 +187,25 @@ GUI** (Django Templates + HTMX + Alpine.js, серверный рендерин�
   контейнер (само приложение там не контейнеризовано, см. «Локальный
   запуск» выше). Подробности — STACK.md.
 - **Анти-фрод / контроль целостности загрузки** (ТЗ 4.7,
-  `apps/iam/services.py`, `apps/core/antivirus.py`) — закрывает два
-  честных пробела из Этапа 2. Rate limiting/lockout: 5 неудачных попыток
-  пароля/TOTP-кода за 15 минут (те же цифры, что в Grafana-алерте «5+
-  неудачных попыток подряд») блокируют вход даже с верным паролем/кодом,
-  общий счётчик на оба шага, без новой инфраструктуры (считает по уже
-  существующему `SESSION_LOGIN_FAILED`). Антивирус: ClamAV (clamd,
-  `docker-compose.yml`, поднят с Этапа 1) сканирует `files_original`/
-  `files_editable` НРД и `file_editable`/`file_sample` бланка синхронно,
-  до записи в хранилище (fail-closed — недоступность ClamAV тоже
-  блокирует сохранение); обнаружение сигнатуры — запись
-  `UPLOAD_MALWARE_DETECTED` в WORM-аудит. Честные границы: rate limiting
-  только per-табельный номер, не per-IP; лимит потока ClamAV поднят до
-  200 МБ под ТЗ 1.2 §4.2.1, но не проверен вживую против образа из
-  `docker-compose.yml`. Подробности — STACK.md.
+  `apps/iam/services.py`, `apps/core/antivirus.py`,
+  `apps/core/macro_check.py`) — закрывает честные пробелы из Этапа 2 и
+  по итогам ревью. Rate limiting/lockout: 5 неудачных попыток
+  пароля/TOTP-кода за 15 минут на табельный номер (те же цифры, что в
+  Grafana-алерте «5+ неудачных попыток подряд») + второй, независимый
+  контур на 20 попыток за 15 минут по IP-источнику (против энумерации
+  множества номеров с одного источника) — блокируют вход даже с верным
+  паролем/кодом; оба без новой инфраструктуры (по `SESSION_LOGIN_FAILED`,
+  композитный индекс под запрос). Ответ 429 несёт заголовок
+  `Retry-After`. Антивирус: ClamAV (clamd, `docker-compose.yml`, поднят
+  с Этапа 1) сканирует `files_original`/`files_editable` НРД и
+  `file_editable`/`file_sample` бланка синхронно, до записи в хранилище
+  (fail-closed — недоступность ClamAV, включая превышение лимита потока,
+  живо проверено, тоже блокирует сохранение); обнаружение сигнатуры —
+  запись `UPLOAD_MALWARE_DETECTED`. Отдельно, структурно (не по
+  сигнатурам) — проверка DOCX/XLSX на встроенные макросы/ActiveX
+  (`UPLOAD_MACRO_REJECTED`), тем же fail-closed принципом. Честные
+  границы: JSONField-фильтр IP-счётчика без спец-индекса; макросы — только
+  OOXML, не легаси `.doc`/`.xls`. Подробности — STACK.md.
 
 ## Дальше по плану
 

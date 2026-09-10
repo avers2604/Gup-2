@@ -33,8 +33,13 @@ TEST_PORT = 13310
 
 
 class ClamdTestServer:
-    def __init__(self, port: int = TEST_PORT):
+    def __init__(self, port: int = TEST_PORT, stream_max_length: str | None = None):
         self.port = port
+        # None — заводской дефолт ClamAV (25M). Задать явно (например,
+        # "1M") — воспроизвести поведение clamd на потоке БОЛЬШЕ лимита,
+        # см. StreamMaxLengthTests в test_antivirus.py (проверка честной
+        # границы deploy/clamav/clamd.conf: не тихий "clean", а отказ).
+        self.stream_max_length = stream_max_length
         self._tmpdir: str | None = None
         self._process: subprocess.Popen | None = None
 
@@ -50,7 +55,7 @@ class ClamdTestServer:
         (db_dir / "eicar.hdb").write_text(f"{md5}:{len(EICAR_BYTES)}:Eicar-Test-Signature\n")
 
         conf_path = Path(self._tmpdir) / "clamd.conf"
-        conf_path.write_text(
+        conf_text = (
             f"LocalSocket {self._tmpdir}/clamd.sock\n"
             f"TCPSocket {self.port}\n"
             "TCPAddr 127.0.0.1\n"
@@ -59,6 +64,9 @@ class ClamdTestServer:
             f"LogFile {self._tmpdir}/clamd.log\n"
             "Foreground true\n"
         )
+        if self.stream_max_length:
+            conf_text += f"StreamMaxLength {self.stream_max_length}\n"
+        conf_path.write_text(conf_text)
 
         self._process = subprocess.Popen(
             [CLAMD_BINARY, "-c", str(conf_path)],
@@ -97,7 +105,15 @@ class ClamdTestServer:
 class ClamdTestCase(TestCase):
     """Django TestCase с живым clamd на весь класс — settings.CLAMAV_PORT
     подменяется на тестовый порт сервера через override_settings, снаружи
-    выглядит как обычный CLAMAV_HOST/PORT."""
+    выглядит как обычный CLAMAV_HOST/PORT.
+
+    clamd_port/clamd_stream_max_length — переопределяются в подклассе,
+    когда нужен отдельный порт (например, чтобы не пересекаться с другим
+    ClamdTestCase, если тесты запускаются параллельно, --parallel) и/или
+    искусственно маленький StreamMaxLength (см. StreamMaxLengthTests)."""
+
+    clamd_port: int = TEST_PORT
+    clamd_stream_max_length: str | None = None
 
     clamd_server: ClamdTestServer
     _settings_override: override_settings
@@ -105,7 +121,7 @@ class ClamdTestCase(TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        cls.clamd_server = ClamdTestServer()
+        cls.clamd_server = ClamdTestServer(port=cls.clamd_port, stream_max_length=cls.clamd_stream_max_length)
         cls.clamd_server.start()
         cls._settings_override = override_settings(
             CLAMAV_HOST="127.0.0.1", CLAMAV_PORT=cls.clamd_server.port,

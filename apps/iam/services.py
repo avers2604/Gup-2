@@ -323,13 +323,22 @@ class TotpEnrollmentNotStarted(Exception):
 
 
 class LoginBlocked(Exception):
-    """Табельный номер временно заблокирован после серии неудачных попыток
-    (rate limiting/lockout, см. is_locked_out() ниже) — отдельное
-    исключение, не None, как у обычной неверной пары логин/пароль:
-    вызывающий код должен показать другое сообщение ("слишком много
-    попыток"), это не раскрывает данные об учётной записи, поскольку
-    счётчик неудач копится независимо от того, существует ли такой
-    табельный номер вообще (см. check_credentials)."""
+    """Табельный номер и/или IP-адрес временно заблокированы после серии
+    неудачных попыток (rate limiting/lockout, см. is_locked_out()/
+    is_ip_locked_out() ниже) — отдельное исключение, не None, как у
+    обычной неверной пары логин/пароль: вызывающий код должен показать
+    другое сообщение ("слишком много попыток"), это не раскрывает данные
+    об учётной записи, поскольку счётчик неудач копится независимо от
+    того, существует ли такой табельный номер вообще (см. check_credentials).
+
+    retry_after — секунд до снятия блокировки (login_retry_after_seconds),
+    вычисляется в месте вызова raise, где ещё есть доступ к
+    personnel_number/IP — API-контур (apps/iam/api.py) читает его для
+    заголовка Retry-After на 429, ничего не пересчитывая сам."""
+
+    def __init__(self, retry_after: int = 0):
+        self.retry_after = retry_after
+        super().__init__("Слишком много неудачных попыток входа.")
 
 
 @dataclass
@@ -383,6 +392,98 @@ def is_locked_out(personnel_number: str) -> bool:
     return _recent_failed_attempts(personnel_number) >= LOCKOUT_MAX_ATTEMPTS
 
 
+# Второй, НЕЗАВИСИМЫЙ контур rate limiting — по IP-адресу источника
+# (решение этой партии, не цифра из ТЗ — ТЗ 2.2 §4.7 задаёт порог только
+# для блокировки УЧЁТНОЙ ЗАПИСИ, 5 попыток/15 минут, см. выше). Пономерная
+# блокировка не защищает от:
+# - перебора пароля/TOTP-кода ОДНОГО табельного номера с РАЗНЫХ IP;
+# - перебора МНОЖЕСТВА табельных номеров с ОДНОГО IP (энумерация).
+# Порог сознательно выше персонального (в 4 раза) — один IP может
+# легитимно обслуживать нескольких разных реальных пользователей
+# (терминал общего доступа, посменная работа за одним рабочим местом), и
+# было бы неверно блокировать источник целиком на том же пороге, что и
+# одну учётку. Дополняет is_locked_out(), не заменяет — оба контура
+# проверяются независимо.
+IP_LOCKOUT_MAX_ATTEMPTS = 20
+IP_LOCKOUT_WINDOW = LOCKOUT_WINDOW
+
+
+def _recent_failed_attempts_by_ip(ip_address: str) -> int:
+    if not ip_address:
+        return 0
+    # ЧЕСТНАЯ ГРАНИЦА: details — JSONField, запрос идёт через ->> без
+    # специализированного (GIN/expression) индекса — на большом журнале
+    # аудита это полный скан по event_type/created_at с фильтрацией JSON
+    # в памяти БД, медленнее индексированного _recent_failed_attempts()
+    # выше. Не оптимизировано в этой партии.
+    return AuditLog.objects.filter(
+        event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+        details__ip_address=ip_address,
+        created_at__gte=timezone.now() - IP_LOCKOUT_WINDOW,
+    ).count()
+
+
+def is_ip_locked_out(ip_address: str) -> bool:
+    return _recent_failed_attempts_by_ip(ip_address) >= IP_LOCKOUT_MAX_ATTEMPTS
+
+
+def _window_expires_at(window: timedelta, max_attempts: int, **filter_kwargs):
+    """Момент, когда счётчик неудач в скользящем окне (window) первый раз
+    опустится НИЖЕ max_attempts — момент устаревания max_attempts-й по
+    свежести неудачи, а не самой старой: лишние неудачи старше этой
+    (если их накопилось больше порога) не влияют на то, когда блокировка
+    снимется впервые. None — сейчас не заблокирован (неудач меньше порога)."""
+    cutoff = timezone.now() - window
+    recent_failures = list(
+        AuditLog.objects.filter(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            created_at__gte=cutoff,
+            **filter_kwargs,
+        ).order_by("-created_at").values_list("created_at", flat=True)[:max_attempts]
+    )
+    if len(recent_failures) < max_attempts:
+        return None
+    oldest_counted = recent_failures[-1]
+    return oldest_counted + window
+
+
+def seconds_until_unlock(personnel_number: str) -> int | None:
+    if not personnel_number:
+        return None
+    expires_at = _window_expires_at(
+        LOCKOUT_WINDOW, LOCKOUT_MAX_ATTEMPTS, actor_personnel_number=personnel_number,
+    )
+    if expires_at is None:
+        return None
+    return max(0, int((expires_at - timezone.now()).total_seconds()))
+
+
+def seconds_until_ip_unlock(ip_address: str) -> int | None:
+    if not ip_address:
+        return None
+    expires_at = _window_expires_at(
+        IP_LOCKOUT_WINDOW, IP_LOCKOUT_MAX_ATTEMPTS, details__ip_address=ip_address,
+    )
+    if expires_at is None:
+        return None
+    return max(0, int((expires_at - timezone.now()).total_seconds()))
+
+
+def login_retry_after_seconds(personnel_number: str, ip_address: str) -> int:
+    """Секунд до снятия блокировки для заголовка Retry-After (RFC 9110
+    §10.2.3) на ответе 429 API-контура (apps/iam/api.py) — больше из двух
+    независимых контуров (по учётке и по IP), потому что оба должны
+    освободиться, чтобы вход снова стал возможен. Не используется в
+    Web-контуре — там пользователь просто повторно отправляет форму,
+    отдельный UI-таймер не запрашивался."""
+    candidates = [
+        seconds_until_unlock(personnel_number),
+        seconds_until_ip_unlock(ip_address),
+    ]
+    values = [c for c in candidates if c is not None]
+    return max(values) if values else 0
+
+
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
     """Шаг 1. None — неверный табельный номер, неверный пароль или
     пользователь заблокирован (is_active=False уже отсекается
@@ -398,9 +499,14 @@ def check_credentials(request, *, personnel_number: str, password: str) -> Crede
     учётной записи, а только ограничение на подбор). Попытка во время
     блокировки НЕ пишет новую запись SESSION_LOGIN_FAILED — иначе
     блокировка самопродлевалась бы бесконечно от одного только факта
-    повторных попыток, вместо того чтобы сама снятся по истечении окна."""
-    if is_locked_out(personnel_number):
-        raise LoginBlocked
+    повторных попыток, вместо того чтобы сама снятся по истечении окна.
+
+    Проверяются ОБА независимых контура блокировки — по табельному номеру
+    и по IP-адресу (is_ip_locked_out, см. её docstring) — любой из двух
+    сам по себе достаточен для отказа."""
+    ip_address = _client_ip(request)
+    if is_locked_out(personnel_number) or is_ip_locked_out(ip_address):
+        raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
     user = authenticate(request, username=personnel_number, password=password)
     if user is None:
         AuditLog.objects.create(
@@ -423,7 +529,13 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     небольшое, но не нулевое), или код неверный. Каждая из этих ветвей
     пишет SESSION_LOGIN_FAILED (см. check_credentials про то же решение на
     шаге 1) — request нужен только чтобы снять IP для аудита, необязателен
-    (None — например, вызов из теста/скрипта без HTTP-контекста)."""
+    (None — например, вызов из теста/скрипта без HTTP-контекста).
+
+    IP-блокировка (is_ip_locked_out) проверяется ПЕРЕД декодированием
+    тикета — энумерация не должна зависеть от того, оказался ли
+    конкретный тикет валидным."""
+    if is_ip_locked_out(_client_ip(request)):
+        raise LoginBlocked(login_retry_after_seconds("", _client_ip(request)))
     try:
         data = signing.loads(ticket, salt=_TOTP_PENDING_TICKET_SALT, max_age=_TOTP_PENDING_TICKET_MAX_AGE)
     except signing.BadSignature:
@@ -447,8 +559,9 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     # Тот же общий счётчик, что и на шаге 1 (LOCKOUT_MAX_ATTEMPTS за
     # LOCKOUT_WINDOW, см. check_credentials) — перебор TOTP-кода на уже
     # верно введённом пароле блокируется тем же порогом, не отдельным.
+    # IP-контур уже проверен в начале функции (до decoding тикета).
     if is_locked_out(user.personnel_number):
-        raise LoginBlocked
+        raise LoginBlocked(login_retry_after_seconds(user.personnel_number, _client_ip(request)))
     if not verify_totp_code(secret=user.totp_secret, code=code):
         AuditLog.objects.create(
             event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
@@ -507,7 +620,7 @@ def start_totp_enrollment(user: User) -> dict:
     аутентификатор реально синхронизировано с сервером."""
     secret = generate_totp_secret()
     user.totp_secret = secret
-    user.save(update_fields=["totp_secret"])
+    user.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext"])
     return {
         "secret": secret,
         "provisioning_uri": totp_provisioning_uri(secret=secret, personnel_number=user.personnel_number),
@@ -526,3 +639,20 @@ def confirm_totp_enrollment(user: User, *, code: str) -> bool:
     user.totp_enabled = True
     user.save(update_fields=["totp_enabled"])
     return True
+
+
+def reset_totp(user: User, *, actor) -> None:
+    """Административный сброс 2FA (по запросу ревью анти-фрода) — единственный
+    путь для пользователя, потерявшего устройство-аутентификатор, снова
+    пройти enroll (start_totp_enrollment) вместо необратимой блокировки
+    входа. actor обязателен (вызывается только из UserAdmin) — пишется в
+    аудит, кто именно сбросил чужую 2FA."""
+    AuditLog.objects.create(
+        event_type=AuditLog.EventType.USER_TOTP_RESET,
+        actor=actor, actor_personnel_number=getattr(actor, "personnel_number", ""),
+        object_type="User", object_id=str(user.pk),
+        details={"target_personnel_number": user.personnel_number},
+    )
+    user.totp_secret = ""
+    user.totp_enabled = False
+    user.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext", "totp_enabled"])

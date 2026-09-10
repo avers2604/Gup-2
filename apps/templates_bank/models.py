@@ -2,7 +2,7 @@ import uuid
 
 from django.db import models, transaction
 
-from apps.core import antivirus
+from apps.core import antivirus, macro_check
 from apps.core.models import TimeStampedModel
 from apps.core.storage import originals_storage
 from apps.documents.models import NormativeDocument
@@ -121,13 +121,17 @@ class Template(TimeStampedModel):
         is_new = previous_status is None
         status_changed = not is_new and previous_status != self.status
 
-        # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — до
-        # super().save(), тот же принцип, что и у NormativeDocument.save():
-        # заражённый файл не должен попасть в WORM-бакет originals.
+        # Антивирус + структурная проверка на макросы (ТЗ 4.7,
+        # apps/core/antivirus.py, macro_check.py) — до super().save(), тот
+        # же принцип, что и у NormativeDocument.save(): заражённый файл
+        # или файл с макросами не должен попасть в WORM-бакет originals.
         for field_name in ("file_editable", "file_sample"):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
                 antivirus.scan_uploaded_field(
+                    field_file, object_type="Template", object_id=str(self.pk),
+                )
+                macro_check.reject_if_has_macros(
                     field_file, object_type="Template", object_id=str(self.pk),
                 )
 

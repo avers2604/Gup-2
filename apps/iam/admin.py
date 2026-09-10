@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
+from . import services
 from .models import Department, User
 
 
@@ -38,6 +39,20 @@ class UserAdmin(DjangoUserAdmin):
             ),
         }),
     )
+    actions = ["reset_totp"]
+
+    @admin.action(description="Сбросить 2FA (TOTP) — потребуется повторное подключение")
+    def reset_totp(self, request, queryset):
+        # По одному вызову services.reset_totp() на пользователя — не
+        # queryset.update(), иначе аудит (AuditLog.EventType.USER_TOTP_RESET)
+        # писался бы не для каждой сброшенной учётки, а сами секреты
+        # (свойство totp_secret, шифрование) нельзя корректно очистить
+        # через queryset.update() — это не поле модели.
+        count = 0
+        for user in queryset:
+            services.reset_totp(user, actor=request.user)
+            count += 1
+        self.message_user(request, f"2FA сброшена: {count}.")
 
     def get_readonly_fields(self, request, obj=None):
         fields = tuple(super().get_readonly_fields(request, obj))

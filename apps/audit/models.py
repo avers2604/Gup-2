@@ -63,6 +63,12 @@ class AuditLog(models.Model):
         # дополнение к более узкому USER_ROLE_ELEVATED (см. его docstring и
         # STACK.md про намеренное пересечение событий).
         USER_ROLE_CHANGED = "user.role_changed", "Изменение роли пользователя"
+        # Административный сброс 2FA (по запросу ревью анти-фрода) —
+        # единственный путь восстановить доступ пользователю, потерявшему
+        # устройство-аутентификатор (до этой партии такого сценария в
+        # проекте не было вовсе, см. STACK.md). Пишется ДО сохранения
+        # сброшенных полей — тот же порядок, что у UPLOAD_MALWARE_DETECTED.
+        USER_TOTP_RESET = "user.totp_reset", "Администратор сбросил 2FA (TOTP)"
         DOCUMENT_RETENTION_CATEGORY_CHANGED = (
             "document.retention_category_changed", "Изменена категория срока хранения"
         )
@@ -80,6 +86,12 @@ class AuditLog(models.Model):
         # отказа save() — файл не попадает в хранилище, событие в
         # WORM-журнале остаётся единственным следом попытки загрузки.
         UPLOAD_MALWARE_DETECTED = "upload.malware_detected", "Обнаружен вредоносный файл при загрузке"
+        # Структурная проверка на макросы/ActiveX (apps/core/macro_check.py)
+        # — дополняет UPLOAD_MALWARE_DETECTED: ClamAV ловит ИЗВЕСТНЫЕ
+        # вредоносные макросы по сигнатурам, эта проверка — сам факт
+        # наличия VBA-кода в OOXML-документе, независимо от того, знает ли
+        # о нём антивирус.
+        UPLOAD_MACRO_REJECTED = "upload.macro_rejected", "Отклонён файл с макросами/ActiveX"
         # «Заготовка» — как EXPORT_RESTRICTED/ARCHIVE_DOWNLOAD исторически:
         # событие заведено под будущий Grafana-алерт «экспорт журнала аудита»
         # (решение Заказчика), но в этой партии не пишется НИКАКИМ кодом —
@@ -115,6 +127,15 @@ class AuditLog(models.Model):
         indexes = [
             models.Index(fields=["event_type", "created_at"]),
             models.Index(fields=["object_type", "object_id"]),
+            # Скользящее окно rate limiting/lockout (apps/iam/services.py,
+            # is_locked_out): COUNT(*) по event_type=SESSION_LOGIN_FAILED +
+            # actor_personnel_number + created_at на каждую попытку входа.
+            # Равенства первыми, диапазон последним — стандартный порядок
+            # колонок составного B-tree индекса под такой запрос.
+            models.Index(
+                fields=["event_type", "actor_personnel_number", "created_at"],
+                name="audit_lockout_window_idx",
+            ),
         ]
 
     def __str__(self):
