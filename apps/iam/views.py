@@ -21,6 +21,7 @@ from apps.core.limits import consume_fixed_window, request_identity
 from apps.audit.models import AuditLog
 
 from . import services
+from .security import mark_totp_verified
 from .forms import LoginForm, PasswordChangeForm, TotpCodeForm
 from .models import PASSWORD_EXPIRY_DAYS
 
@@ -119,6 +120,7 @@ class TotpVerifyView(FormView):
         shared_terminal = self.request.session.pop(_SESSION_SHARED_TERMINAL, False)
         del self.request.session[_SESSION_PENDING_TICKET]
         django_login(self.request, user)
+        mark_totp_verified(self.request, user)
         self.request.session.set_expiry(_SHARED_TERMINAL_SESSION_AGE if shared_terminal else None)
         services.record_session_login(user, self.request)
         return redirect(settings.LOGIN_REDIRECT_URL)
@@ -137,6 +139,9 @@ class TotpEnrollView(LoginRequiredMixin, View):
         return render(request, "iam/totp_enroll.html", {"totp_enabled": request.user.totp_enabled})
 
     def post(self, request):
+        if not _limit_auth_attempt(request, "iam.web.enroll", request.user.pk):
+            from django.http import HttpResponse
+            return HttpResponse("Слишком много попыток.", status=429)
         data = services.start_totp_enrollment(request.user)
         return render(request, "iam/_totp_enroll_result.html", {
             "secret": data["secret"],
@@ -147,6 +152,9 @@ class TotpEnrollView(LoginRequiredMixin, View):
 
 class TotpConfirmView(LoginRequiredMixin, View):
     def post(self, request):
+        if not _limit_auth_attempt(request, "iam.web.confirm", request.user.pk):
+            from django.http import HttpResponse
+            return HttpResponse("Слишком много попыток.", status=429)
         form = TotpCodeForm(request.POST)
         if not form.is_valid():
             return render(request, "iam/_totp_confirm_result.html", {"form": form}, status=400)
@@ -165,6 +173,7 @@ class TotpConfirmView(LoginRequiredMixin, View):
             form.add_error(None, "Неверный код.")
             return render(request, "iam/_totp_confirm_result.html", {"form": form}, status=400)
 
+        mark_totp_verified(request, request.user)
         return render(request, "iam/_totp_confirm_result.html", {"success": True})
 
 

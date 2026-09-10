@@ -62,6 +62,8 @@ class DocumentForm(forms.ModelForm):
     бы предложить пользователю править юридически значимую дату руками.
     """
 
+    revision = forms.IntegerField(widget=forms.HiddenInput, required=False)
+
     class Meta:
         model = NormativeDocument
         fields = [
@@ -99,6 +101,8 @@ class DocumentForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["revision"].initial = self.instance.edit_version
+        self.fields["revision"].required = not self.instance._state.adding
         for field in self.fields.values():
             widget = field.widget
             if isinstance(widget, (forms.CheckboxInput, forms.CheckboxSelectMultiple)):
@@ -113,7 +117,7 @@ class DocumentForm(forms.ModelForm):
         невидимое поле формы — это поле, которое пользователь не может
         заполнить, но которое от него требуют.
         """
-        grouped = set()
+        grouped = {"revision"}
         for title, hint, names in self.FIELDSETS:
             fields = [self[name] for name in names if name in self.fields]
             grouped.update(field.name for field in fields)

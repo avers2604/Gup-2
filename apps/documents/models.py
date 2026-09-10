@@ -38,6 +38,7 @@ class Tag(models.Model):
 
 
 class NormativeDocument(UUIDPKModel, TimeStampedModel):
+    edit_version = models.PositiveIntegerField(default=0, editable=False)
     """Карточка нормативно-распорядительного документа — атрибуты по таблице ТЗ 4.2.1."""
 
     class DocType(models.TextChoices):
@@ -321,15 +322,9 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 )
 
             if files_original_changed:
-                # on_commit — воркер Celery читает файл отдельным
-                # соединением/процессом; если поставить задачу в очередь
-                # до коммита, она может стартовать раньше, чем строка (и
-                # сам файл в originals-бакете) станут видны снаружи текущей
-                # транзакции.
-                from .tasks import run_ocr_for_document
+                from apps.core.outbox import enqueue
+                enqueue("apps.documents.tasks.run_ocr_for_document", [str(self.pk)])
 
-                pk = self.pk
-                transaction.on_commit(lambda: run_ocr_for_document.delay(str(pk)))
 
 
     def _open_status_period(self):

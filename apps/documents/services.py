@@ -118,17 +118,31 @@ def update_document(*, actor, document, form=None, **attrs):
             raise PermissionDenied(
                 "Правка доступна только черновику и только с соответствующими полномочиями."
             )
+        expected = form.cleaned_data["revision"] if form is not None else document.edit_version
+        if locked.edit_version != expected:
+            raise ValidationError("Документ уже изменён другим пользователем. Обновите страницу и повторите правку.")
+        from .forms import DocumentForm
+        fields = DocumentForm._meta.fields
         if form is not None:
-            document = form.save(commit=False)
+            source = form.save(commit=False)
+            for name in fields:
+                field = locked._meta.get_field(name)
+                if not field.many_to_many:
+                    setattr(locked, name, getattr(source, name))
         else:
-            for field, value in attrs.items():
-                setattr(document, field, value)
-        document._audit_actor = actor
-        document.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
-        document.save()
+            for name, value in attrs.items():
+                if name not in fields or locked._meta.get_field(name).many_to_many:
+                    raise ValidationError(f"Поле {name} нельзя изменять через этот сервис.")
+                setattr(locked, name, value)
+        locked.edit_version += 1
+        locked._audit_actor = actor
+        locked.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
+        locked.save()
         if form is not None:
+            form.instance = locked
             form.save_m2m()
-    return document
+        document.refresh_from_db()
+    return locked
 
 
 def change_document_status(*, actor, document, new_status, comment=""):

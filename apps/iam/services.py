@@ -17,6 +17,7 @@
   для конкретного tab_number.
 """
 import csv
+import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -350,17 +351,8 @@ class CredentialCheckResult:
 
 
 def _client_ip(request) -> str:
-    """REMOTE_ADDR напрямую, без учёта заголовков reverse-proxy
-    (X-Forwarded-For/X-Real-IP). Честная граница усиления аудита (решение
-    Заказчика): за балансировщиком/nginx REMOTE_ADDR будет адресом самого
-    прокси, а не клиента. Доверенная обработка таких заголовков (с явным
-    списком доверенных прокси — иначе клиент подделывает IP просто отправив
-    свой X-Forwarded-For) специфична для целевой топологии развёртывания,
-    которой в этой сессии нет (см. STACK.md «Локальная разработка») —
-    отложено до Этапа 3/4, не реализовано вслепую."""
-    if request is None:
-        return ""
-    return request.META.get("REMOTE_ADDR", "") or ""
+    from apps.core.limits import client_ip
+    return client_ip(request) if request is not None else ""
 
 
 # Rate limiting / lockout на подбор пароля или TOTP-кода (ТЗ 4.7,
@@ -522,9 +514,10 @@ def check_credentials(request, *, personnel_number: str, password: str) -> Crede
 
 
 def make_totp_pending_ticket(user: User) -> str:
-    return signing.dumps({"user_id": str(user.pk)}, salt=_TOTP_PENDING_TICKET_SALT)
+    return signing.dumps({"user_id": str(user.pk), "auth_version": user.auth_version, "nonce": uuid.uuid4().hex}, salt=_TOTP_PENDING_TICKET_SALT)
 
 
+@transaction.atomic
 def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     """Шаг 2. None — тикет невалиден/подделан/просрочен, пользователя уже
     нет, он не активен (заблокирован между шагом 1 и шагом 2 — окно
@@ -549,7 +542,7 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
         )
         return None
 
-    user = User.objects.filter(pk=data.get("user_id")).first()
+    user = User.objects.select_for_update().filter(pk=data.get("user_id")).first()
     if user is None or not user.is_active:
         AuditLog.objects.create(
             event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
@@ -564,7 +557,14 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     # IP-контур уже проверен в начале функции (до decoding тикета).
     if is_locked_out(user.personnel_number):
         raise LoginBlocked(login_retry_after_seconds(user.personnel_number, _client_ip(request)))
-    if not verify_totp_code(secret=user.totp_secret, code=code):
+    from .totp import matching_step
+    from .models import UsedLoginTicket
+    from hashlib import sha256
+    digest = sha256(ticket.encode()).hexdigest()
+    step = matching_step(secret=user.totp_secret, code=code)
+    if (not user.totp_enabled or data.get("auth_version") != user.auth_version
+            or UsedLoginTicket.objects.filter(pk=digest).exists()
+            or step is None or step <= user.totp_last_step):
         AuditLog.objects.create(
             event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
             actor=user, actor_personnel_number=user.personnel_number,
@@ -572,6 +572,9 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
             details={"ip_address": _client_ip(request), "stage": "totp", "reason": "wrong_code"},
         )
         return None
+    UsedLoginTicket.objects.create(digest=digest, expires_at=timezone.now() + timedelta(minutes=5))
+    user.totp_last_step = step
+    user.save(update_fields=["totp_last_step"])
     return user
 
 
@@ -615,46 +618,66 @@ def record_session_logout(user: User, request=None) -> None:
     )
 
 
+@transaction.atomic
 def start_totp_enrollment(user: User) -> dict:
-    """Генерирует новый секрет, но НЕ включает totp_enabled — включение
-    только через confirm_totp_enrollment(), иначе пользователь рискует
-    остаться без доступа, так и не убедившись, что приложение-
-    аутентификатор реально синхронизировано с сервером."""
+    """Stage an encrypted secret; an enabled factor requires administrative reset."""
+    from django.core.exceptions import PermissionDenied
+    from .totp_crypto import encrypt_totp_secret
+    locked = User.objects.select_for_update().get(pk=user.pk)
+    if locked.totp_enabled:
+        raise PermissionDenied("2FA уже включена. Для замены обратитесь к администратору.")
     secret = generate_totp_secret()
-    user.totp_secret = secret
-    user.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext"])
-    return {
-        "secret": secret,
-        "provisioning_uri": totp_provisioning_uri(secret=secret, personnel_number=user.personnel_number),
-    }
+    locked.totp_pending_secret = encrypt_totp_secret(secret)
+    locked.totp_pending_until = timezone.now() + timedelta(minutes=10)
+    locked.save(update_fields=["totp_pending_secret", "totp_pending_until"])
+    return {"secret": secret, "provisioning_uri": totp_provisioning_uri(
+        secret=secret, personnel_number=user.personnel_number)}
 
 
+@transaction.atomic
 def confirm_totp_enrollment(user: User, *, code: str) -> bool:
-    """True — 2FA включена. False — неверный код (можно повторить).
-    Поднимает TotpEnrollmentNotStarted, если start_totp_enrollment() ещё
-    не вызывался — это ошибка порядка вызовов на стороне клиента, не
-    "неверный код"."""
-    if not user.totp_secret:
+    from .totp_crypto import decrypt_totp_secret
+    from .totp import matching_step
+    locked = User.objects.select_for_update().get(pk=user.pk)
+    if (locked.totp_enabled or not locked.totp_pending_secret
+            or not locked.totp_pending_until or locked.totp_pending_until <= timezone.now()):
         raise TotpEnrollmentNotStarted
-    if not verify_totp_code(secret=user.totp_secret, code=code):
+    secret = decrypt_totp_secret(locked.totp_pending_secret)
+    step = matching_step(secret=secret, code=code)
+    if step is None:
         return False
-    user.totp_enabled = True
-    user.save(update_fields=["totp_enabled"])
+    locked.totp_secret = secret
+    locked.totp_enabled = True
+    locked.totp_last_step = step
+    locked.totp_pending_secret = ""
+    locked.totp_pending_until = None
+    locked.auth_version += 1
+    locked.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext", "totp_enabled",
+                               "totp_last_step", "totp_pending_secret", "totp_pending_until", "auth_version"])
+    user.refresh_from_db()
     return True
 
 
+@transaction.atomic
 def reset_totp(user: User, *, actor) -> None:
-    """Административный сброс 2FA (по запросу ревью анти-фрода) — единственный
-    путь для пользователя, потерявшего устройство-аутентификатор, снова
-    пройти enroll (start_totp_enrollment) вместо необратимой блокировки
-    входа. actor обязателен (вызывается только из UserAdmin) — пишется в
-    аудит, кто именно сбросил чужую 2FA."""
+    from django.core.exceptions import PermissionDenied
+    from .sessions import force_logout_user
+    if not actor.is_active or not (actor.is_superuser or actor.has_perm("iam.change_user")):
+        raise PermissionDenied("Недостаточно прав для сброса 2FA.")
+    locked = User.objects.select_for_update().get(pk=user.pk)
     AuditLog.objects.create(
         event_type=AuditLog.EventType.USER_TOTP_RESET,
-        actor=actor, actor_personnel_number=getattr(actor, "personnel_number", ""),
-        object_type="User", object_id=str(user.pk),
-        details={"target_personnel_number": user.personnel_number},
+        actor=actor, actor_personnel_number=actor.personnel_number,
+        object_type="User", object_id=str(locked.pk),
+        details={"target_personnel_number": locked.personnel_number},
     )
-    user.totp_secret = ""
-    user.totp_enabled = False
-    user.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext", "totp_enabled"])
+    locked.totp_secret = ""
+    locked.totp_enabled = False
+    locked.totp_pending_secret = ""
+    locked.totp_pending_until = None
+    locked.totp_last_step = -1
+    locked.auth_version += 1
+    locked.save(update_fields=["totp_secret_encrypted", "totp_secret_plaintext", "totp_enabled",
+                               "totp_pending_secret", "totp_pending_until", "totp_last_step", "auth_version"])
+    force_logout_user(locked.pk)
+    user.refresh_from_db()

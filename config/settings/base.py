@@ -171,10 +171,11 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 #   HTTP-слой обоих контуров не должен её дублировать.
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.iam.security.PolicyJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
+        "apps.iam.security.AccountReady",
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
@@ -270,3 +271,16 @@ STORAGES = {
         "BACKEND": "django.core.files.storage.FileSystemStorage",
     },
 }
+
+# The edge proxy must overwrite forwarded headers. Trust only explicit networks.
+TRUSTED_PROXIES = [p.strip() for p in os.environ.get("TRUSTED_PROXIES", "").split(",") if p.strip()]
+OCR_MAX_PAGES = int(os.environ.get("OCR_MAX_PAGES", "1000"))
+OCR_MAX_BYTES = 150 * 1024 * 1024
+OCR_PROCESS_TIMEOUT = int(os.environ.get("OCR_PROCESS_TIMEOUT", "60"))
+OCR_MAX_DIMENSION = int(os.environ.get("OCR_MAX_DIMENSION", "3000"))
+
+CELERY_BEAT_SCHEDULE["dispatch-task-outbox"] = {
+    "task": "apps.core.tasks.dispatch_task_outbox", "schedule": 10.0,
+}
+CELERY_BROKER_CONNECTION_TIMEOUT = 3
+CELERY_BROKER_TRANSPORT_OPTIONS = {"socket_connect_timeout": 3, "socket_timeout": 3}

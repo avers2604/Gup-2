@@ -7,4 +7,4 @@ class IamConfig(AppConfig):
     verbose_name = "Учётные записи и оргструктура"
 
     def ready(self):
-        from . import handlers  # noqa: F401
+        from . import handlers, schema  # noqa: F401

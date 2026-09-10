@@ -1,0 +1,19 @@
+[Unit]
+Description=BZ GET periodic task scheduler (run exactly one instance)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=get
+Group=get
+WorkingDirectory=/opt/get
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+EnvironmentFile=/opt/get/.env
+StateDirectory=get-celery-beat
+ExecStart=/opt/get/venv/bin/celery -A config beat -l info --schedule=/var/lib/get-celery-beat/schedule
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

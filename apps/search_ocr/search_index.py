@@ -76,32 +76,37 @@ def _upsert_ids(document_ids) -> int:
 
 
 def refresh_document_index(document_id) -> bool:
-    return _upsert_ids([document_id]) == 1
+    from apps.documents.models import NormativeDocument
+    with transaction.atomic():
+        if not NormativeDocument.objects.select_for_update().filter(pk=document_id).exists():
+            return False
+        return _upsert_ids([document_id]) == 1
 
 
 def rebuild_document_search_index(*, batch_size: int = 1000, require_count: int | None = None) -> dict:
-    """Cold-rebuild the whole read model using DB-side FTS calculation.
-
-    TRUNCATE makes this a real cold index-data rebuild instead of an incremental
-    refresh. The schema and GIN index remain provisioned by migrations.
-    """
+    """Refresh in bounded transactions while readers retain the existing index."""
     from apps.documents.models import NormativeDocument
 
     if batch_size < 1 or batch_size > 5000:
         raise ValueError("batch_size must be in 1..5000")
 
-    document_ids = list(NormativeDocument.objects.order_by("pk").values_list("pk", flat=True))
-    total = len(document_ids)
+    total = NormativeDocument.objects.count()
     if require_count is not None and total != require_count:
         raise ValueError(f"document corpus must contain exactly {require_count}, actual={total}")
-
     started = time.monotonic()
-    index_table, _ = _table_names()
-    with transaction.atomic():
-        with connection.cursor() as cursor:
-            cursor.execute(f"TRUNCATE TABLE {index_table}")  # nosec B608: table name is Django metadata
-        rebuilt = 0
-        for offset in range(0, total, batch_size):
-            rebuilt += _upsert_ids(document_ids[offset : offset + batch_size])
-    elapsed = time.monotonic() - started
-    return {"documents": rebuilt, "elapsed_seconds": elapsed}
+    rebuilt = 0
+    last_pk = None
+    while True:
+        batch = NormativeDocument.objects.order_by("pk")
+        if last_pk is not None:
+            batch = batch.filter(pk__gt=last_pk)
+        ids = list(batch.values_list("pk", flat=True)[:batch_size])
+        if not ids:
+            break
+        with transaction.atomic():
+            # Serialize refresh with source writes to avoid stale upserts.
+            locked_ids = list(NormativeDocument.objects.select_for_update().filter(
+                pk__in=ids).order_by("pk").values_list("pk", flat=True))
+            rebuilt += _upsert_ids(locked_ids)
+        last_pk = ids[-1]
+    return {"documents": rebuilt, "elapsed_seconds": time.monotonic() - started}

@@ -15,3 +15,12 @@ class TotpVerifyRequestSerializer(serializers.Serializer):
 
 class LogoutRequestSerializer(serializers.Serializer):
     refresh = serializers.CharField(help_text="Refresh-токен, который нужно отозвать (blacklist)")
+
+
+class UserSummarySerializer(serializers.Serializer):
+    personnel_number = serializers.CharField()
+    full_name = serializers.CharField()
+    role = serializers.CharField()
+    totp_enabled = serializers.BooleanField()
+    must_enroll_totp = serializers.BooleanField()
+    password_change_required = serializers.BooleanField()

@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry durable task delivery even when broker was unavailable
+
+[Timer]
+OnBootSec=20
+OnUnitInactiveSec=10
+Unit=get-outbox.service
+
+[Install]
+WantedBy=timers.target

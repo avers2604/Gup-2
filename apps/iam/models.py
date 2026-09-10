@@ -1,7 +1,7 @@
 import uuid
 
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.core.domain_events import publish
@@ -143,6 +143,11 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     # изменения хэша, а не через форму. NULL — учётная запись, для которой
     # это ещё ни разу не отслеживалось (например, создана до появления
     # этого поля) — см. is_password_expired про честную границу такого случая.
+    auth_version = models.PositiveIntegerField(default=0, editable=False)
+    totp_last_step = models.BigIntegerField(default=-1, editable=False)
+    totp_pending_secret = models.CharField(max_length=255, blank=True, editable=False)
+    totp_pending_until = models.DateTimeField(null=True, blank=True, editable=False)
+
     password_changed_at = models.DateTimeField(
         null=True, blank=True, editable=False, verbose_name="Пароль изменён",
     )
@@ -208,7 +213,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         """Роли, для которых TOTP обязателен. Сужено решением Заказчика:
         раньше — Администратор/Контролёр-Юрист/Куратор, теперь — только
         Администратор (роль Куратор при этом упразднена, см. Role)."""
-        return self.role == self.Role.ADMINISTRATOR
+        return self.role == self.Role.ADMINISTRATOR or self.is_superuser or self.is_staff
 
     def role_rank(self):
         try:
@@ -235,6 +240,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
             return False
         return (timezone.now() - self.password_changed_at).days >= PASSWORD_EXPIRY_DAYS
 
+    @transaction.atomic
     def save(self, *args, **kwargs):
         """Переходы состояния учётной записи + публикация доменных событий.
 
@@ -259,8 +265,8 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         # два поля не могли разъехаться (is_active нужен Django-аутентификации
         # как есть — под него нельзя просто подставить свойство).
         previous = (
-            type(self).objects.filter(pk=self.pk)
-            .values_list("status", "role", "password", flat=False)
+            type(self).objects.select_for_update().filter(pk=self.pk)
+            .values_list("status", "role", "password", "auth_version", flat=False)
             .first()
         )
         was_blocked = previous is not None and previous[0] == self.Status.BLOCKED
@@ -270,7 +276,27 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         role_changed = not is_new and previous_role != self.role
         password_changed = is_new or previous_password_hash != self.password
 
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            if not update_fields:
+                return
+            # Do not publish changes to fields that will not be persisted.
+            if previous:
+                if "status" not in update_fields:
+                    self.status = previous[0]
+                if "role" not in update_fields:
+                    self.role = previous[1]
+                    role_changed = False
+                if "password" not in update_fields:
+                    self.password = previous[2]
+                    password_changed = False
+            kwargs["update_fields"] = update_fields | {"is_active"}
         self.is_active = self.status != self.Status.BLOCKED
+        if previous and (password_changed or self.status != previous[0] or role_changed):
+            self.auth_version = previous[3] + 1
+            if kwargs.get("update_fields") is not None:
+                kwargs["update_fields"].add("auth_version")
         if password_changed:
             self.password_changed_at = timezone.now()
             if kwargs.get("update_fields") is not None:
@@ -344,3 +370,8 @@ class PasswordHistoryEntry(UUIDPKModel):
 
     def __str__(self):
         return f"{self.user.personnel_number} · {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class UsedLoginTicket(models.Model):
+    digest = models.CharField(max_length=64, primary_key=True)
+    expires_at = models.DateTimeField(db_index=True)

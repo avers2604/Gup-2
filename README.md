@@ -70,9 +70,8 @@ Web-операции записи (регистрация, правка черн
 IAM application services разделены по назначению:
 
 ```text
-apps/iam/auth_service.py       аутентификация, lockout, TOTP, session audit
-apps/iam/personnel_service.py  импорт персонала и отчёты
-apps/iam/services.py           compatibility facade
+apps/iam/services.py          импорт, аутентификация, lockout, TOTP, session audit
+apps/iam/security.py          политика JWT и подтверждения второго фактора
 ```
 
 Импорт персонала поддерживает синхронный и асинхронный режимы. В async-режиме Excel сначала помещается в рабочее storage, а в Celery передаётся только имя объекта и ID оператора — бинарный файл не передаётся через Redis.
@@ -407,3 +406,10 @@ python manage.py personnel_import_status <task-id>
 5. Решить оставшиеся UX/операционные ограничения OCR и распределённого throttling там, где они нужны для production-нагрузки.
 
 До выполнения реального acceptance Этап 4 корректно считать **функционально реализованным, но не эксплуатационно принятым**.
+
+
+## Обновление безопасности и надёжности
+
+Порядок развёртывания: [docs/SECURITY_RELIABILITY.md](docs/SECURITY_RELIABILITY.md).
+Воспроизводимая установка: `pip install -r requirements-dev.txt -c constraints.txt`
+(для production — `requirements.txt` с тем же constraints). CI проверяет PostgreSQL 16 и 18.

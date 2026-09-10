@@ -8,6 +8,8 @@ DEBUG = False
 
 _required_production_settings = {
     "SECRET_KEY": os.environ.get("SECRET_KEY"),
+    "TOTP_ENCRYPTION_KEY": os.environ.get("TOTP_ENCRYPTION_KEY"),
+    "CACHE_URL": os.environ.get("CACHE_URL"),
     "POSTGRES_DB": os.environ.get("POSTGRES_DB"),
     "POSTGRES_USER": os.environ.get("POSTGRES_USER"),
     "POSTGRES_PASSWORD": os.environ.get("POSTGRES_PASSWORD"),
@@ -62,3 +64,23 @@ STORAGES["working"] = {
 # защищённый "originals": любое будущее FileField без явного storage= не
 # должно случайно попасть под WORM-блокировку.
 STORAGES["default"] = STORAGES["working"]
+
+from cryptography.fernet import Fernet
+
+if SECRET_KEY == "insecure-dev-key" or len(SECRET_KEY) < 50:
+    raise ImproperlyConfigured("SECRET_KEY must be a strong production key (at least 50 characters)")
+if TOTP_ENCRYPTION_KEY == "5DVKKoTK7rYGmxTDJA3ASa9mGzjWwgqNl2HXSaq6sOA=":
+    raise ImproperlyConfigured("The development TOTP key must not be used in production")
+try:
+    Fernet(TOTP_ENCRYPTION_KEY)
+except (ValueError, TypeError) as exc:
+    raise ImproperlyConfigured("TOTP_ENCRYPTION_KEY must be a valid Fernet key") from exc
+if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS:
+    raise ImproperlyConfigured("Explicit ALLOWED_HOSTS are required")
+if STORAGES["originals"]["OPTIONS"]["bucket_name"] == STORAGES["working"]["OPTIONS"]["bucket_name"]:
+    raise ImproperlyConfigured("Original and working buckets must differ")
+CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache",
+                      "LOCATION": os.environ["CACHE_URL"]}}
+# Enable only behind a proxy that overwrites this header and blocks direct access.
+if os.environ.get("TRUST_PROXY_HTTPS", "0") == "1":
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

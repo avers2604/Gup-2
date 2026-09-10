@@ -30,3 +30,16 @@ def verify_totp_code(*, secret: str, code: str) -> bool:
     if not secret or not code:
         return False
     return pyotp.totp.TOTP(secret).verify(code, valid_window=_VALID_WINDOW)
+
+
+def matching_step(*, secret: str, code: str) -> int | None:
+    """Return the accepted counter so callers can atomically reject replay."""
+    import time
+    if not secret or not code or len(code) != 6 or not code.isdigit():
+        return None
+    totp = pyotp.TOTP(secret)
+    current = int(time.time()) // totp.interval
+    for step in range(current - _VALID_WINDOW, current + _VALID_WINDOW + 1):
+        if pyotp.utils.strings_equal(totp.at(step * totp.interval), code):
+            return step
+    return None
