@@ -1,0 +1,102 @@
+# Patroni 4.1.x reference configuration for one PostgreSQL node.
+# Copy to /etc/patroni/patroni.yml on each DB node and replace all CHANGE_ME
+# values. Node-local values are name/listen/connect_address/data_dir.
+#
+# Production secrets MUST NOT be committed to Git. Prefer root-readable
+# environment files, a secrets manager, or systemd credentials.
+
+scope: bz-get
+namespace: /service/
+name: CHANGE_ME_DB_NODE_NAME
+
+restapi:
+  # Bind only to the private HA/operations network. HAProxy uses GET /primary
+  # on this port to discover the current writable leader.
+  listen: CHANGE_ME_NODE_IP:8008
+  connect_address: CHANGE_ME_NODE_IP:8008
+
+etcd3:
+  # Patroni 4.1.x talks to the etcd v3 API through this section.
+  hosts:
+    - CHANGE_ME_ETCD1_IP:2379
+    - CHANGE_ME_ETCD2_IP:2379
+    - CHANGE_ME_ETCD3_IP:2379
+  protocol: https
+  cacert: /etc/bz-get/pki/ca.crt
+  cert: /etc/bz-get/pki/patroni-etcd.crt
+  key: /etc/bz-get/pki/patroni-etcd.key
+
+bootstrap:
+  # Written to DCS only when a brand-new cluster is initialized. Change later
+  # with `patronictl edit-config`, not by editing this block on one node.
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    check_timeline: true
+    failsafe_mode: true
+
+    # Reference HA baseline. One synchronous standby is enough for automatic
+    # failover without acknowledged-transaction loss while that standby is
+    # healthy. The exact durability/availability trade-off must be approved by
+    # the customer before production.
+    synchronous_mode: on
+    synchronous_mode_strict: false
+    synchronous_node_count: 1
+
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_log_hints: "on"
+        archive_mode: "on"
+        archive_timeout: 60s
+        # pgBackRest must be installed/configured on every PostgreSQL node.
+        archive_command: 'pgbackrest --stanza=bz-get archive-push %p'
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+  # Replace CHANGE_ME_DB_CIDR with the private DB subnet. Do not expose
+  # PostgreSQL or replication to 0.0.0.0/0.
+  pg_hba:
+    - local all all peer
+    - host all all CHANGE_ME_DB_CIDR scram-sha-256
+    - host replication replicator CHANGE_ME_DB_CIDR scram-sha-256
+
+postgresql:
+  listen: CHANGE_ME_NODE_IP:5432
+  connect_address: CHANGE_ME_NODE_IP:5432
+  data_dir: /var/lib/postgresql/18/bz-get
+  bin_dir: /usr/lib/postgresql/18/bin
+  pgpass: /var/lib/postgresql/.pgpass
+
+  authentication:
+    replication:
+      username: replicator
+      password: CHANGE_ME_REPLICATION_PASSWORD
+    superuser:
+      username: postgres
+      password: CHANGE_ME_POSTGRES_SUPERUSER_PASSWORD
+
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+
+watchdog:
+  # `automatic` uses /dev/watchdog when it exists and otherwise starts without
+  # it. Production acceptance should verify a real watchdog on each DB node.
+  mode: automatic
+  device: /dev/watchdog
+  safety_margin: 5
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
