@@ -215,6 +215,12 @@ if "test" in sys.argv:
 # многоязычные документы/сканы не поддерживаются.
 OCR_LANGUAGE = os.environ.get("OCR_LANGUAGE", "rus")
 
+# Антивирусная проверка загружаемых файлов (ТЗ 4.7, apps/core/antivirus.py) —
+# clamd, тот же ClamAV-контейнер, что уже в docker-compose.yml с Этапа 1.
+CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "localhost")
+CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
+CLAMAV_TIMEOUT = float(os.environ.get("CLAMAV_TIMEOUT", "30"))
+
 STORAGES = {
     "default": {
         "BACKEND": "django.core.files.storage.FileSystemStorage",

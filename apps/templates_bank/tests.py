@@ -1,7 +1,10 @@
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 
 from apps.audit.models import AuditLog
+from apps.core.antivirus import MalwareDetected
 from apps.core.storage import originals_storage
+from apps.core.tests.clamd_fixture import EICAR_BYTES, ClamdTestCase
 from apps.documents.retention import RetentionMode
 from apps.documents.tests.factories import make_document
 
@@ -84,3 +87,31 @@ class TemplateStorageTests(TestCase):
         # но исторические версии всё равно должны быть снимаемы при
         # обоснованной необходимости, в отличие от, например, приказов).
         self.assertEqual(Template.RETENTION_MODE, RetentionMode.GOVERNANCE)
+
+
+class TemplateAntivirusTests(ClamdTestCase):
+    """Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) на загрузке
+    бланка — тот же принцип, что и NormativeDocument.save() (см.
+    apps/documents/tests/test_antivirus_integration.py): проверка ДО
+    super().save(), заражённый файл не попадает в WORM-бакет originals."""
+
+    def test_clean_files_upload_succeeds(self):
+        editable = SimpleUploadedFile("form.docx", b"clean editable content")
+        sample = SimpleUploadedFile("form.pdf", b"%PDF-1.4 clean sample")
+        template = _make_template(file_editable=editable, file_sample=sample)
+        template.refresh_from_db()
+        self.assertTrue(template.file_editable.name)
+
+    def test_eicar_in_file_editable_blocks_save(self):
+        infected = SimpleUploadedFile("form.docx", EICAR_BYTES)
+        with self.assertRaises(MalwareDetected):
+            _make_template(version="v-av-1", file_editable=infected)
+        self.assertFalse(Template.objects.filter(version="v-av-1").exists())
+
+    def test_eicar_in_file_sample_writes_audit_entry(self):
+        infected = SimpleUploadedFile("form.pdf", EICAR_BYTES)
+        with self.assertRaises(MalwareDetected):
+            _make_template(version="v-av-2", file_sample=infected)
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED)
+        self.assertEqual(entries.count(), 1)
+        self.assertEqual(entries.first().details["field"], "file_sample")

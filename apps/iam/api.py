@@ -42,11 +42,17 @@ class TokenObtainView(APIView):
         serializer = TokenObtainRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        result = services.check_credentials(
-            request,
-            personnel_number=serializer.validated_data["personnel_number"],
-            password=serializer.validated_data["password"],
-        )
+        try:
+            result = services.check_credentials(
+                request,
+                personnel_number=serializer.validated_data["personnel_number"],
+                password=serializer.validated_data["password"],
+            )
+        except services.LoginBlocked:
+            return Response(
+                {"detail": "Слишком много неудачных попыток входа. Попробуйте позже."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         if result is None:
             return Response(
                 {"detail": "Неверный табельный номер или пароль."},
@@ -77,11 +83,17 @@ class TotpVerifyView(APIView):
         serializer = TotpVerifyRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = services.verify_totp_login(
-            ticket=serializer.validated_data["ticket"],
-            code=serializer.validated_data["code"],
-            request=request,
-        )
+        try:
+            user = services.verify_totp_login(
+                ticket=serializer.validated_data["ticket"],
+                code=serializer.validated_data["code"],
+                request=request,
+            )
+        except services.LoginBlocked:
+            return Response(
+                {"detail": "Слишком много неудачных попыток входа. Попробуйте позже."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
         if user is None:
             return Response({"detail": "Неверный код."}, status=status.HTTP_401_UNAUTHORIZED)
 

@@ -1,0 +1,147 @@
+"""Rate limiting / lockout на подбор пароля или TOTP-кода (ТЗ 4.7,
+apps/iam/services.py). Пороги (5 попыток / 15 минут) — те же цифры, что
+уже вшиты в Grafana-алерт «5+ неудачных попыток подряд»
+(deploy/grafana/provisioning/alerting/audit-alerts.yml)."""
+import datetime
+from unittest.mock import patch
+
+import pyotp
+from django.test import Client, TestCase
+from django.urls import reverse
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from apps.audit.models import AuditLog
+
+from .. import services
+from ..models import Department, User
+from ..totp import generate_totp_secret
+
+
+def _make_user(totp_enabled=False, **kwargs):
+    dept, _ = Department.objects.get_or_create(
+        name="Служба движения", defaults={"level": Department.Level.SERVICE}
+    )
+    defaults = dict(
+        personnel_number="0001", last_name="Иванов", first_name="Пётр",
+        position="Водитель", department=dept, role=User.Role.READER,
+        status=User.Status.ACTIVE,
+    )
+    defaults.update(kwargs)
+    user = User(**defaults)
+    user.set_password("Sup3r$ecret!Pass")
+    if totp_enabled:
+        user.totp_secret = generate_totp_secret()
+        user.totp_enabled = True
+    user.save()
+    return user
+
+
+class IsLockedOutTests(TestCase):
+    def setUp(self):
+        _make_user()
+
+    def test_below_threshold_is_not_locked(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS - 1):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        self.assertFalse(services.is_locked_out("0001"))
+
+    def test_at_threshold_is_locked(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        self.assertTrue(services.is_locked_out("0001"))
+
+    def test_nonexistent_personnel_number_can_still_be_locked(self):
+        # Счётчик копится независимо от того, существует ли учётка — иначе
+        # сам факт блокировки утекал бы информацию о её наличии.
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="9999999", password="whatever")
+        self.assertTrue(services.is_locked_out("9999999"))
+
+    def test_attempts_outside_window_do_not_count(self):
+        old_time = timezone.now() - datetime.timedelta(minutes=16)
+        with patch("django.utils.timezone.now", return_value=old_time):
+            for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+                services.check_credentials(None, personnel_number="0001", password="wrong")
+        self.assertFalse(services.is_locked_out("0001"))
+
+    def test_independent_per_personnel_number(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        self.assertFalse(services.is_locked_out("0002"))
+
+
+class CheckCredentialsLockoutTests(TestCase):
+    def setUp(self):
+        self.user = _make_user()
+
+    def test_sixth_attempt_is_blocked_even_with_correct_password(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        with self.assertRaises(services.LoginBlocked):
+            services.check_credentials(None, personnel_number="0001", password="Sup3r$ecret!Pass")
+
+    def test_blocked_attempt_does_not_write_new_audit_entry(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        count_before = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED).count()
+        with self.assertRaises(services.LoginBlocked):
+            services.check_credentials(None, personnel_number="0001", password="wrong")
+        count_after = AuditLog.objects.filter(event_type=AuditLog.EventType.SESSION_LOGIN_FAILED).count()
+        self.assertEqual(count_before, count_after)
+
+
+class TotpLockoutTests(TestCase):
+    def setUp(self):
+        self.user = _make_user(totp_enabled=True)
+
+    def test_totp_step_shares_same_lockout_counter(self):
+        ticket = services.make_totp_pending_ticket(self.user)
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.verify_totp_login(ticket=ticket, code="000000")
+        with self.assertRaises(services.LoginBlocked):
+            services.verify_totp_login(ticket=ticket, code="000000")
+
+    def test_correct_totp_code_blocked_after_threshold(self):
+        ticket = services.make_totp_pending_ticket(self.user)
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.verify_totp_login(ticket=ticket, code="000000")
+        correct_code = pyotp.TOTP(self.user.totp_secret).now()
+        with self.assertRaises(services.LoginBlocked):
+            services.verify_totp_login(ticket=ticket, code=correct_code)
+
+    def test_password_step_failures_also_lock_totp_step(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            services.check_credentials(None, personnel_number=self.user.personnel_number, password="wrong")
+        ticket = services.make_totp_pending_ticket(self.user)
+        with self.assertRaises(services.LoginBlocked):
+            services.verify_totp_login(ticket=ticket, code="000000")
+
+
+class WebLockoutIntegrationTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        _make_user()
+
+    def test_login_view_shows_lockout_message(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            self.client.post(reverse("iam:login"), {"personnel_number": "0001", "password": "wrong"})
+        response = self.client.post(
+            reverse("iam:login"), {"personnel_number": "0001", "password": "Sup3r$ecret!Pass"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Слишком много неудачных попыток входа.")
+
+
+class ApiLockoutIntegrationTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        _make_user()
+
+    def test_token_obtain_returns_429_when_locked_out(self):
+        for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
+            self.client.post(reverse("iam_api:token-obtain"), {"personnel_number": "0001", "password": "wrong"})
+        response = self.client.post(
+            reverse("iam_api:token-obtain"), {"personnel_number": "0001", "password": "Sup3r$ecret!Pass"},
+        )
+        self.assertEqual(response.status_code, 429)

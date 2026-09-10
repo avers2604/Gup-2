@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models, transaction
 
+from apps.core import antivirus
 from apps.core.models import TimeStampedModel, UUIDPKModel
 from apps.core.storage import originals_storage, working_storage
 from apps.iam.models import Department
@@ -203,6 +204,20 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # заполняется, и пустое имя не должно ставить задачу распознавания
         # несуществующего файла в очередь.
         files_original_changed = bool(self.files_original) and previous_files_original != self.files_original.name
+
+        # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — ДО
+        # super().save(), пока файл ещё не записан в storage: заражённый
+        # файл не должен попасть в WORM-бакет originals, откуда его потом
+        # может быть невозможно удалить. needs_scan() пропускает случай
+        # "поле — просто строка-имя уже существующего файла" (тесты,
+        # загрузка из БД) — сканировать там нечего, ничего нового не
+        # добавляется в хранилище.
+        for field_name in ("files_original", "files_editable"):
+            field_file = getattr(self, field_name)
+            if antivirus.needs_scan(field_file):
+                antivirus.scan_uploaded_field(
+                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                )
 
         if self.retention_category and category_changed:
             policy = RETENTION_MATRIX[self.retention_category]
