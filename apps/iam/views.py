@@ -13,6 +13,8 @@ from django.shortcuts import redirect, render
 from django.views import View
 from django.views.generic import FormView
 
+from apps.core.limits import client_ip, consume_fixed_window, request_identity
+
 from . import services
 from .forms import LoginForm, TotpCodeForm
 
@@ -27,12 +29,30 @@ _SESSION_SHARED_TERMINAL = "shared_terminal_login"
 # (settings.SESSION_COOKIE_AGE, 30 минут).
 _SHARED_TERMINAL_SESSION_AGE = 15 * 60
 
+_LOGIN_LIMIT = 8
+_TOTP_LIMIT = 12
+_WINDOW_SECONDS = 60
+
+
+def _limit_auth_attempt(request, scope: str, *identity_parts: object) -> bool:
+    result = consume_fixed_window(
+        scope=scope,
+        identity=request_identity(request, *identity_parts),
+        limit=_LOGIN_LIMIT if scope == "iam.web.login" else _TOTP_LIMIT,
+        window_seconds=_WINDOW_SECONDS,
+    )
+    return result.allowed
+
 
 class LoginView(FormView):
     template_name = "iam/login.html"
     form_class = LoginForm
 
     def form_valid(self, form):
+        if not _limit_auth_attempt(self.request, "iam.web.login", form.cleaned_data.get("personnel_number")):
+            form.add_error(None, "Слишком много попыток входа. Попробуйте позже.")
+            return self.form_invalid(form)
+
         try:
             result = services.check_credentials(
                 self.request,
@@ -79,6 +99,10 @@ class TotpVerifyView(FormView):
         ticket = self.request.session.get(_SESSION_PENDING_TICKET)
         if not ticket:
             return redirect("iam:login")
+
+        if not _limit_auth_attempt(self.request, "iam.web.totp", ticket):
+            form.add_error(None, "Слишком много попыток подтверждения TOTP. Попробуйте позже.")
+            return self.form_invalid(form)
 
         try:
             user = services.verify_totp_login(ticket=ticket, code=form.cleaned_data["code"], request=self.request)
