@@ -7,6 +7,7 @@
       "Action": [
         "s3:GetReplicationConfiguration",
         "s3:ListBucket",
+        "s3:ListBucketVersions",
         "s3:ListBucketMultipartUploads",
         "s3:GetBucketLocation",
         "s3:GetBucketVersioning",
@@ -19,10 +20,19 @@
       ]
     },
     {
+      "Sid": "SynchronizeOriginalsBucketLockConfiguration",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutBucketObjectLockConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::bz-get-originals"
+      ]
+    },
+    {
       "Sid": "ReceiveReplicatedObjectVersions",
       "Effect": "Allow",
       "Action": [
-        "s3:GetReplicationConfiguration",
         "s3:ReplicateTags",
         "s3:AbortMultipartUpload",
         "s3:GetObject",
@@ -30,7 +40,6 @@
         "s3:GetObjectVersionTagging",
         "s3:PutObject",
         "s3:PutObjectRetention",
-        "s3:PutBucketObjectLockConfiguration",
         "s3:PutObjectLegalHold",
         "s3:DeleteObject",
         "s3:DeleteObjectVersion",
