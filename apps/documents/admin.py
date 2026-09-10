@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 
+from . import permissions
 from .models import DocumentRelation, DocumentStatusHistory, NormativeDocument, Tag
 
 
@@ -28,18 +29,12 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     inlines = [DocumentRelationInline, DocumentStatusHistoryInline]
 
     def get_queryset(self, request):
-        queryset = super().get_queryset(request)
-        if request.user.is_superuser or request.user.dsp_access:
-            return queryset
-        return queryset.filter(access_level=NormativeDocument.AccessLevel.GENERAL)
+        # Те же правила, что и в Web GUI рабочих мест (ТЗ 4.1) —
+        # apps/documents/permissions.py единственный их источник.
+        return permissions.visible_documents(request.user, super().get_queryset(request))
 
     def _can_access(self, request, obj):
-        return (
-            obj is None
-            or obj.access_level == NormativeDocument.AccessLevel.GENERAL
-            or request.user.is_superuser
-            or request.user.dsp_access
-        )
+        return obj is None or permissions.can_view_document(request.user, obj)
 
     def has_view_permission(self, request, obj=None):
         return super().has_view_permission(request, obj) and self._can_access(request, obj)
