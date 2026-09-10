@@ -9,14 +9,6 @@ from .models import PasswordHistoryEntry, User
 from .sessions import force_logout_user
 
 
-def _is_role_elevated(previous_role: str, new_role: str) -> bool:
-    order = User.ROLE_PRIVILEGE_ORDER
-    try:
-        return order.index(new_role) > order.index(previous_role)
-    except ValueError:
-        return False
-
-
 def _save_without_side_effects(self, *args, **kwargs):
     previous = (
         type(self).objects.filter(pk=self.pk)
@@ -38,7 +30,6 @@ def _save_without_side_effects(self, *args, **kwargs):
 
     dj_models.Model.save(self, *args, **kwargs)
 
-    actor = getattr(self, "_audit_actor", None)
     if self.status == self.Status.BLOCKED and not was_blocked:
         publish("user.blocked", user=self)
 
@@ -46,19 +37,10 @@ def _save_without_side_effects(self, *args, **kwargs):
         publish(
             "user.role.changed",
             user=self,
-            actor=actor,
+            actor=getattr(self, "_audit_actor", None),
             previous_role=previous_role,
             new_role=self.role,
         )
-        if previous_role is not None and _is_role_elevated(previous_role, self.role):
-            publish(
-                "user.role.elevated",
-                user=self,
-                actor=actor,
-                previous_role=previous_role,
-                new_role=self.role,
-                source="model_save",
-            )
 
     if password_changed and not is_new and previous_password_hash:
         publish(
