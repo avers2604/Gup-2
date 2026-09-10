@@ -42,6 +42,12 @@ Preflight проверяет:
 
 Критерий ТЗ: **ровно 10 000 документов, не более 3600 секунд**.
 
+Объём и лимит берутся из инвентаря (`SEARCH_REINDEX_DOCUMENTS`,
+`SEARCH_REINDEX_MAX_SECONDS`) и записываются в `extended-results.env` вместе с
+измерением. `finalize` сверяет прогон именно с записанным требованием, а не с
+числом, зашитым в скрипт: занизить объём молча, не оставив следа в `RESULT.md`,
+невозможно.
+
 ```bash
 ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
   bash deploy/acceptance/extended-checks.sh CHG-2026-0042 cold-reindex
@@ -117,13 +123,20 @@ bash deploy/acceptance/extended-checks.sh CHG-2026-0042 queue-verify redis
 
 ```bash
 ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env \
-  bash deploy/acceptance/extended-checks.sh CHG-2026-0042 minio-hash-500
+  bash deploy/acceptance/extended-checks.sh CHG-2026-0042 minio-hash
 ```
 
-`verify-500-hashes.sh` случайно выбирает 500 объектов, читает каждый с source и
-DR site, считает SHA-256 и пишет `minio-hash-sample.csv`. PASS требует ровно
-500 проверенных файлов и 0 несовпадений. Если в контрольном bucket меньше 500
-файлов, проверка завершается FAIL — уменьшать выборку нельзя.
+(`minio-hash-500` — прежнее имя того же действия, оно сохранено.)
+
+`verify-500-hashes.sh` случайно выбирает объекты, читает каждый с source и
+DR site, считает SHA-256 и пишет `minio-hash-sample.csv`. PASS требует, чтобы
+число проверенных файлов совпало с требуемым и несовпадений было 0.
+
+Размер выборки задаётся в инвентаре `MINIO_HASH_SAMPLE_SIZE`, по умолчанию 500.
+Требуемое число пишется в `extended-results.env` и выводится в `RESULT.md`
+отдельной строкой, поэтому снижение выборки — это видимое в отчёте решение
+Заказчика, а не правка скрипта. Если в контрольном bucket меньше объектов, чем
+требуется, проверка завершается FAIL.
 
 ## 6. Alertmanager и application smoke
 
@@ -149,11 +162,14 @@ bash deploy/acceptance/acceptance-cycle.sh CHG-2026-0042 finalize
 
 - общий PASS/FAIL;
 - observed RPO/RTO;
-- cold reindex: число документов, время, лимит и результат;
+- cold reindex: число документов, требуемое число, время, лимит и результат;
 - результат worker `kill -9` drill;
 - результат Redis `kill -9` drill;
-- размер MinIO SHA-256 sample и число mismatches;
-- пути/evidence для операторских HA/DR действий.
+- размер MinIO SHA-256 sample, требуемый размер и число mismatches;
+- пути/evidence для операторских HA/DR действий;
+- по одной строке `DISCREPANCY` на каждое конкретное невыполненное условие
+  (объём, время, статус измерения, mismatches, операторские флаги), чтобы отчёт
+  называл настоящую причину, а не всегда лимит времени.
 
 Даже если DB/MinIO/Alert/Application отмечены PASS, общий результат остаётся
 FAIL, пока cold reindex, оба queue crash drill и 500-file hash verification не
@@ -163,8 +179,13 @@ FAIL, пока cold reindex, оба queue crash drill и 500-file hash verificat
 
 `validate.sh` проверяет shell/runtime-контракты harness без destructive
 инфраструктуры: базовый preflight, RPO/RTO, новые extended gates, обязательный
-FAIL при reindex > 3600 секунд и FAIL при `NOT_RUN`. MinIO validator отдельно
-проверяет механизм SHA-256 comparison через fake `mc`.
+FAIL при reindex > 3600 секунд и FAIL при `NOT_RUN`. Отдельно проверяются
+отрицательные случаи: `/health/`, отдающий `unhealthy`, обязан валить preflight
+(в CI используется та же якорная регулярка `^(ok|healthy|ready)$`, что и в
+инвентаре, — неякорная приняла бы `unhealthy`); прогон, не добравший
+собственный требуемый объём, обязан падать и обвинять объём, а не время; а
+согласованный меньший объём обязан приниматься без правки скриптов. MinIO
+validator отдельно проверяет механизм SHA-256 comparison через fake `mc`.
 
 CI подтверждает корректность tooling, но не заменяет реальный стендовый запуск
 и подпись Заказчика/эксплуатации.

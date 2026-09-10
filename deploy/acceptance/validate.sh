@@ -50,7 +50,7 @@ cat >"$tmp/bin/curl" <<'EOF'
 url="${!#}"
 case "$url" in
   */api/v2/status) echo '{"cluster":{"status":"ready"}}' ;;
-  */health/) echo 'healthy' ;;
+  */health/) echo "${CI_HEALTH_BODY:-healthy}" ;;
   *) echo "unexpected URL: $url" >&2; exit 22 ;;
 esac
 EOF
@@ -79,7 +79,7 @@ MINIO_DR_ENV=$tmp/minio.env
 MINIO_CHECK_SCRIPT=$tmp/minio-check.sh
 ALERTMANAGER_URLS=http://am1:9093,http://am2:9093
 APP_HEALTH_URL=http://app/health/
-APP_HEALTH_EXPECT_REGEX=healthy
+APP_HEALTH_EXPECT_REGEX='^(ok|healthy|ready)$'
 ACCEPTANCE_EVIDENCE_ROOT=$tmp/evidence
 ACCEPTANCE_CHANGE_ID=CI-42
 ACCEPTANCE_OPERATOR=ci
@@ -94,12 +94,14 @@ bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 checkpoint planned-switchover-c
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 checkpoint pitr-validated >/dev/null
 
 cat >"$tmp/evidence/ci-stage4/extended-results.env" <<'EOF'
+search_reindex_required_documents=10000
 search_reindex_documents=10000
 search_reindex_seconds=3599
 search_reindex_limit_seconds=3600
 search_reindex_result=PASS
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
+minio_hash_required_count=500
 minio_hash_sample_count=500
 minio_hash_mismatches=0
 minio_hash_result=PASS
@@ -122,6 +124,8 @@ grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Cold search reindex documents: 10000' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Cold search reindex seconds: 3599' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'MinIO SHA-256 sample files: 500' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'MinIO SHA-256 required sample files: 500' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Cold search reindex required documents: 10000' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Celery worker kill -9 / redelivery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Redis kill -9 / recovery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 
@@ -129,12 +133,14 @@ grep -q 'Redis kill -9 / recovery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT
 # legacy DB/MinIO/Alert/Application flags are PASS.
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-slow preflight >/dev/null
 cat >"$tmp/evidence/ci-stage4-slow/extended-results.env" <<'EOF'
+search_reindex_required_documents=10000
 search_reindex_documents=10000
 search_reindex_seconds=3601
 search_reindex_limit_seconds=3600
 search_reindex_result=FAIL
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
+minio_hash_required_count=500
 minio_hash_sample_count=500
 minio_hash_mismatches=0
 minio_hash_result=PASS
@@ -152,7 +158,9 @@ if env \
   echo 'ERROR: finalize accepted cold reindex > 60 minutes' >&2
   exit 1
 fi
-grep -q 'DISCREPANCY: cold reindex' "$tmp/evidence/ci-stage4-slow/RESULT.md"
+grep -q 'DISCREPANCY: cold reindex took 3601s' "$tmp/evidence/ci-stage4-slow/RESULT.md"
+# The timing discrepancy must not be reported as a volume problem.
+! grep -q 'DISCREPANCY: cold reindex covered' "$tmp/evidence/ci-stage4-slow/RESULT.md"
 
 # Any missing extended check must also fail closed.
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-missing preflight >/dev/null
@@ -169,5 +177,73 @@ if env \
   echo 'ERROR: finalize accepted NOT_RUN extended checks' >&2
   exit 1
 fi
+
+# An unhealthy application must fail preflight: the shipped regex is anchored,
+# so 'unhealthy' must not satisfy an expectation of 'healthy'.
+if CI_HEALTH_BODY=unhealthy bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-sick preflight >/dev/null 2>&1; then
+  echo 'ERROR: preflight accepted an unhealthy application health response' >&2
+  exit 1
+fi
+
+# A smaller, customer-agreed acceptance volume must be honoured as-is instead of
+# being measured against a number hardcoded in the harness.
+bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small preflight >/dev/null
+cat >"$tmp/evidence/ci-stage4-small/extended-results.env" <<'EOF'
+search_reindex_required_documents=5000
+search_reindex_documents=5000
+search_reindex_seconds=120
+search_reindex_limit_seconds=3600
+search_reindex_result=PASS
+queue_worker_kill_result=PASS
+queue_redis_kill_result=PASS
+minio_hash_required_count=120
+minio_hash_sample_count=120
+minio_hash_mismatches=0
+minio_hash_result=PASS
+EOF
+env \
+  ACCEPTANCE_ENV="$tmp/acceptance.env" \
+  ACCEPTANCE_DB_RESULT=PASS \
+  ACCEPTANCE_MINIO_RESULT=PASS \
+  ACCEPTANCE_ALERT_RESULT=PASS \
+  ACCEPTANCE_APP_RESULT=PASS \
+  ACCEPTANCE_INCIDENT_UTC=2026-09-10T22:00:00Z \
+  ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T21:59:55Z \
+  ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T22:01:00Z \
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small finalize >/dev/null
+grep -q 'Overall: \*\*PASS\*\*' "$tmp/evidence/ci-stage4-small/RESULT.md"
+
+# A run short of its own required volume must fail, and must be blamed on the
+# volume rather than on the time limit it did meet.
+bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-short preflight >/dev/null
+cat >"$tmp/evidence/ci-stage4-short/extended-results.env" <<'EOF'
+search_reindex_required_documents=10000
+search_reindex_documents=5000
+search_reindex_seconds=120
+search_reindex_limit_seconds=3600
+search_reindex_result=PASS
+queue_worker_kill_result=PASS
+queue_redis_kill_result=PASS
+minio_hash_required_count=500
+minio_hash_sample_count=120
+minio_hash_mismatches=0
+minio_hash_result=PASS
+EOF
+if env \
+  ACCEPTANCE_ENV="$tmp/acceptance.env" \
+  ACCEPTANCE_DB_RESULT=PASS \
+  ACCEPTANCE_MINIO_RESULT=PASS \
+  ACCEPTANCE_ALERT_RESULT=PASS \
+  ACCEPTANCE_APP_RESULT=PASS \
+  ACCEPTANCE_INCIDENT_UTC=2026-09-10T23:00:00Z \
+  ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T22:59:55Z \
+  ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T23:01:00Z \
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-short finalize >/dev/null 2>&1; then
+  echo 'ERROR: finalize accepted a reindex short of the required volume' >&2
+  exit 1
+fi
+grep -q 'DISCREPANCY: cold reindex covered 5000 documents instead of the required 10000' "$tmp/evidence/ci-stage4-short/RESULT.md"
+grep -q 'DISCREPANCY: MinIO hash sample covered 120 objects instead of the required 500' "$tmp/evidence/ci-stage4-short/RESULT.md"
+! grep -q 'DISCREPANCY: cold reindex took' "$tmp/evidence/ci-stage4-short/RESULT.md"
 
 echo 'Stage 4 acceptance harness validation passed.'
