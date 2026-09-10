@@ -56,7 +56,8 @@ class AddRelationServiceTests(TestCase):
             relation_type=DocumentRelation.RelationType.CANCELS, note="Пункт 3.2",
         )
         entry = AuditLog.objects.get(event_type=AuditLog.EventType.DOCUMENT_RELATION_ADDED)
-        self.assertEqual(entry.object_id, "R10-п")
+        self.assertEqual(entry.object_id, str(self.source.pk))
+        self.assertEqual(entry.details["reg_number"], "R10-п")
         self.assertEqual(entry.details["to_document"], "R11-п")
         self.assertEqual(entry.actor_personnel_number, "0200")
 

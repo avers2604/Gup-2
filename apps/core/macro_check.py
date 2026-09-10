@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import zipfile
 
+from .antivirus import rejection_details
+
 MACRO_MARKERS = frozenset({
     "word/vbaProject.bin",
     "xl/vbaProject.bin",
@@ -55,7 +57,7 @@ def contains_macros(file) -> list[str]:
     return sorted(found)
 
 
-def reject_if_has_macros(field_file, *, object_type: str, object_id: str) -> None:
+def reject_if_has_macros(field_file, *, object_type: str, object_id: str, object_label: str = "") -> None:
     """Оборачивает contains_macros() аудитом — тот же принцип, что
     apps.core.antivirus.scan_uploaded_field(): при обнаружении маркеров
     пишет UPLOAD_MACRO_REJECTED в WORM-журнал и бросает MacrosDetected —
@@ -69,6 +71,6 @@ def reject_if_has_macros(field_file, *, object_type: str, object_id: str) -> Non
     AuditLog.objects.create(
         event_type=AuditLog.EventType.UPLOAD_MACRO_REJECTED,
         object_type=object_type, object_id=object_id,
-        details={"field": field_file.field.name, "markers": markers},
+        details=rejection_details(field_file, object_label, markers=markers),
     )
     raise MacrosDetected(markers)

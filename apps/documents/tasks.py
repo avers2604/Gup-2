@@ -74,7 +74,7 @@ def run_ocr_for_document(self, document_id):
             AuditLog.objects.create(
                 event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED,
                 object_type="NormativeDocument",
-                object_id=document.reg_number,
+                object_id=str(document.pk),
                 details={
                     "error": str(exc),
                     "retries": self.request.retries,
@@ -108,7 +108,7 @@ def run_ocr_for_document(self, document_id):
         AuditLog.objects.create(
             event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED,
             object_type="NormativeDocument",
-            object_id=document.reg_number,
+            object_id=str(document.pk),
             details={
                 "text_length": len(text),
                 "confidence": confidence,

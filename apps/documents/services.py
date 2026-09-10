@@ -166,6 +166,21 @@ def change_document_status(*, actor, document, new_status, comment=""):
                 f"«{dict(type(locked).Status.choices)[new_status]}» не предусмотрен."
             )
 
+        # Исправление ошибки публикации — за Администратором, а не за тем,
+        # кто публиковал (см. transitions.ADMINISTRATOR_ONLY_TARGETS).
+        if not permissions.can_change_status(actor, locked, new_status):
+            raise PermissionDenied(
+                "Откат публикации и аннулирование доступны только Администратору."
+            )
+
+        if transitions.requires_reason(new_status) and not comment.strip():
+            # Проверяется и здесь, а не только в форме: форму можно
+            # обойти, а запись «публикация отменена» без объяснения
+            # бесполезна и проверяющему, и подразделению через полгода.
+            raise StatusTransitionError(
+                "Для отката публикации и аннулирования обязательно основание."
+            )
+
         # ТЗ 4.2.2: «Алгоритм публикации проверяет граф связей на
         # ацикличность». Каждое ребро проверяется ещё при создании
         # (DocumentRelation.clean()), поэтому в норме цикла быть не
@@ -282,8 +297,9 @@ def _log_relation_event(*, actor, relation, event_name):
         object_type="NormativeDocument",
         # Объект события — документ, от которого идёт связь: именно в его
         # карточке она видна и именно его граф меняется.
-        object_id=relation.from_document.reg_number,
+        object_id=str(relation.from_document.pk),
         details={
+            "reg_number": relation.from_document.reg_number,
             "relation_type": relation.relation_type,
             "to_document": relation.to_document.reg_number,
             "note": relation.note,

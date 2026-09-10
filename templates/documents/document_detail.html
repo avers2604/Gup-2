@@ -10,7 +10,7 @@
     <span class="status-pill
       {% if document.status == 'active' %}status-pill--active
       {% elif document.status == 'active_amended' %}status-pill--amended
-      {% elif document.status == 'revoked' %}status-pill--revoked
+      {% elif document.status == 'revoked' or document.status == 'annulled' %}status-pill--revoked
       {% else %}status-pill--draft{% endif %}">
       {{ document.get_status_display }}
     </span>
@@ -189,6 +189,37 @@
       </div>
     {% else %}
       <p class="caption">История не заполнена.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <p class="label">История действий по документу</p>
+    {% if activity %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead><tr><th>Время</th><th>Событие</th><th>Кто</th><th>Основание</th></tr></thead>
+          <tbody>
+            {% for entry in activity %}
+              <tr>
+                <td class="data">{{ entry.created_at|date:"d.m.Y H:i" }}</td>
+                <td>{{ entry.get_event_type_display }}</td>
+                <td>
+                  {% if entry.actor %}{{ entry.actor.full_name }}
+                  {% elif entry.actor_personnel_number %}таб. {{ entry.actor_personnel_number }}
+                  {% else %}—{% endif %}
+                </td>
+                <td>{{ entry.details.comment|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="caption" style="margin-top: var(--space-3);">
+        Записи журнала аудита по этому документу. Журнал неизменяем: ни
+        исправить, ни удалить запись нельзя ни из одного контура системы.
+      </p>
+    {% else %}
+      <p class="caption">Действий по документу пока не зафиксировано.</p>
     {% endif %}
   </div>
 

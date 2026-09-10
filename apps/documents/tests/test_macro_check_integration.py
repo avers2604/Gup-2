@@ -48,8 +48,9 @@ class NormativeDocumentMacroCheckTests(ClamdTestCase):
         with self.assertRaises(MacrosDetected):
             make_document(reg_number="MC-3", files_original=clean_pdf, files_editable=infected_docx)
         entry = AuditLog.objects.get(
-            event_type=AuditLog.EventType.UPLOAD_MACRO_REJECTED, object_id="MC-3",
+            event_type=AuditLog.EventType.UPLOAD_MACRO_REJECTED,
         )
+        self.assertEqual(entry.details["object_label"], "MC-3")
         self.assertEqual(entry.details["field"], "files_editable")
         self.assertIn("word/vbaProject.bin", entry.details["markers"])
 

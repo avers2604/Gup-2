@@ -1,8 +1,12 @@
 """Граф допустимых переходов статуса (apps/documents/transitions.py).
 
-Как и матрица прав, граф выведен, а не процитирован из ТЗ — см. docstring
-модуля. Эти тесты фиксируют его как контракт: если Заказчик уточнит
-жизненный цикл документа, они меняются вместе с графом.
+Граф выведен, а не процитирован из ТЗ, и **Заказчик его уточнил**: см.
+docstring модуля. Тесты ниже переписаны под уточнение — в частности,
+`Действует → Черновик` теперь разрешён (откат ошибочной публикации), а
+из «Действует с изм.» есть выход обратно в «Действует».
+
+Эти тесты фиксируют граф как контракт: следующее уточнение снова меняет
+их вместе с графом.
 """
 from django.test import SimpleTestCase
 
@@ -21,18 +25,56 @@ class AllowedTransitionsTests(SimpleTestCase):
         # удаление в системе с WORM-журналом не предусмотрено.
         self.assertTrue(transitions.is_allowed(Status.DRAFT, Status.ARCHIVED))
 
-    def test_active_document_is_not_returned_to_draft(self):
-        # Снятие юридической силы — это «Утратил силу», а не откат в
-        # черновик.
-        self.assertFalse(transitions.is_allowed(Status.ACTIVE, Status.DRAFT))
+    def test_active_document_can_be_rolled_back_to_draft(self):
+        # Уточнение Заказчика: ошибочная публикация (не тот файл, не та
+        # дата) откатывается в черновик. Оформлять её через «Утратил
+        # силу» было бы неправдой — документ не должен был действовать.
+        self.assertTrue(transitions.is_allowed(Status.ACTIVE, Status.DRAFT))
+
+    def test_rollback_and_annulment_are_administrator_only(self):
+        # Оба перехода отменяют юридически значимое действие, и тот, кто
+        # публиковал, не должен бесследно править собственную ошибку.
+        self.assertTrue(transitions.requires_administrator(Status.DRAFT))
+        self.assertTrue(transitions.requires_administrator(Status.ANNULLED))
+        self.assertFalse(transitions.requires_administrator(Status.ACTIVE))
+        self.assertFalse(transitions.requires_administrator(Status.REVOKED))
+
+    def test_rollback_and_annulment_require_a_reason(self):
+        self.assertTrue(transitions.requires_reason(Status.DRAFT))
+        self.assertTrue(transitions.requires_reason(Status.ANNULLED))
+        self.assertFalse(transitions.requires_reason(Status.REVOKED))
+
+    def test_annulment_is_distinct_from_revocation(self):
+        # «Аннулирован» и «Утратил силу» — разные исходы, оба доступны из
+        # действующего документа, и подменять один другим нельзя.
+        targets = transitions.allowed_targets(Status.ACTIVE)
+        self.assertIn(Status.ANNULLED, targets)
+        self.assertIn(Status.REVOKED, targets)
+
+    def test_annulled_document_goes_only_to_archive(self):
+        self.assertEqual(
+            transitions.allowed_targets(Status.ANNULLED), frozenset({Status.ARCHIVED})
+        )
+
+    def test_draft_cannot_be_annulled(self):
+        # Аннулировать нечего: публикации не было.
+        self.assertFalse(transitions.is_allowed(Status.DRAFT, Status.ANNULLED))
 
     def test_active_document_is_not_archived_directly(self):
         self.assertFalse(transitions.is_allowed(Status.ACTIVE, Status.ARCHIVED))
         self.assertTrue(transitions.is_allowed(Status.ACTIVE, Status.REVOKED))
         self.assertTrue(transitions.is_allowed(Status.REVOKED, Status.ARCHIVED))
 
-    def test_amended_only_goes_to_revoked(self):
-        self.assertEqual(transitions.allowed_targets(Status.ACTIVE_AMENDED), frozenset({Status.REVOKED}))
+    def test_amended_can_return_to_active(self):
+        # Уточнение Заказчика: если все изменяющие документы отменены,
+        # базовый снова действует в исходной редакции.
+        self.assertTrue(transitions.is_allowed(Status.ACTIVE_AMENDED, Status.ACTIVE))
+
+    def test_amended_targets(self):
+        self.assertEqual(
+            transitions.allowed_targets(Status.ACTIVE_AMENDED),
+            frozenset({Status.ACTIVE, Status.REVOKED, Status.ANNULLED}),
+        )
 
     def test_archived_is_terminal(self):
         self.assertEqual(transitions.allowed_targets(Status.ARCHIVED), frozenset())
@@ -53,8 +95,14 @@ class AllowedTransitionsTests(SimpleTestCase):
         self.assertEqual(set(transitions.ALLOWED_TRANSITIONS), set(Status.values))
 
     def test_target_choices_are_labelled_and_ordered(self):
+        # Порядок — как в Status.choices, а не как во frozenset.
         choices = transitions.target_choices(Status.ACTIVE)
         self.assertEqual(
             choices,
-            [(Status.ACTIVE_AMENDED, "Действует с изм."), (Status.REVOKED, "Утратил силу")],
+            [
+                (Status.DRAFT, "Черновик"),
+                (Status.ACTIVE_AMENDED, "Действует с изм."),
+                (Status.REVOKED, "Утратил силу"),
+                (Status.ANNULLED, "Аннулирован"),
+            ],
         )

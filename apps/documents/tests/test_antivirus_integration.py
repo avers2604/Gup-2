@@ -33,8 +33,12 @@ class NormativeDocumentAntivirusTests(ClamdTestCase):
         with self.assertRaises(MalwareDetected):
             make_document(reg_number="AV-3", files_original=upload)
         entry = AuditLog.objects.get(
-            event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED, object_id="AV-3",
+            event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED,
         )
+        # object_id — UUID (как у бланков и пользователей), рег. номер
+        # остался человекочитаемым ярлыком в реквизитах: отклонённая
+        # загрузка нового документа вообще не оставляет строки в БД.
+        self.assertEqual(entry.details["object_label"], "AV-3")
         self.assertEqual(entry.details["field"], "files_original")
         self.assertIn("Eicar-Test-Signature", entry.details["signature"])
 

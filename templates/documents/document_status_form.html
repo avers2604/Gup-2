@@ -11,7 +11,7 @@
     <span class="status-pill
       {% if document.status == 'active' %}status-pill--active
       {% elif document.status == 'active_amended' %}status-pill--amended
-      {% elif document.status == 'revoked' %}status-pill--revoked
+      {% elif document.status == 'revoked' or document.status == 'annulled' %}status-pill--revoked
       {% else %}status-pill--draft{% endif %}">{{ document.get_status_display }}</span>
   </p>
 

@@ -47,6 +47,16 @@ class AuditLog(models.Model):
         # active -> archived) — усиление аудита (решение Заказчика: «фиксировать
         # все изменения документов — старый/новый статус»), см. NormativeDocument.save().
         DOCUMENT_STATUS_CHANGED = "document.status_changed", "Изменён статус документа"
+        # Исправление ошибки публикации (решение Заказчика). Оба перехода
+        # доступны только Администратору и требуют основания, поэтому у
+        # них собственные типы событий, а не общий STATUS_CHANGED: это
+        # ровно те записи, которые проверяющий ищет в журнале в первую
+        # очередь, и находить их фильтром по «изменён статус» вперемешку
+        # с рутинными переходами — значит не находить.
+        DOCUMENT_PUBLICATION_ROLLED_BACK = (
+            "document.publication_rolled_back", "Публикация откачена в черновик"
+        )
+        DOCUMENT_ANNULLED = "document.annulled", "Публикация аннулирована"
         TEMPLATE_UPDATED = "template.updated", "Бланк обновлён (минорно)"
         TEMPLATE_SUPERSEDED = "template.superseded", "Бланк заменён новой редакцией"
         SESSION_LOGIN = "session.login", "Вход в систему"

@@ -55,6 +55,14 @@ def scan_file(file) -> None:
         raise AntivirusUnavailable(f"Неожиданный ответ clamd: {result!r}")
 
 
+def rejection_details(field_file, object_label: str, **extra) -> dict:
+    """Реквизиты события отклонённой загрузки."""
+    details = {"field": field_file.field.name, **extra}
+    if object_label:
+        details["object_label"] = object_label
+    return details
+
+
 def needs_scan(field_file) -> bool:
     """True — поле содержит новую, ещё НЕ сохранённую в хранилище
     загрузку (Django FieldFile._committed=False — присвоен File/
@@ -64,13 +72,18 @@ def needs_scan(field_file) -> bool:
     return bool(field_file) and not field_file._committed
 
 
-def scan_uploaded_field(field_file, *, object_type: str, object_id: str) -> None:
+def scan_uploaded_field(field_file, *, object_type: str, object_id: str, object_label: str = "") -> None:
     """Оборачивает scan_file() для незакоммиченного FileField-значения
     (см. needs_scan()) аудитом: при обнаружении сигнатуры пишет
     UPLOAD_MALWARE_DETECTED в WORM-журнал и пробрасывает MalwareDetected
     дальше — вызывающий save() обязан прерваться, не записывать файл.
     AntivirusUnavailable здесь аудит НЕ пишет — это отказ инфраструктуры,
-    а не событие безопасности документа; он просто пробрасывается дальше."""
+    а не событие безопасности документа; он просто пробрасывается дальше.
+
+    object_label — человекочитаемое имя объекта (рег. номер НРД, версия
+    бланка). Нужно потому, что object_id это UUID: отклонённая загрузка
+    нового документа вообще не оставляет строки в БД, и без ярлыка такую
+    запись журнала не с чем сопоставить."""
     try:
         scan_file(field_file.file)
     except MalwareDetected as exc:
@@ -79,6 +92,8 @@ def scan_uploaded_field(field_file, *, object_type: str, object_id: str) -> None
         AuditLog.objects.create(
             event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED,
             object_type=object_type, object_id=object_id,
-            details={"field": field_file.field.name, "signature": exc.signature},
+            details=rejection_details(
+                field_file, object_label, signature=exc.signature,
+            ),
         )
         raise

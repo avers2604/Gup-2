@@ -128,11 +128,19 @@ class Template(TimeStampedModel):
         for field_name in ("file_editable", "file_sample"):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
+                # Ярлык для журнала: object_id теперь UUID, а
+                # отклонённая загрузка может вообще не оставить строки.
+                # family может быть ещё не проставлен, если объект
+                # собирают по частям — тогда хватит одной версии.
+                family_name = self.family.name if self.family_id else ""
+                label = f"{family_name} {self.version}".strip()
                 antivirus.scan_uploaded_field(
-                    field_file, object_type="Template", object_id=str(self.pk),
+                    field_file, object_type="Template",
+                    object_id=str(self.pk), object_label=label,
                 )
                 macro_check.reject_if_has_macros(
-                    field_file, object_type="Template", object_id=str(self.pk),
+                    field_file, object_type="Template",
+                    object_id=str(self.pk), object_label=label,
                 )
 
         with transaction.atomic():

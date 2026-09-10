@@ -57,6 +57,14 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         ACTIVE = "active", "Действует"
         ACTIVE_AMENDED = "active_amended", "Действует с изм."
         REVOKED = "revoked", "Утратил силу"
+        # «Аннулирован» — НЕ синоним «Утратил силу» (решение Заказчика).
+        # «Утратил силу» означает, что документ действовал и перестал;
+        # «Аннулирован» — что публикация признана недействительной и
+        # документ не считается действовавшим вовсе. Разница юридическая,
+        # и в истории статусов она видна: у аннулированного период
+        # «Действует» остаётся в записях как факт ошибки, но сам документ
+        # силы не имел.
+        ANNULLED = "annulled", "Аннулирован"
         ARCHIVED = "archived", "Архив"
 
     class OcrCategory(models.TextChoices):
@@ -196,10 +204,12 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
                 antivirus.scan_uploaded_field(
-                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                    field_file, object_type="NormativeDocument",
+                    object_id=str(self.pk), object_label=self.reg_number,
                 )
                 macro_check.reject_if_has_macros(
-                    field_file, object_type="NormativeDocument", object_id=self.reg_number,
+                    field_file, object_type="NormativeDocument",
+                    object_id=str(self.pk), object_label=self.reg_number,
                 )
 
         return self._save_validated(*args, **kwargs)
@@ -289,8 +299,9 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                         AuditLog.objects.create(
                             event_type=AuditLog.EventType.DOCUMENT_RETENTION_EXPIRED_AT_INTAKE,
                             object_type="NormativeDocument",
-                            object_id=self.reg_number,
+                            object_id=str(self.pk),
                             details={
+                                "reg_number": self.reg_number,
                                 "retention_category": self.retention_category,
                                 "retention_until": self.retention_until.isoformat(),
                             },
@@ -301,8 +312,9 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                     AuditLog.objects.create(
                         event_type=AuditLog.EventType.DOCUMENT_RETENTION_CATEGORY_CHANGED,
                         object_type="NormativeDocument",
-                        object_id=self.reg_number,
+                        object_id=str(self.pk),
                         details={
+                            "reg_number": self.reg_number,
                             "old_category": previous_category,
                             "new_category": self.retention_category,
                         },
@@ -321,10 +333,26 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                 event_type = {
                     self.Status.ACTIVE: AuditLog.EventType.DOCUMENT_PUBLISHED,
                     self.Status.REVOKED: AuditLog.EventType.DOCUMENT_REVOKED,
+                    self.Status.ANNULLED: AuditLog.EventType.DOCUMENT_ANNULLED,
                 }.get(self.status, AuditLog.EventType.DOCUMENT_STATUS_CHANGED)
+                # Откат отличается от прочих переходов не новым статусом,
+                # а тем, ОТКУДА он: «Действует → Черновик» это исправление
+                # ошибки публикации, а первое сохранение черновика — нет.
+                if (self.status == self.Status.DRAFT
+                        and previous_status == self.Status.ACTIVE):
+                    event_type = AuditLog.EventType.DOCUMENT_PUBLICATION_ROLLED_BACK
 
                 actor = getattr(self, "_audit_actor", None)
-                details = {"old_status": previous_status, "new_status": self.status}
+                # Рег. номер остаётся в реквизитах события: object_id
+                # теперь UUID, и без него журнал перестал бы читаться
+                # человеком. Это снимок на момент события — номер карточки
+                # мог с тех пор измениться, и в журнале должно остаться
+                # то значение, которое было.
+                details = {
+                    "reg_number": self.reg_number,
+                    "old_status": previous_status,
+                    "new_status": self.status,
+                }
                 # Основание перехода, если вызывающий его указал (форма
                 # смены статуса в Web GUI). Транзитный атрибут, как и
                 # _audit_actor: в модели такого поля нет — основание
@@ -337,7 +365,7 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
                     actor=actor,
                     actor_personnel_number=getattr(actor, "personnel_number", ""),
                     object_type="NormativeDocument",
-                    object_id=self.reg_number,
+                    object_id=str(self.pk),
                     details=details,
                 )
 

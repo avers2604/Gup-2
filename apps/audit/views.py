@@ -12,6 +12,7 @@ import datetime
 
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.paginator import Paginator
+from django.db.models import Q
 from django.http import Http404
 from django.shortcuts import render
 from django.utils import timezone
@@ -48,7 +49,13 @@ class AuditLogListView(LoginRequiredMixin, View):
                     actor_personnel_number=data["actor_personnel_number"].strip()
                 )
             if data.get("object_id"):
-                queryset = queryset.filter(object_id=data["object_id"].strip())
+                # Совпадение и по идентификатору, и по рег. номеру в
+                # реквизитах: object_id по НРД — UUID, а ищет человек по
+                # номеру документа, который у него на руках.
+                value = data["object_id"].strip()
+                queryset = queryset.filter(
+                    Q(object_id=value) | Q(details__reg_number=value)
+                )
             if data.get("date_from"):
                 queryset = queryset.filter(created_at__gte=_start_of_day(data["date_from"]))
             if data.get("date_to"):

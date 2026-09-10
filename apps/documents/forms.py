@@ -168,18 +168,43 @@ class StatusChangeForm(forms.Form):
     comment = forms.CharField(
         label="Основание", required=False,
         widget=forms.Textarea(attrs={**_FIELD_ATTRS, "rows": 3}),
-        help_text="Необязательное пояснение для журнала аудита.",
     )
 
-    def __init__(self, *args, document=None, **kwargs):
+    def __init__(self, *args, document=None, user=None, **kwargs):
         super().__init__(*args, **kwargs)
-        from .transitions import target_choices
+        from . import permissions, transitions
 
         self.document = document
-        choices = target_choices(document.status) if document is not None else []
+        self.user = user
+        choices = transitions.target_choices(document.status) if document is not None else []
+        # Переходы, недоступные этой роли, из списка убираются: откат
+        # публикации и аннулирование оставлены Администратору, и
+        # предлагать их Контролёру/Юристу — предлагать заведомый отказ.
+        if user is not None and document is not None:
+            choices = [
+                (value, label) for value, label in choices
+                if permissions.can_change_status(user, document, value)
+            ]
         self.fields["new_status"].choices = choices
         if not choices:
             self.fields["new_status"].widget.attrs["disabled"] = True
+
+        self.fields["comment"].help_text = (
+            "Обязательно для отката публикации и аннулирования — "
+            "иначе необязательное пояснение для журнала аудита."
+        )
+
+    def clean(self):
+        cleaned = super().clean()
+        from .transitions import requires_reason
+
+        new_status = cleaned.get("new_status")
+        if new_status and requires_reason(new_status) and not (cleaned.get("comment") or "").strip():
+            self.add_error(
+                "comment",
+                "Для отката публикации и аннулирования основание обязательно.",
+            )
+        return cleaned
 
 
 class RelationForm(forms.ModelForm):

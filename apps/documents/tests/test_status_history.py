@@ -254,3 +254,110 @@ class CreateAndUpdateServiceTests(TestCase):
         )
         document.refresh_from_db()
         self.assertEqual(document.title, "Уточнённое наименование")
+
+
+class RollbackAndAnnulmentTests(TestCase):
+    """Исправление ошибочной публикации (решение Заказчика).
+
+    Два разных исхода вместо одного: откат в черновик — документ вернётся
+    в работу; аннулирование — публикация признана недействительной и
+    документ не возвращается. «Утратил силу» не годится ни для того, ни
+    для другого: он утверждает, что документ действовал.
+    """
+
+    def setUp(self):
+        self.controller = make_user(personnel_number="0500", role=User.Role.CONTROLLER_LAWYER)
+        self.administrator = make_user(personnel_number="0501", role=User.Role.ADMINISTRATOR)
+        self.document = make_document(reg_number="900-п", status=Status.ACTIVE)
+
+    def test_controller_cannot_roll_back(self):
+        # Публиковал он же — исправлять собственную ошибку бесследно не должен.
+        with self.assertRaises(PermissionDenied):
+            services.change_document_status(
+                actor=self.controller, document=self.document,
+                new_status=Status.DRAFT, comment="Ошибка публикации",
+            )
+
+    def test_controller_cannot_annul(self):
+        with self.assertRaises(PermissionDenied):
+            services.change_document_status(
+                actor=self.controller, document=self.document,
+                new_status=Status.ANNULLED, comment="Публикация недействительна",
+            )
+
+    def test_administrator_rolls_back_to_draft(self):
+        document, previous = services.change_document_status(
+            actor=self.administrator, document=self.document,
+            new_status=Status.DRAFT, comment="Ушёл не тот файл",
+        )
+        self.assertEqual(previous, Status.ACTIVE)
+        self.assertEqual(document.status, Status.DRAFT)
+
+    def test_rollback_writes_its_own_event(self):
+        # Именно эти записи проверяющий ищет в журнале в первую очередь —
+        # находить их вперемешку с рутинными сменами статуса значит не
+        # находить.
+        services.change_document_status(
+            actor=self.administrator, document=self.document,
+            new_status=Status.DRAFT, comment="Ушёл не тот файл",
+        )
+        entry = AuditLog.objects.get(
+            event_type=AuditLog.EventType.DOCUMENT_PUBLICATION_ROLLED_BACK
+        )
+        self.assertEqual(entry.details["comment"], "Ушёл не тот файл")
+        self.assertEqual(entry.actor_personnel_number, "0501")
+
+    def test_annulment_writes_its_own_event(self):
+        services.change_document_status(
+            actor=self.administrator, document=self.document,
+            new_status=Status.ANNULLED, comment="Приказ не подписан",
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(event_type=AuditLog.EventType.DOCUMENT_ANNULLED).exists()
+        )
+
+    def test_reason_is_mandatory(self):
+        for new_status in (Status.DRAFT, Status.ANNULLED):
+            with self.subTest(new_status=new_status):
+                with self.assertRaises(ValidationError):
+                    services.change_document_status(
+                        actor=self.administrator, document=self.document,
+                        new_status=new_status, comment="   ",
+                    )
+
+    def test_ordinary_transition_needs_no_reason(self):
+        document, _ = services.change_document_status(
+            actor=self.controller, document=self.document, new_status=Status.REVOKED,
+        )
+        self.assertEqual(document.status, Status.REVOKED)
+
+    def test_first_draft_save_is_not_a_rollback(self):
+        # Событие отката отличается не новым статусом, а тем, откуда он.
+        make_document(reg_number="901-п")
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_PUBLICATION_ROLLED_BACK
+            ).exists()
+        )
+
+    def test_rollback_closes_the_active_period_in_history(self):
+        services.change_document_status(
+            actor=self.administrator, document=self.document,
+            new_status=Status.DRAFT, comment="Ошибка публикации",
+        )
+        statuses = list(self.document.status_history.order_by("period").values_list("status", flat=True))
+        self.assertEqual(statuses[-1], Status.DRAFT)
+
+
+class AmendedReturnsToActiveTests(TestCase):
+    """Решение Заказчика: отмена всех изменяющих документов возвращает
+    базовый документ в исходную редакцию."""
+
+    def test_controller_returns_amended_document_to_active(self):
+        controller = make_user(personnel_number="0510", role=User.Role.CONTROLLER_LAWYER)
+        document = make_document(reg_number="910-п", status=Status.ACTIVE_AMENDED)
+        updated, previous = services.change_document_status(
+            actor=controller, document=document, new_status=Status.ACTIVE,
+        )
+        self.assertEqual(previous, Status.ACTIVE_AMENDED)
+        self.assertEqual(updated.status, Status.ACTIVE)
