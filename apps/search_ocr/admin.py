@@ -3,7 +3,7 @@ from django.contrib import messages
 
 from apps.audit.models import AuditLog
 
-from .models import ThesaurusEntry, ThesaurusStatus
+from .models import ThesaurusAmbiguity, ThesaurusEntry, ThesaurusStatus
 
 
 @admin.register(ThesaurusEntry)
@@ -65,3 +65,22 @@ class ThesaurusEntryAdmin(admin.ModelAdmin):
     @admin.action(description="Пометить как «Отклонено»")
     def mark_rejected(self, request, queryset):
         self._apply_status(request, queryset, ThesaurusStatus.REJECTED, "mark_rejected")
+
+
+@admin.register(ThesaurusAmbiguity)
+class ThesaurusAmbiguityAdmin(admin.ModelAdmin):
+    """Только для чтения — реестр наполняется исключительно import_thesaurus()
+    (upsert из ambiguity_registry файла), ручное редактирование здесь
+    расходилось бы с исходным файлом при следующем импорте."""
+
+    list_display = ("abbr", "disambiguation")
+    search_fields = ("abbr",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

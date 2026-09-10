@@ -39,7 +39,7 @@ class LoginWithoutTotpTests(TestCase):
         response = self.client.post(reverse("iam:login"), {
             "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
         })
-        self.assertRedirects(response, reverse("core:styleguide"))
+        self.assertRedirects(response, reverse("search_ocr:search"))
 
     def test_session_is_authenticated_after_login(self):
         self.client.post(reverse("iam:login"), {
@@ -113,7 +113,7 @@ class LoginWithTotpTests(TestCase):
             "personnel_number": "0001", "password": "Sup3r$ecret!Pass",
         })
         response = self.client.post(reverse("iam:login-verify-totp"), {"code": self._current_code()})
-        self.assertRedirects(response, reverse("core:styleguide"))
+        self.assertRedirects(response, reverse("search_ocr:search"))
 
         enroll_response = self.client.get(reverse("iam:totp-enroll"))
         self.assertEqual(enroll_response.status_code, 200)
