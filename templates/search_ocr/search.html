@@ -8,6 +8,9 @@
     <form method="get" novalidate>
       <label class="field-label" for="{{ form.q.id_for_label }}">Запрос</label>
       {{ form.q }}
+      {% if form.q.errors %}
+        <p class="caption" style="color: var(--color-danger); margin-top: var(--space-2);">{{ form.q.errors|striptags }}</p>
+      {% endif %}
       <div style="display:flex; gap: var(--space-4); margin-top: var(--space-4); flex-wrap: wrap;">
         <div>
           <label class="field-label" for="{{ form.category.id_for_label }}">{{ form.category.label }}</label>
@@ -29,6 +32,12 @@
   {% if results is not None %}
     <div style="margin-top: var(--space-8);">
       <p class="label">Результаты по запросу «{{ form.cleaned_data.q }}»</p>
+      {% if page_obj %}
+        <p class="caption" style="margin-top: var(--space-2);">
+          Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
+          показано {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ page_obj.paginator.count }}
+        </p>
+      {% endif %}
       {% if results %}
         <div class="table-scroll">
           <table class="table">
@@ -60,6 +69,26 @@
             </tbody>
           </table>
         </div>
+
+        {% if page_obj and page_obj.paginator.num_pages > 1 %}
+          <nav style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); align-items: center;">
+            {% if page_obj.has_previous %}
+              <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+            {% endif %}
+
+            {% for num in page_obj.paginator.page_range %}
+              {% if num == page_obj.number %}
+                <span class="btn btn--primary" aria-current="page">{{ num }}</span>
+              {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+                <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
+              {% endif %}
+            {% endfor %}
+
+            {% if page_obj.has_next %}
+              <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+            {% endif %}
+          </nav>
+        {% endif %}
       {% else %}
         <p class="caption">Ничего не найдено.</p>
       {% endif %}
