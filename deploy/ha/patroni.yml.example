@@ -82,6 +82,21 @@ postgresql:
   bin_dir: /usr/lib/postgresql/18/bin
   pgpass: /var/lib/postgresql/.pgpass
 
+  # Replica rebuild order. pgBackRest is tried first only after the local
+  # approval marker exists; the wrapper exits non-zero before manual PITR
+  # acceptance, allowing Patroni to continue to ordinary pg_basebackup while a
+  # healthy leader is available. no_leader permits repository-based replica
+  # creation during controlled recovery, but the wrapper never promotes it.
+  create_replica_methods:
+    - pgbackrest
+    - basebackup
+  pgbackrest:
+    command: /usr/local/libexec/bz-get/patroni-pgbackrest-restore.sh
+    keep_data: true
+    no_leader: 1
+  basebackup:
+    max-rate: 100M
+
   authentication:
     replication:
       username: replicator
