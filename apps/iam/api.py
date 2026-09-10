@@ -11,10 +11,12 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from . import services
 from .serializers import TokenObtainRequestSerializer, TotpVerifyRequestSerializer
+from .throttles import MeThrottle, TokenObtainThrottle, TokenRefreshThrottle, TotpVerifyThrottle
 
 
 def _issue_tokens(user) -> dict:
@@ -33,6 +35,7 @@ class TokenObtainView(APIView):
     Web-контуре, не отдельный механизм."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [TokenObtainThrottle]
 
     @extend_schema(
         request=TokenObtainRequestSerializer,
@@ -74,6 +77,7 @@ class TotpVerifyView(APIView):
     """Шаг 2 — тикет с шага 1 + код TOTP, возвращает пару JWT."""
 
     permission_classes = [AllowAny]
+    throttle_classes = [TotpVerifyThrottle]
 
     @extend_schema(
         request=TotpVerifyRequestSerializer,
@@ -101,11 +105,17 @@ class TotpVerifyView(APIView):
         return Response(_issue_tokens(user))
 
 
+class TokenRefreshView(BaseTokenRefreshView):
+    throttle_classes = [TokenRefreshThrottle]
+
+
 class MeView(APIView):
     """Кому принадлежит текущий access-токен — минимальный, но
     обязательный элемент любого JWT API: без него нечем проверить в
     тестах (и клиенту интеграции — в реальности), что Bearer-токен вообще
     даёт доступ к защищённым эндпоинтам, а не только выдаётся."""
+
+    throttle_classes = [MeThrottle]
 
     def get(self, request):
         return Response(services.user_auth_summary(request.user))
