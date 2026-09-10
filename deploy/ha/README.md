@@ -49,6 +49,7 @@ PgBouncer и HAProxy запускаются **на каждом узле при�
 - `etcd.env.example` — переменные одного члена трёхузлового etcd;
 - `haproxy.cfg.example` — локальный маршрутизатор на текущий Patroni primary;
 - `pgbouncer.ini.example` — локальный пул соединений приложения;
+- `validate.sh` — неразрушающая проверка реальных HA-конфигов;
 - `../dr/pgbackrest.conf.example` — архивирование WAL и backup repository;
 - `../dr/README.md` — DR-регламент и порядок восстановления.
 
@@ -92,23 +93,42 @@ ETCDCTL_API=3 etcdctl \
 До запуска Patroni все три endpoint должны быть healthy. Один недоступный узел
 не должен лишать etcd кворума; два — должны.
 
-### 3. Подготовить pgBackRest до Patroni
+### 3. Подготовить pgBackRest и backup repository
 
 На всех DB-узлах установить pgBackRest и разместить
 `../dr/pgbackrest.conf.example`. На отдельном backup host подготовить репозиторий
 и SSH-доступ от системного пользователя postgres/pgbackrest по принятой в
 организации схеме ключей.
 
-`archive_command` уже включён в `patroni.yml.example`: Patroni не должен
-инициализировать production-кластер, пока `pgbackrest check` не проходит.
+На этом шаге проверяется конфигурация файлов, сеть, SSH/TLS и права каталогов,
+но **`stanza-create`/`pgbackrest check` ещё не выполняются**: им нужен уже
+работающий PostgreSQL primary. `archive_command` заранее включён в
+`patroni.yml.example`, поэтому после появления первого leader stanza нужно
+создать сразу, не откладывая до подключения реплик.
 
-### 4. Bootstrap Patroni
+### 4. Bootstrap первого Patroni leader
 
 На `db1` заполнить `patroni.yml.example` и запустить Patroni. Первый узел,
-получивший initialize lock в etcd, создаст кластер. Затем последовательно
-подключить `db2` и `db3`.
+получивший initialize lock в etcd, создаст кластер.
 
-Проверка:
+Сразу после появления работающего primary создать stanza и проверить архив:
+
+```bash
+sudo -u postgres pgbackrest --stanza=bz-get stanza-create
+sudo -u postgres pgbackrest --stanza=bz-get check
+sudo -u postgres pgbackrest --stanza=bz-get --type=full backup
+sudo -u postgres pgbackrest --stanza=bz-get info
+```
+
+До успешного `check` и первого full backup кластер считается bootstrap-стендом,
+а не готовым HA/DR-контуром. Ошибки `archive-push`, возникшие между первым
+стартом PostgreSQL и созданием stanza, должны исчезнуть после `stanza-create`;
+перед продолжением убедиться, что WAL архивируется штатно.
+
+### 5. Подключить db2 и db3 как реплики
+
+Последовательно запустить Patroni на `db2` и `db3`, используя тот же `scope` и
+DCS. Проверка:
 
 ```bash
 patronictl -c /etc/patroni/patroni.yml list
@@ -118,7 +138,7 @@ patronictl -c /etc/patroni/patroni.yml list
 инициализируется с data checksums, а `wal_log_hints=on`; оба механизма дают
 Patroni возможность использовать `pg_rewind` при возврате бывшего primary.
 
-### 5. Поднять локальный HAProxy и PgBouncer на каждом app-узле
+### 6. Поднять локальный HAProxy и PgBouncer на каждом app-узле
 
 HAProxy слушает только `127.0.0.1:6433` и направляет TCP-трафик на PostgreSQL
 того DB-узла, чей Patroni REST отвечает `200` на `/primary`.
@@ -132,6 +152,20 @@ POSTGRES_PORT=6432
 ```
 
 Приложение не должно знать, какой DB-узел сейчас primary.
+
+### 7. Выполнить неразрушающую проверку конфигов
+
+После замены всех placeholders на каждом соответствующем узле:
+
+```bash
+PATRONI_CONFIG=/etc/patroni/patroni.yml \
+HAPROXY_CONFIG=/etc/haproxy/haproxy.cfg \
+PGBOUNCER_CONFIG=/etc/pgbouncer/pgbouncer.ini \
+./deploy/ha/validate.sh
+```
+
+Скрипт проверяет Patroni schema/GUC, HAProxy syntax и обязательный проектный
+контракт PgBouncer, не выполняя failover и не меняя данные.
 
 ## Режим синхронной репликации
 
