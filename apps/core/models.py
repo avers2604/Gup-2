@@ -50,7 +50,9 @@ class OcrReviewQueueEntry(models.Model):
     required_at = models.DateTimeField()
 
     class Meta:
-        indexes = [models.Index(fields=["required_at"])]
+        indexes = [
+            models.Index(fields=["required_at"], name="core_ocrrev_require_4d2cbf_idx"),
+        ]
         ordering = ["required_at"]
 
 
@@ -74,7 +76,9 @@ class QueueDrillProbe(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["run_id", "sequence"], name="unique_queue_drill_probe"),
         ]
-        indexes = [models.Index(fields=["run_id", "completed_at"])]
+        indexes = [
+            models.Index(fields=["run_id", "completed_at"], name="core_queue_run_id_9f8bd3_idx"),
+        ]
         ordering = ["run_id", "sequence"]
 
     def __str__(self):
