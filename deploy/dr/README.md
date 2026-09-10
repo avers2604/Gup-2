@@ -46,11 +46,20 @@ Backup шифруется `aes-256-cbc`; cipher passphrase не хранится
 
 ## 4. Инициализация pgBackRest
 
-На каждом PostgreSQL-узле:
+Конфигурацию pgBackRest, каталог spool/log и доступ к отдельному repository
+готовим **на всех PostgreSQL-узлах** до ввода HA-кластера в эксплуатацию:
 
 ```bash
 sudo install -d -o postgres -g postgres -m 0750 /var/log/pgbackrest
 sudo install -d -o postgres -g postgres -m 0750 /var/spool/pgbackrest
+```
+
+`stanza-create` выполняется после появления первого работающего Patroni primary.
+Создавать одну и ту же stanza отдельно на каждой реплике не требуется: stanza —
+состояние общего backup repository, а не локальная сущность DB-узла. На текущем
+primary:
+
+```bash
 sudo -u postgres pgbackrest --stanza=bz-get stanza-create
 sudo -u postgres pgbackrest --stanza=bz-get check
 ```
@@ -61,6 +70,10 @@ sudo -u postgres pgbackrest --stanza=bz-get check
 sudo -u postgres pgbackrest --stanza=bz-get --type=full backup
 sudo -u postgres pgbackrest --stanza=bz-get info
 ```
+
+После failover `check`/backup должны успешно выполняться уже с нового primary —
+это отдельный пункт приёмочного сценария, а не предположение о переносимости
+конфигурации.
 
 `patroni.yml.example` включает непрерывный `archive_command` через pgBackRest и
 `archive_timeout=60s`. Это уменьшает окно между принудительными переключениями
