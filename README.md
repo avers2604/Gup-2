@@ -1,244 +1,395 @@
 # АИС «БЗ ГЭТ»
 
-База знаний нормативно-распорядительной документации и типовых бланков
-СПб ГУП «Горэлектротранс» — по ТЗ-БЗ-ГЭТ-2026-V2.2 (редакция 2.2, Enterprise
-Baseline) и дополнению к нему.
+База знаний нормативно-распорядительной документации и типовых бланков СПб ГУП «Горэлектротранс» по ТЗ-БЗ-ГЭТ-2026-V2.2 и дополнению к нему.
 
-Этот репозиторий содержит технический каркас Этапа 1 (см. план работ):
-модульный монолит на Django, веб-порт дизайн-системы `DESIGN.md` и первые
-доменные модели. Полный план — в артефакте плана работ, переданном Заказчику.
+Проект реализован как модульный монолит на Django. Репозиторий уже содержит не только доменную модель, но и Web GUI, External API, IAM/2FA, Smart Search, OCR-конвейер, контроль загрузок, асинхронные фоновые задачи, а также reference-контур HA/DR с Patroni, pgBackRest, MinIO DR, Prometheus/Grafana, Alertmanager и стендовым acceptance tooling.
 
-## Стек
+> **Важно:** HA/DR-код и эксплуатационные шаблоны находятся в репозитории, но Этап 4 нельзя считать эксплуатационно принятым до реального стендового failover/PITR/MinIO drill, измерения RPO/RTO и утверждения результатов Заказчиком.
 
-Открытый вопрос №1 плана работ (выбор языка/фреймворка) закрыт Заказчиком:
-Python / Django, модульный монолит (DDD), границы доменов — отдельные
-Django-приложения без прямых импортов друг в друга. Framework
-зафиксирован как **Django 5.2 LTS** (только минорные/патч-обновления
-внутри ветки); Python — связка с ним, текущий базовый вариант **3.13.x**,
-3.14.7 остаётся candidate target до подтверждения совместимости на
-целевой ОС (детали и условия — в `STACK.md`). Точные версии всего
-остального стека (PostgreSQL, Patroni, MinIO, Redis, Celery, Tesseract,
-nginx, pgBackRest) и открытые лицензионные вопросы (Redis/MinIO — AGPLv3)
-зафиксированы в [`STACK.md`](STACK.md).
+## Текущий статус
 
-## Структура
+Состояние на 10.09.2026:
+
+| Этап | Состояние | Что входит |
+|---|---|---|
+| **Этап 1** | реализован | доменная модель НРД, история статусов, граф версий, банк бланков, IAM, WORM-аудит, дизайн-система |
+| **Этап 2** | основная часть реализована | Web GUI, DRF/JWT API, 2FA, Smart Search, реестр и карточка НРД; Web-операции записи НРД находятся в отдельном PR #28 и ещё не входят в `main` |
+| **Этап 3** | базовый контур реализован | Celery/Redis, OCR Tesseract + OpenCV, антивирус ClamAV, запрет макросов/ActiveX, асинхронный импорт персонала |
+| **Этап 4** | функционально реализован, стендовая приёмка не завершена | Patroni/etcd HA, PgBouncer/HAProxy, pgBackRest/PITR, MinIO DR, monitoring/alerting, guarded replica rebuild, combined DR drill и acceptance harness |
+
+Подробный фактический статус Этапа 4: [`docs/STAGE4_STATUS.md`](docs/STAGE4_STATUS.md).
+
+## Основные возможности
+
+### Нормативно-распорядительная документация
+
+- карточка НРД с реквизитами ТЗ;
+- граф связей версий/замены документов;
+- темпоральная история статусов SCD-2 на PostgreSQL `tstzrange`;
+- ограничение пересекающихся периодов через `EXCLUDE USING gist`;
+- категории хранения и автоматический расчёт retention policy;
+- отдельный признак допуска к документам «ДСП»;
+- WORM-аудит юридически и эксплуатационно значимых действий;
+- Web-реестр `/documents/` с фильтрами и pagination;
+- карточка `/documents/<uuid>/` с реквизитами, связями, историей статусов, файлами и retention metadata.
+
+На текущем `main` Web-интерфейс НРД остаётся в основном read-only. Создание/редактирование/смена статусов через Web GUI развивается в PR #28; административные операции доступны через Django admin.
+
+### Банк бланков
+
+`apps/templates_bank/` хранит семейства форм и версии бланков с классификацией изменений. Файлы проходят тот же контур контроля загрузок, что и НРД.
+
+### IAM, аутентификация и безопасность
+
+Внутренний IAM реализован без обязательной зависимости от AD/LDAP.
+
+Основные механизмы:
+
+- пользователи идентифицируются по табельному номеру;
+- ролевая модель и отдельный флаг допуска «ДСП»;
+- Argon2 для паролей;
+- парольная политика: минимум 14 символов, история 10 паролей, срок действия 365 дней;
+- TOTP/2FA, обязательная для администратора;
+- TOTP secret хранится в зашифрованном виде;
+- административный сброс 2FA с аудитом;
+- JWT access/refresh + blacklist для API;
+- принудительная смена истёкшего/сброшенного пароля;
+- lockout после 5 неудачных попыток за 15 минут по табельному номеру;
+- дополнительный контур защиты от перебора по IP;
+- HTTP throttling для auth/search API;
+- таймауты Web-сессии;
+- доменные события для критических IAM side effects и WORM-аудита.
+
+IAM application services разделены по назначению:
 
 ```text
-config/            настройки Django (base/dev/prod), urls, wsgi/asgi
-apps/core/         общие абстракции (UUID PK, TimeStamped), /styleguide/
-apps/iam/          оргструктура (Department), пользователи, роли — ТЗ 4.6
-apps/documents/    карточка НРД, граф DAG, темпоральная история SCD-2 — ТЗ 4.2
-apps/templates_bank/  «Банк бланков»: семейства форм, версии — ТЗ 4.3
-apps/audit/        WORM-журнал аудита — ТЗ 4.3.1, 4.7
-static/css/        веб-порт токенов DESIGN.md (tokens/base/components.css)
-templates/         базовый шаблон + живой стайлгайд компонентов
+apps/iam/auth_service.py       аутентификация, lockout, TOTP, session audit
+apps/iam/personnel_service.py  импорт персонала и отчёты
+apps/iam/services.py           compatibility facade
+```
+
+Импорт персонала поддерживает синхронный и асинхронный режимы. В async-режиме Excel сначала помещается в рабочее storage, а в Celery передаётся только имя объекта и ID оператора — бинарный файл не передаётся через Redis.
+
+## Smart Search
+
+Поиск находится в `apps/search_ocr/` и использует PostgreSQL Full Text Search с русской конфигурацией и тезаурусом.
+
+Формула ранжирования:
+
+```text
+score = ExactMatch(reg_number) * 1.0
+      + FTS(title)             * 0.8
+      + FTS(summary)           * 0.5
+      + FTS(ocr_body)          * 0.2
+```
+
+Реализованы:
+
+- расширение запроса по VERIFIED-записям тезауруса;
+- разрешение неоднозначных аббревиатур;
+- отдельная persisted read-model `DocumentSearchIndex`;
+- сохранённые `tsvector` для title/summary/OCR;
+- GIN-backed candidate selection;
+- асинхронное обновление индекса после изменения документа;
+- полный rebuild через management command;
+- фильтрация документов «ДСП» по допуску пользователя;
+- pagination в Web и API;
+- ограничение поисковой строки: до 200 символов и до 12 слов;
+- throttling search API.
+
+Интерфейсы:
+
+```text
+GET /                             Web Smart Search
+GET /api/v1/search/documents/     External API поиска
+```
+
+Web-поиск выводит по 20 результатов на страницу. API использует ту же бизнес-логику и paginated JSON-ответ.
+
+## OCR и контроль загрузок
+
+OCR-конвейер работает асинхронно через Celery + Redis.
+
+Пайплайн:
+
+```text
+загрузка файла
+  -> ClamAV / macro check
+  -> сохранение
+  -> transaction.on_commit()
+  -> Celery
+  -> PDF rasterization
+  -> OpenCV preprocessing
+  -> Tesseract OCR
+  -> ocr_body / confidence / status
+  -> обновление поискового read-model
+```
+
+Поддерживаются:
+
+- пакетная растеризация PDF;
+- deskew, denoise и бинаризация изображения;
+- русский Tesseract OCR;
+- дифференцированные пороги качества по категории документа;
+- retry и timeout Celery-задач;
+- WORM-аудит успеха/ошибки OCR;
+- ретроактивный повтор OCR management-командой;
+- синхронная fail-closed проверка файлов через ClamAV до записи в storage;
+- структурная проверка DOCX/XLSX на макросы и ActiveX.
+
+Известные границы OCR: нет пользовательского UI прогресса очереди; Tesseract не даёт Top-3 альтернатив распознавания; для схем/чертежей пока распознаётся страница целиком, а не только штамп.
+
+## HTTP-контуры
+
+В проекте разделены Web GUI и External API.
+
+| URL | Назначение |
+|---|---|
+| `/` | Smart Search |
+| `/documents/` | реестр НРД |
+| `/documents/<uuid>/` | карточка НРД |
+| `/accounts/` | Web login/TOTP/password flow |
+| `/api/v1/auth/` | JWT auth API |
+| `/api/v1/search/documents/` | поиск НРД через API |
+| `/api/v1/schema/` | OpenAPI schema |
+| `/api/v1/docs/` | Swagger UI |
+| `/health/` | readiness приложения + БД (`200 healthy` / `503 unhealthy`) |
+| `/admin/` | Django admin |
+| `/styleguide/` | живой каталог компонентов дизайн-системы |
+
+`/health/` выполняет минимальный `SELECT 1` через настроенный DB endpoint, не кэшируется и не раскрывает детали инфраструктурной ошибки.
+
+## Архитектура
+
+### Приложение
+
+```text
+Browser / Integration
+        |
+        +--> Web GUI: Django Templates
+        |
+        +--> External API: Django REST Framework + JWT
+                         |
+                    application services
+                         |
+      +------------------+------------------+
+      |                  |                  |
+   documents            iam             search_ocr
+      |                  |                  |
+      +------------------+------------------+
+                         |
+                 PostgreSQL / S3 / Redis
+```
+
+Проект остаётся модульным монолитом: домены разделены Django-приложениями, а тяжёлые/долгие операции выносятся в Celery.
+
+### Production DB HA
+
+Reference-топология Этапа 4:
+
+```text
+Django
+  -> local PgBouncer :6432
+  -> local HAProxy   :6433
+  -> current Patroni primary :5432
+
+Patroni db1/db2/db3
+  -> etcd1/etcd2/etcd3 quorum over TLS
+```
+
+HAProxy определяет writable primary через Patroni REST API. PgBouncer и HAProxy предполагаются локальными на каждом app-узле, чтобы не создавать отдельный центральный DB-router как SPOF.
+
+Dev `docker-compose.yml` не является HA-кластером и не должен использоваться как доказательство отказоустойчивости.
+
+## Этап 4: HA, DR и мониторинг
+
+В `main` уже находятся пять партий Этапа 4.
+
+### 1. PostgreSQL HA + pgBackRest DR
+
+`deploy/ha/` и `deploy/dr/` содержат:
+
+- 3-node Patroni/PostgreSQL reference configuration;
+- 3-node etcd/TLS quorum;
+- synchronous replication baseline;
+- `pg_rewind`, timeline checks и data checksums;
+- PgBouncer + HAProxy routing;
+- pgBackRest repository configuration;
+- continuous WAL archive;
+- full/diff/incr backup;
+- PITR и full-cluster recovery runbook.
+
+### 2. Monitoring
+
+Добавлены:
+
+- Patroni native `/metrics`;
+- `postgres_exporter`;
+- `pgbouncer_exporter`;
+- read-only pgBackRest exporter;
+- Prometheus scrape/rules;
+- Grafana dashboard `BZ GET — Stage 4 HA / DR`;
+- алерты на primary/sync standby/DCS/replication lag/PgBouncer/backup freshness.
+
+Текущие пороги — bootstrap для стенда, а не утверждённый SLA.
+
+### 3. MinIO DR + Alertmanager
+
+MinIO работает по active-passive DR-схеме для двух application buckets:
+
+```text
+active site                       passive DR site
+bz-get-originals (WORM)  ----->   bz-get-originals (WORM)
+bz-get-working           ----->   bz-get-working
+```
+
+Для `originals` обязательны Versioning и Object Lock/WORM на обеих площадках. Репликация выполняется отдельными least-privilege пользователями.
+
+Alertmanager разворачивается в двухузловом HA-контуре; Prometheus отправляет alerts обоим peers. `warning` и `critical` маршрутизируются отдельно, а реальные receiver URL хранятся вне Git.
+
+### 4. Guarded Patroni replica rebuild
+
+Patroni поддерживает порядок создания replica:
+
+```text
+pgBackRest -> pg_basebackup
+```
+
+Автоматический pgBackRest-path работает fail-closed и разрешается только после подписанного успешного ручного PITR/DR drill. `rebuild-replica.sh` запрещает rebuild leader/primary и по умолчанию работает как dry-run.
+
+Автоматическое удаление DCS, выбор PITR target и создание нового primary при полной потере кластера намеренно не автоматизированы.
+
+### 5. Acceptance tooling
+
+`deploy/acceptance/` содержит воспроизводимый acceptance cycle для реального стенда.
+
+Preflight проверяет:
+
+- `db1/db2/db3`, одного Patroni leader и replicas;
+- lag replication;
+- три etcd endpoints через TLS;
+- pgBackRest health/backup freshness;
+- MinIO DR replication;
+- оба Alertmanager;
+- `/health/` приложения.
+
+Harness собирает UTC checkpoints и evidence, а при завершении рассчитывает observed RPO/RTO и формирует `RESULT.md`.
+
+Он сознательно **не** выполняет destructive failure injection из CI: останов leader, promotion, DCS cleanup, PITR target selection и MinIO DNS/LB switch остаются операторскими change-controlled действиями.
+
+## Структура репозитория
+
+```text
+apps/audit/           WORM-аудит
+apps/core/            общие сервисы, storage, limits, domain events, /health/
+apps/documents/       НРД, история, retention, permissions, OCR/tasks
+apps/iam/             пользователи, auth/TOTP, импорт персонала
+apps/search_ocr/      тезаурус, Smart Search, persisted search read-model
+apps/templates_bank/  банк бланков
+config/               Django/Celery/settings/urls
+static/               CSS и дизайн-токены
+templates/            Django templates
+deploy/ha/            Patroni/etcd/PgBouncer/HAProxy
+deploy/dr/            pgBackRest, PITR, rebuild и DR runbooks
+deploy/minio/dr/      MinIO active-passive DR
+deploy/monitoring/    exporters и monitoring helpers
+deploy/prometheus/    Prometheus config/rules
+deploy/grafana/       Grafana provisioning/dashboard
+deploy/alertmanager/  Alertmanager HA/delivery
+deploy/acceptance/    стендовый HA/DR acceptance harness
 ```
 
 ## Локальный запуск
 
-Требуется Python 3.12+ (проверено на 3.13; версия 3.14.7 из исходного
-списка Заказчика пока не подтверждена — см. «Политика версий» в
-`STACK.md`) и PostgreSQL с расширением `btree_gist` (используется для
-исключающего ограничения на период действия статуса документа, ТЗ 4.2.3).
-
-`docker-compose.yml` поднимает полный контур для локальной разработки:
-Postgres, PgBouncer, etcd (для будущего Patroni), MinIO, Redis, ClamAV,
-Prometheus, Grafana. Приложение пока обращается к Postgres/MinIO/Redis
-напрямую — маршрутизация через PgBouncer, HA-кластер на etcd/Patroni,
-антивирусная проверка и метрики подключаются на Этапах 3–4.
+Базовая связка разработки — Python 3.13 + Django 5.2 LTS. Подробная политика версий и целевая ОС находятся в [`STACK.md`](STACK.md).
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install -r requirements-dev.txt
 
 cp .env.example .env
-# при необходимости отредактируйте параметры подключения к БД
 
-# поднять зависимости локально (Postgres, MinIO, Redis и т.д.)
 docker compose up -d
 
-# один раз: создать два бакета MinIO с разными политиками — originals
-# (Object Locking/WORM) и working (без блокировки, для заменяемых файлов
-# бланков) — доступно только при создании бакета, см.
-# deploy/minio/init-bucket.sh и STACK.md → «Разделение политик хранения»
-./deploy/minio/init-bucket.sh
+# создать MinIO buckets для локальной разработки
+bash deploy/minio/init-bucket.sh
 
 .venv/bin/python manage.py migrate
 .venv/bin/python manage.py createsuperuser
 .venv/bin/python manage.py runserver
+```
 
-# в отдельном терминале — воркер конвейера OCR (Этап 3, Celery)
+Для OCR/фоновых задач в отдельном терминале:
+
+```bash
 .venv/bin/celery -A config worker -l info
 ```
 
-- `/documents/` — реестр НРД (фильтры, постраничная навигация),
-  `/documents/<uuid>/` — карточка документа (ТЗ 4.1, только чтение).
-- `/admin/` — административная панель. Рабочие места из ТЗ 4.1 начаты
-  (см. Этап 2 ниже), поэтому админка перестала быть единственным входом,
-  но операции записи над НРД пока идут через неё.
-- `/styleguide/` — живой каталог компонентов дизайн-системы.
+`docker-compose.yml` предназначен для локальной разработки и интеграционных проверок. Он не моделирует физически разделённый production HA/DR-контур.
 
-## Разработка
+## Полезные management-команды
 
-- **Любое изменение моделей — с миграцией в том же коммите.**
-  `.github/workflows/ci.yml` проверяет это шагом
-  `manage.py makemigrations --check --dry-run`: PR с расхождением модели
-  и миграции не пройдёт CI.
-- Тесты: `python manage.py test`. С отчётом о покрытии (только пакет
-  `apps/`, конфигурация в `.coveragerc`):
+```bash
+# повторный OCR
+python manage.py rerun_ocr
+python manage.py rerun_ocr --force
 
-  ```bash
-  .venv/bin/pip install -r requirements-dev.txt
-  .venv/bin/coverage run manage.py test && .venv/bin/coverage report
-  ```
+# полный rebuild поискового read-model
+python manage.py rebuild_search_index
 
-## Что уже реализовано (Этап 1)
+# синхронный импорт персонала
+python manage.py import_personnel personnel.xlsx
 
-- Карточка НРД (14 атрибутов ТЗ 4.2.1), граф связей версионности DAG
-  (ТЗ 4.2.2), темпоральная история статусов SCD-2 на `tstzrange` +
-  `EXCLUDE USING gist` (ТЗ 4.2.3).
-- Матрица сроков хранения и режимов WORM по юридической категории
-  документа (`apps/documents/retention.py`) — закрывает открытые
-  вопросы №1–2 плана. Категория обязательна при регистрации документа,
-  режим (Governance/Compliance) и дата хранения считаются автоматически.
-- Банк бланков: семейства форм и версии с классификацией изменений
-  (мажорная/минорная редакция, ТЗ 4.3.1).
-- Внутренний IAM без AD/LDAP: 4-уровневая оргструктура, пользователи по
-  табельному номеру, 5 ролей (ТЗ 4.6). Пароли — Argon2id (RFC 9106).
-- Пакетный импорт персонала из Excel (ТЗ 4.6, `apps/iam/services.py`,
-  команда `manage.py import_personnel`): формат — по образцу файла от
-  Заказчика (открытый вопрос №3 плана закрыт). Upsert по табельному
-  номеру, отклонение строк с неизвестным `department_path` без остановки
-  импорта, WORM-аудит повышения роли, лимит 5000 строк, отчёт
-  success/updated/errors.csv.
-- WORM-журнал аудита: запись без возможности изменения/удаления
-  (ТЗ 4.3.1, 4.7), состав событий соответствует контракту из дополнения к ТЗ.
-- Веб-порт `DESIGN.md`: CSS-токены и компоненты (кнопки Accent/Primary/
-  Ghost/Danger, поля, карточки, статус-плашки), светлая и тёмная темы.
-- Тезаурус Smart Search (ТЗ 4.4.1, `apps/search_ocr`) — словарь терминов
-  загружен и провалидирован; сам поиск/расширение запроса — см. Этап 2 ниже.
+# асинхронный импорт персонала
+python manage.py import_personnel personnel.xlsx --async
 
-## Этап 2 (начат)
+# состояние async-импорта
+python manage.py personnel_import_status <task-id>
+```
 
-Два независимых HTTP-контура (решение Заказчика, см. STACK.md): **Web
-GUI** (Django Templates + HTMX + Alpine.js, серверный рендеринг, для
-сотрудников) и **External API** (DRF + `drf-spectacular`/OpenAPI + JWT,
-для интеграций). Общая бизнес-логика — `apps/<app>/services.py`; ни
-`views.py`, ни `api.py` не обращаются к моделям напрямую.
+## Тесты и CI
 
-- **Вход и 2FA/TOTP** (ТЗ 4.7, `apps/iam/`) — первая реализация обоих
-  контуров: Web под `/accounts/` (`login/`, `login/verify-totp/`,
-  `logout/`, `totp/enroll/`, `totp/confirm/`), API под `/api/v1/auth/`
-  (`token/`, `token/verify-totp/`, `token/refresh/`, `me/`; схема —
-  `/api/v1/schema/`, Swagger UI — `/api/v1/docs/`; выход API-контура —
-  `POST /api/v1/auth/logout/`, отзывает refresh-токен). Rate
-  limiting, шифрование `totp_secret`, админ-сброс TOTP, JWT blacklist,
-  принудительная смена пароля — реализованы (см. «Анти-фрод» ниже).
-  Подробности и честные границы — STACK.md.
-- **Smart Search — сам поиск** (ТЗ 4.4.1, `apps/search_ocr/search.py`) —
-  расширение запроса по тезаурусу (`expand_query`, только VERIFIED-записи,
-  веса TH-06, разрешение неоднозначных аббревиатур через
-  `ThesaurusAmbiguity`/`ThesaurusAmbiguityCandidate`, настоящий FK на
-  `ThesaurusEntry`) и полнотекстовый поиск по карточкам НРД
-  (`search_documents`) с ранжированием — дословно формула ТЗ 2.2 §4.4.1:
-  `ExactMatch(reg_number)*1.0 + FTS(title)*0.8 + FTS(summary)*0.5 +
-  FTS(ocr_body)*0.2`. Web GUI на `/` (домашняя страница, постраничная
-  навигация по 20 результатов) + External API
-  `GET /api/v1/search/documents/` (та же логика поиска, постраничный
-  JSON, троттлинг 30 запросов/мин на IP). Длина запроса ограничена
-  (200 символов / 12 слов) — цена запроса растёт с числом терминов после
-  расширения по тезаурусу. `ocr_body` заполняется асинхронно конвейером
-  OCR (см. Этап 3 ниже) — до его завершения по конкретному документу
-  поле пусто. Честная граница (индекс вычисляется на лету без
-  персистентного `SearchVectorField`) — STACK.md.
-- **Упразднение роли «Куратор службы» + усиление аудита, парольной
-  политики и таймаутов сессии** (решение Заказчика по итогам ревью
-  Этапа 2) — роль вырезана из кода и данных (функционал передан
-  Контролёру/Юристу), добавлена роль «Методист подразделения»; 2FA
-  теперь обязательна только для Администратора; комплексный WORM-аудит
-  изменений ролей/входов-выходов/статусов документов и бланков;
-  Grafana-алерты на 5 условий безопасности (`deploy/grafana/provisioning/`);
-  пароль — минимум 14 знаков, история 10 паролей, срок 365 дней;
-  таймаут неактивности 30/15 минут (личное рабочее место/терминал общего
-  доступа). Подробности и честные границы — STACK.md.
-- **Рабочее место «Реестр и карточка НРД»** (ТЗ 4.1, 4.2,
-  `apps/documents/permissions.py`, `forms.py`, `views.py`, `urls.py`) —
-  первый собственный интерфейс к карточкам НРД помимо админки:
-  `/documents/` (фильтры по виду, статусу, издавшему подразделению и
-  периоду действия; 20 записей на страницу) и `/documents/<uuid>/`
-  (реквизиты ТЗ 4.2.1, связи версионности ТЗ 4.2.2, история статусов
-  ТЗ 4.2.3, хранение и файлы). Вместе с ним появился **единый слой прав**
-  `apps/documents/permissions.py`, которого в проекте не было: правила
-  жили внутри админки, теперь админка вызывает те же функции. Матрица
-  полномочий **выведена** из прежнего кода, `ROLE_PRIVILEGE_ORDER` и
-  STACK.md — поимённого распределения операций по ролям в ТЗ нет, и это
-  **требует подтверждения Заказчиком**. Ключевое: допуск «ДСП» —
-  признак учётной записи, а не уровень роли (Контролёр/Юрист без
-  допуска документ с грифом не видит); документ, уже имеющий силу, не
-  правится на месте ни одной ролью — только новой редакцией со связью
-  версионности. Карточка адресуется по UUID, а не по `reg_number`
-  (номер не уникален — только индекс); документ «ДСП» без допуска
-  отдаёт 404, а не 403, и отфильтрован в графе связей соседних
-  карточек, иначе гриф обходился бы сбоку. Честные границы: партия —
-  только чтение (создание/редактирование/смена статуса/загрузка файлов
-  — следующая партия, пока через админку); в навигации временно нет
-  пункта «Бланки» — он вернётся вместе с рабочим местом банка бланков.
-  Подробности — STACK.md.
+Локально:
 
-## Этап 3 (начат)
+```bash
+.venv/bin/coverage run manage.py test
+.venv/bin/coverage report
+```
 
-- **Конвейер OCR** (`apps/documents/ocr.py`, `ocr_preprocessing.py`,
-  `ocr_thresholds.py`, `tasks.py`) — распознавание скана НРД запускается
-  асинхронно (Celery + Redis, `run_ocr_for_document`) при первой загрузке/
-  замене `files_original` (`NormativeDocument.save()`, через
-  `transaction.on_commit()`, чтобы воркер не читал ещё не закоммиченный
-  файл), а также ретроактивно — `python manage.py rerun_ocr [--force]
-  [--limit=N]`. Страницы обрабатываются пакетами (растеризация —
-  `pdf2image`/poppler), каждая проходит предобработку (автовыравнивание
-  перекоса ±15°, подавление шума/перфорации, адаптивная бинаризация Otsu/
-  Sauvola — `cv2`, ТЗ 2.2 §4.5), затем распознавание — `pytesseract`/
-  Tesseract (язык — только русский, `settings.OCR_LANGUAGE`). Результат —
-  `ocr_body` (сплошной текст, участвует в `FTS(ocr_body)` формулы Smart
-  Search), `ocr_confidence` (средняя уверенность по словам, шкала 0-100)
-  и `ocr_status` (`indexed`/`needs_review`) — по дифференцированным
-  порогам качества категории документа (ТЗ 2.2 §4.4.2: 90/75/65/80 для
-  современных НРД/смешанных бланков/архива/схем, у архива отдельный порог
-  ручной верификации — 75, а не 65). Жёсткий/мягкий таймаут задачи
-  (10/9 минут) — под лимит ТЗ 1.2 §4.2.1 на скан-оригинал (150 МБ). Отказ
-  распознавания — до 3 повторов (`max_retries=3`), затем одна запись
-  `DOCUMENT_OCR_FAILED` в WORM-аудит (успех — `DOCUMENT_OCR_COMPLETED`).
-  Честные границы: нет UI прогресса/очереди распознавания (Celery result
-  backend есть, но для внешней интроспекции, не для Web GUI проекта), нет
-  метрики Top-3 из ТЗ (нечем измерить на текущем движке), для «Схем и
-  чертежей» индексируется вся страница, а не только штамп ГОСТ 2.104 —
-  воркер запускается локально (`celery -A config worker -l info`) либо
-  через шаблон systemd-юнита (`deploy/systemd/`, не проверен вживую на
-  целевой ОС), в `docker-compose.yml` для него не заведён отдельный
-  контейнер (само приложение там не контейнеризовано, см. «Локальный
-  запуск» выше). Подробности — STACK.md.
-- **Анти-фрод / контроль целостности загрузки** (ТЗ 4.7,
-  `apps/iam/services.py`, `apps/core/antivirus.py`,
-  `apps/core/macro_check.py`) — закрывает честные пробелы из Этапа 2 и
-  по итогам ревью. Rate limiting/lockout: 5 неудачных попыток
-  пароля/TOTP-кода за 15 минут на табельный номер (те же цифры, что в
-  Grafana-алерте «5+ неудачных попыток подряд») + второй, независимый
-  контур на 20 попыток за 15 минут по IP-источнику (против энумерации
-  множества номеров с одного источника) — блокируют вход даже с верным
-  паролем/кодом; оба без новой инфраструктуры (по `SESSION_LOGIN_FAILED`,
-  композитный индекс под запрос). Ответ 429 несёт заголовок
-  `Retry-After`. Антивирус: ClamAV (clamd, `docker-compose.yml`, поднят
-  с Этапа 1) сканирует `files_original`/`files_editable` НРД и
-  `file_editable`/`file_sample` бланка синхронно, до записи в хранилище
-  (fail-closed — недоступность ClamAV, включая превышение лимита потока,
-  живо проверено, тоже блокирует сохранение); обнаружение сигнатуры —
-  запись `UPLOAD_MALWARE_DETECTED`. Отдельно, структурно (не по
-  сигнатурам) — проверка DOCX/XLSX на встроенные макросы/ActiveX
-  (`UPLOAD_MACRO_REJECTED`), тем же fail-closed принципом. Честные
-  границы: JSONField-фильтр IP-счётчика без спец-индекса; макросы — только
-  OOXML, не легаси `.doc`/`.xls`. Подробности — STACK.md.
+Основной workflow `.github/workflows/ci.yml` проверяет:
 
-## Дальше по плану
+- Django `manage.py check`;
+- отсутствие незакоммиченных миграций;
+- применение миграций;
+- полный test suite с coverage;
+- OCR/ClamAV окружение;
+- monitoring validation Этапа 4;
+- MinIO DR validation;
+- Alertmanager validation;
+- Patroni rebuild/combined DR validation;
+- acceptance harness validation.
 
-HA-кластер и DR-регламенты — оставшаяся часть Этапов 2–4 плана работ.
-Открытые вопросы, требующие решения Заказчика,
-перечислены в плане отдельным разделом.
+Правило проекта: изменение Django models должно сопровождаться миграцией в том же PR.
+
+## Документация
+
+- [`STACK.md`](STACK.md) — версии, платформа развёртывания и подробные архитектурные решения;
+- [`DESIGN.md`](DESIGN.md) — дизайн-система Web GUI;
+- [`docs/STAGE4_STATUS.md`](docs/STAGE4_STATUS.md) — фактический статус HA/DR;
+- [`deploy/dr/README.md`](deploy/dr/README.md) — PostgreSQL backup/PITR/DR;
+- [`deploy/dr/REBUILD_AND_DRILL.md`](deploy/dr/REBUILD_AND_DRILL.md) — rebuild и combined drill;
+- [`deploy/monitoring/README.md`](deploy/monitoring/README.md) — monitoring HA/DR;
+- [`deploy/acceptance/README.md`](deploy/acceptance/README.md) — программа реальной стендовой приёмки.
+
+## Что остаётся
+
+Ключевые незакрытые работы на текущем `main`:
+
+1. Завершить и принять Web GUI операций записи НРД (PR #28 или его последующая версия).
+2. Развернуть реальный HA/DR стенд: 3×Patroni/PostgreSQL, 3×etcd, две физически разделённые MinIO-площадки и 2×Alertmanager.
+3. Провести planned switchover, unplanned failover, PITR, MinIO failover/failback, synthetic alert delivery и application smoke test.
+4. Повторить combined drill вторым оператором.
+5. Зафиксировать фактические RPO/RTO, утвердить SLA и заменить bootstrap alert thresholds на SLA-derived значения.
+6. Решить оставшиеся UX/операционные ограничения OCR и распределённого throttling там, где они нужны для production-нагрузки.
+
+До выполнения реального acceptance Этап 4 корректно считать **функционально реализованным, но не эксплуатационно принятым**.
