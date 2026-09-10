@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
 # Stage 4 real-stand acceptance evidence harness.
-#
-# The harness is intentionally non-destructive: it validates the environment,
-# records checkpoints and finalizes measured RPO/RTO. Failure injection,
-# promotion, PITR and DNS/LB changes remain explicit operator actions from the
-# approved runbooks.
 set -euo pipefail
 umask 077
 
@@ -19,19 +14,8 @@ Usage:
   acceptance-cycle.sh RUN_ID checkpoint NAME
   acceptance-cycle.sh RUN_ID finalize
 
-Environment:
-  ACCEPTANCE_ENV=/etc/bz-get/stage4-acceptance.env
-
-Finalization timestamps (UTC, ISO-8601 with Z):
-  ACCEPTANCE_INCIDENT_UTC
-  ACCEPTANCE_LAST_DURABLE_UTC
-  ACCEPTANCE_SERVICE_RESTORED_UTC
-
-Manual acceptance flags for finalize (PASS or FAIL):
-  ACCEPTANCE_DB_RESULT
-  ACCEPTANCE_MINIO_RESULT
-  ACCEPTANCE_ALERT_RESULT
-  ACCEPTANCE_APP_RESULT
+Additional Stage 4 checks are executed through extended-checks.sh and are
+included in RESULT.md automatically.
 EOF
 }
 
@@ -71,6 +55,7 @@ run_dir="$ACCEPTANCE_EVIDENCE_ROOT/$run_id"
 mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
 checkpoints="$run_dir/checkpoints.csv"
+extended_results="$run_dir/extended-results.env"
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -84,6 +69,21 @@ record_checkpoint() {
     echo 'timestamp_utc,name' >"$checkpoints"
   fi
   printf '%s,%s\n' "$(now_utc)" "$name" >>"$checkpoints"
+}
+
+init_extended_results() {
+  [[ -f "$extended_results" ]] && return
+  cat >"$extended_results" <<'EOF'
+search_reindex_documents=0
+search_reindex_seconds=0
+search_reindex_limit_seconds=3600
+search_reindex_result=NOT_RUN
+queue_worker_kill_result=NOT_RUN
+queue_redis_kill_result=NOT_RUN
+minio_hash_sample_count=0
+minio_hash_mismatches=0
+minio_hash_result=NOT_RUN
+EOF
 }
 
 require_commands() {
@@ -137,21 +137,14 @@ for row in rows:
         except (TypeError, ValueError):
             raise SystemExit(f"cannot parse replica lag for {row.get('member')}: {raw!r}")
         if lag_bytes > max_lag:
-            raise SystemExit(
-                f"replica {row.get('member')} lag {lag_bytes:.0f} exceeds {max_lag} bytes"
-            )
+            raise SystemExit(f"replica {row.get('member')} lag {lag_bytes:.0f} exceeds {max_lag} bytes")
 print(f"Patroni OK: leader={leaders[0].get('member')} members={sorted(actual)}")
 PY
 }
 
 check_etcd() {
   local out="$run_dir/etcd-health.txt"
-  ETCDCTL_API=3 etcdctl \
-    --endpoints="$ETCD_ENDPOINTS" \
-    --cacert="$ETCD_CACERT" \
-    --cert="$ETCD_CERT" \
-    --key="$ETCD_KEY" \
-    endpoint health --cluster >"$out" 2>&1
+  ETCDCTL_API=3 etcdctl --endpoints="$ETCD_ENDPOINTS" --cacert="$ETCD_CACERT" --cert="$ETCD_CERT" --key="$ETCD_KEY" endpoint health --cluster >"$out" 2>&1
   local expected_count healthy_count
   expected_count="$(awk -F, '{print NF}' <<<"$ETCD_ENDPOINTS")"
   healthy_count="$(grep -c 'is healthy' "$out" || true)"
@@ -199,14 +192,8 @@ PY
 }
 
 check_minio() {
-  [[ -r "$MINIO_DR_ENV" ]] || {
-    echo "ERROR: MinIO DR env is not readable: $MINIO_DR_ENV" >&2
-    exit 66
-  }
-  [[ -r "$MINIO_CHECK_SCRIPT" ]] || {
-    echo "ERROR: MinIO DR check script is not readable: $MINIO_CHECK_SCRIPT" >&2
-    exit 66
-  }
+  [[ -r "$MINIO_DR_ENV" ]] || { echo "ERROR: MinIO DR env is not readable: $MINIO_DR_ENV" >&2; exit 66; }
+  [[ -r "$MINIO_CHECK_SCRIPT" ]] || { echo "ERROR: MinIO DR check script is not readable: $MINIO_CHECK_SCRIPT" >&2; exit 66; }
   set -a
   # shellcheck disable=SC1090
   . "$MINIO_DR_ENV"
@@ -216,20 +203,16 @@ check_minio() {
 }
 
 check_alertmanager() {
-  local urls="$ALERTMANAGER_URLS"
-  local total=0
-  local ok=0
-  IFS=',' read -r -a am_urls <<<"$urls"
+  local total=0 ok=0
+  IFS=',' read -r -a am_urls <<<"$ALERTMANAGER_URLS"
   : >"$run_dir/alertmanager-preflight.txt"
   local url
   for url in "${am_urls[@]}"; do
     url="${url//[[:space:]]/}"
     [[ -n "$url" ]] || continue
     total=$((total + 1))
-    if curl --fail --silent --show-error --max-time 10 "${url%/}/api/v2/status" \
-      >"$run_dir/alertmanager-$total.json"; then
-      ok=$((ok + 1))
-      echo "$url OK" >>"$run_dir/alertmanager-preflight.txt"
+    if curl --fail --silent --show-error --max-time 10 "${url%/}/api/v2/status" >"$run_dir/alertmanager-$total.json"; then
+      ok=$((ok + 1)); echo "$url OK" >>"$run_dir/alertmanager-preflight.txt"
     else
       echo "$url FAIL" >>"$run_dir/alertmanager-preflight.txt"
     fi
@@ -265,7 +248,7 @@ finalize_report() {
   local restored="${ACCEPTANCE_SERVICE_RESTORED_UTC:-}"
 
   for value in "$db_result" "$minio_result" "$alert_result" "$app_result"; do
-    [[ "$value" == "PASS" || "$value" == "FAIL" ]] || {
+    [[ "$value" == PASS || "$value" == FAIL ]] || {
       echo "ERROR: all ACCEPTANCE_*_RESULT flags must be PASS or FAIL" >&2
       exit 64
     }
@@ -291,8 +274,26 @@ print(f"observed_rpo_seconds={(incident-durable).total_seconds():.0f}")
 print(f"observed_rto_seconds={(restored-incident).total_seconds():.0f}")
 PY
 
+  init_extended_results
+  # shellcheck disable=SC1090
+  . "$extended_results"
+
+  local search_effective=FAIL
+  if [[ "$search_reindex_result" == PASS ]] \
+    && [[ "$search_reindex_documents" == "10000" ]] \
+    && python3 - "$search_reindex_seconds" "$search_reindex_limit_seconds" <<'PY'
+import sys
+raise SystemExit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)
+PY
+  then
+    search_effective=PASS
+  fi
+
   local overall=PASS
   [[ "$db_result" == PASS && "$minio_result" == PASS && "$alert_result" == PASS && "$app_result" == PASS ]] || overall=FAIL
+  [[ "$search_effective" == PASS ]] || overall=FAIL
+  [[ "$queue_worker_kill_result" == PASS && "$queue_redis_kill_result" == PASS ]] || overall=FAIL
+  [[ "$minio_hash_result" == PASS && "$minio_hash_sample_count" == "500" && "$minio_hash_mismatches" == "0" ]] || overall=FAIL
 
   {
     echo "# Stage 4 acceptance result — $run_id"
@@ -311,11 +312,27 @@ PY
     echo "- Service restored UTC: $restored"
     while IFS='=' read -r k v; do echo "- $k: $v"; done <"$run_dir/metrics.env"
     echo
+    echo "## Additional acceptance measurements"
+    echo
+    echo "- Cold search reindex documents: $search_reindex_documents"
+    echo "- Cold search reindex seconds: $search_reindex_seconds"
+    echo "- Cold search reindex criterion seconds: $search_reindex_limit_seconds"
+    echo "- Cold search reindex: **$search_effective**"
+    echo "- Celery worker kill -9 / redelivery: **$queue_worker_kill_result**"
+    echo "- Redis kill -9 / recovery: **$queue_redis_kill_result**"
+    echo "- MinIO SHA-256 sample files: $minio_hash_sample_count"
+    echo "- MinIO SHA-256 mismatches: $minio_hash_mismatches"
+    echo "- MinIO 500-file hash verification: **$minio_hash_result**"
+    echo
+    if [[ "$search_effective" != PASS ]]; then
+      echo "> DISCREPANCY: cold reindex of exactly 10,000 documents did not meet the <= 60 minute acceptance criterion. Optimize batching/workers/read-model or obtain a customer-approved threshold change before acceptance."
+      echo
+    fi
     echo "## Evidence"
     echo
     echo "Evidence directory: $run_dir"
     echo
-    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object/version/checksum checks, synthetic alert delivery confirmation and application smoke-test results."
+    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object/version/checksum checks, queue kill/recovery commands, synthetic alert delivery confirmation and application smoke-test results."
     echo
     echo "## Decision"
     echo
@@ -329,6 +346,7 @@ PY
 case "$action" in
   preflight)
     require_commands
+    init_extended_results
     record_checkpoint preflight-start
     {
       echo "run_id=$run_id"
