@@ -32,10 +32,21 @@ mc_cmd alias set target "$MINIO_TARGET_URL" "$MINIO_TARGET_ACCESS_KEY" "$MINIO_T
 mc_cmd ready source
 mc_cmd ready target
 
+require_versioning() {
+  local path="$1"
+  local info
+  info="$(mc_cmd version info "$path" 2>/dev/null || true)"
+  if ! grep -qi 'enabled' <<<"$info"; then
+    echo "Versioning is not enabled on $path." >&2
+    echo "Provision it with an administrator before configuring replication." >&2
+    exit 2
+  fi
+}
+
 ensure_source_bucket() {
   local bucket="$1"
   mc_cmd stat "source/$bucket" >/dev/null
-  mc_cmd version enable "source/$bucket" >/dev/null
+  require_versioning "source/$bucket"
 }
 
 ensure_target_bucket() {
@@ -53,7 +64,7 @@ ensure_target_bucket() {
     exit 2
   fi
 
-  mc_cmd version enable "target/$bucket" >/dev/null
+  require_versioning "target/$bucket"
 
   if [[ "$lock_required" == "yes" ]]; then
     # Query the bucket-level Object Lock configuration. Checking an object-level
