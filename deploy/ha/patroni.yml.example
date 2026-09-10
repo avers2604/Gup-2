@@ -67,12 +67,12 @@ bootstrap:
     - encoding: UTF8
     - data-checksums
 
-  # Replace CHANGE_ME_DB_CIDR with the private DB subnet. Do not expose
-  # PostgreSQL or replication to 0.0.0.0/0. Replication and remote clients
-  # must use TLS; local administration may use the Unix socket.
+  # Keep application and replication networks explicit. Do not expose
+  # PostgreSQL/replication to 0.0.0.0/0. Remote traffic must use TLS; local
+  # administration may use the Unix socket.
   pg_hba:
     - local all all peer
-    - hostssl all all CHANGE_ME_DB_CIDR scram-sha-256
+    - hostssl bz_get bz_get CHANGE_ME_APP_CIDR scram-sha-256
     - hostssl replication replicator CHANGE_ME_DB_CIDR scram-sha-256
 
 postgresql:
