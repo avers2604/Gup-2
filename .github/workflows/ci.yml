@@ -63,6 +63,13 @@ jobs:
       - name: Установить зависимости
         run: pip install -r requirements-dev.txt
 
+      - name: Установить системные пакеты OCR
+        # tesseract-ocr-rus — языковые данные для конвейера OCR (Этап 3,
+        # apps/documents/ocr.py). fonts-dejavu-core — Cyrillic-шрифт для
+        # тестового PDF в apps/documents/tests/test_ocr.py (реальный, не
+        # замоканный прогон Tesseract/poppler).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus poppler-utils fonts-dejavu-core
+
       - name: manage.py check
         run: python manage.py check
 

@@ -70,6 +70,11 @@ class AuditLog(models.Model):
             "document.retention_expired_at_intake", "Срок хранения уже истёк на момент регистрации"
         )
         THESAURUS_UPDATED = "thesaurus.updated", "Обновление тезауруса (импорт)"
+        DOCUMENT_OCR_COMPLETED = "document.ocr_completed", "Распознавание OCR завершено"
+        # Финальный отказ после исчерпания retry (apps/documents/tasks.py) —
+        # не пишется на каждую промежуточную попытку, иначе один неудачный
+        # документ дал бы несколько записей в WORM-журнале на одно событие.
+        DOCUMENT_OCR_FAILED = "document.ocr_failed", "Распознавание OCR не выполнено"
         # «Заготовка» — как EXPORT_RESTRICTED/ARCHIVE_DOWNLOAD исторически:
         # событие заведено под будущий Grafana-алерт «экспорт журнала аудита»
         # (решение Заказчика), но в этой партии не пишется НИКАКИМ кодом —
