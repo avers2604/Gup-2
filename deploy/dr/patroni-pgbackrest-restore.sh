@@ -49,10 +49,10 @@ case "$datadir" in
   *) echo "ERROR: datadir '$datadir' is outside allowed root '$ALLOWED_DATA_ROOT'" >&2; exit 65 ;;
 esac
 
-if [[ ! -f "$APPROVAL_FILE" ]]; then
+if [[ ! -r "$APPROVAL_FILE" ]] || ! grep -Fxq 'status=approved' "$APPROVAL_FILE"; then
   echo "ERROR: pgBackRest Patroni rebuild is disabled." >&2
-  echo "Missing approval marker: $APPROVAL_FILE" >&2
-  echo "Create it only after the manual PITR/restore drill is accepted." >&2
+  echo "Missing/unapproved marker: $APPROVAL_FILE" >&2
+  echo "Enable it only through approve-pgbackrest-rebuild.sh after an accepted manual PITR/DR drill." >&2
   exit 78
 fi
 
