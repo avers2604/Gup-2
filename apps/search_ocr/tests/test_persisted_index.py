@@ -2,7 +2,7 @@ import io
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from apps.documents.models import NormativeDocument
 from apps.documents.tests.factories import make_document
@@ -11,7 +11,17 @@ from apps.search_ocr.indexed_search import search_documents_indexed
 from apps.search_ocr.search_index import DocumentSearchIndex
 
 
-class PersistedSearchIndexTests(TestCase):
+class PersistedSearchIndexTests(TransactionTestCase):
+    """Persistent search-index integration tests.
+
+    Cold rebuild uses TRUNCATE intentionally. TransactionTestCase mirrors the
+    standalone management-command execution model; regular TestCase wraps the
+    whole test in an outer transaction and PostgreSQL correctly refuses
+    TRUNCATE when earlier FK trigger events are still pending there.
+    """
+
+    reset_sequences = True
+
     def setUp(self):
         dept, _ = Department.objects.get_or_create(
             name="Служба поиска",
