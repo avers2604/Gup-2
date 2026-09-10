@@ -1,0 +1,52 @@
+# PgBouncer reference configuration for an APPLICATION node.
+# Django -> 127.0.0.1:6432 -> PgBouncer -> 127.0.0.1:6433 (HAProxy) ->
+# current Patroni primary. Keep credentials outside Git.
+
+[databases]
+bz_get = host=127.0.0.1 port=6433 dbname=bz_get
+
+[pgbouncer]
+listen_addr = 127.0.0.1
+listen_port = 6432
+unix_socket_dir = /var/run/postgresql
+
+pool_mode = transaction
+max_client_conn = 500
+default_pool_size = 40
+min_pool_size = 5
+reserve_pool_size = 10
+reserve_pool_timeout = 3
+
+# PgBouncer exporter sends the driver parameter extra_float_digits. The
+# community exporter requires PgBouncer to ignore it on the admin connection.
+ignore_startup_parameters = extra_float_digits
+
+# PgBouncer 1.21+ can safely track named prepared statements in transaction
+# pooling when this is non-zero. Revisit the value under production load.
+max_prepared_statements = 100
+
+server_connect_timeout = 5
+server_login_retry = 2
+server_idle_timeout = 60
+server_lifetime = 3600
+query_wait_timeout = 30
+client_idle_timeout = 0
+
+# Local Django->PgBouncer traffic stays on loopback. PgBouncer->PostgreSQL
+# traverses HAProxy as a transparent TCP proxy and is encrypted end-to-end.
+server_tls_sslmode = verify-ca
+server_tls_ca_file = /etc/bz-get/pki/ca.crt
+
+# Generate SCRAM verifiers; do not put plaintext passwords in this repository.
+# userlist.txt needs both the application user and pgbouncer_exporter.
+auth_type = scram-sha-256
+auth_file = /etc/pgbouncer/userlist.txt
+
+admin_users = postgres
+# Monitoring does not need administrative commands. Keep the exporter in the
+# narrower stats_users list instead of reusing postgres credentials.
+stats_users = pgbouncer_exporter
+
+log_connections = 1
+log_disconnections = 1
+log_pooler_errors = 1

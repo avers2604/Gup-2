@@ -1,0 +1,21 @@
+[Unit]
+Description=BZ GET PgBouncer Prometheus exporter
+After=network-online.target pgbouncer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pgbouncer_exporter
+Group=pgbouncer_exporter
+EnvironmentFile=/etc/bz-get/pgbouncer-exporter.env
+ExecStart=/usr/local/bin/pgbouncer_exporter \
+  --web.listen-address=${PGBOUNCER_EXPORTER_WEB_LISTEN_ADDRESS}
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

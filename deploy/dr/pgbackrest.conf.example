@@ -1,0 +1,42 @@
+# pgBackRest reference configuration for PostgreSQL/Patroni nodes.
+# Copy to /etc/pgbackrest/pgbackrest.conf. Do not commit production secrets.
+# The repository host must be a separate failure domain from the DB nodes.
+
+[bz-get]
+pg1-path=/var/lib/postgresql/18/bz-get
+
+[global]
+# Dedicated backup host. Replace with the real backup repository endpoint.
+repo1-host=CHANGE_ME_BACKUP_HOST
+repo1-host-user=pgbackrest
+repo1-path=/var/lib/pgbackrest
+
+# Encrypt backup contents at rest. Store the real passphrase outside Git.
+repo1-cipher-type=aes-256-cbc
+repo1-cipher-pass=CHANGE_ME_BACKUP_CIPHER_PASSPHRASE
+
+# Bootstrap retention for integration/acceptance testing, NOT an approved
+# production retention SLA. Reconfirm after the customer approves RPO/RTO and
+# backup retention requirements.
+repo1-retention-full=4
+repo1-retention-full-type=count
+repo1-retention-diff=14
+repo1-retention-history=365
+
+start-fast=y
+archive-async=y
+spool-path=/var/spool/pgbackrest
+process-max=4
+compress-type=zst
+repo1-bundle=y
+repo1-block=y
+
+log-level-console=info
+log-level-file=detail
+log-path=/var/log/pgbackrest
+
+[global:archive-push]
+process-max=2
+
+[global:archive-get]
+process-max=2

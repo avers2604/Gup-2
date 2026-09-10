@@ -1,0 +1,47 @@
+# Stage 4 Alertmanager reference configuration.
+# Receiver endpoint URLs are read from root-owned files outside Git.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: operations-warning
+  group_by: [alertname, cluster, environment]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: operations-critical
+      matchers:
+        - severity="critical"
+      group_wait: 10s
+      group_interval: 2m
+      repeat_interval: 30m
+      continue: false
+    - receiver: operations-warning
+      matchers:
+        - severity="warning"
+      continue: false
+
+receivers:
+  - name: operations-warning
+    webhook_configs:
+      - send_resolved: true
+        url_file: /etc/bz-get/alertmanager/warning-webhook.url
+        max_alerts: 20
+        timeout: 10s
+
+  - name: operations-critical
+    webhook_configs:
+      - send_resolved: true
+        url_file: /etc/bz-get/alertmanager/critical-webhook.url
+        max_alerts: 20
+        timeout: 10s
+
+# If the same alert exists at critical and warning severity, the critical page
+# is authoritative and suppresses the lower-severity duplicate.
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [alertname, cluster, environment, instance]
