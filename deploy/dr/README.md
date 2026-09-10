@@ -1,8 +1,17 @@
 # Этап 4 — DR-регламент PostgreSQL
 
-Статус: **первый эксплуатационный draft**. Этот документ задаёт процедуру,
-которую нужно отработать на стенде и затем зафиксировать измеренными
-результатами. Он не объявляет SLA выполненным сам по себе.
+Статус: **reference implementation / требуется стендовая приёмка**.
+
+Этот документ задаёт общий DR-контур PostgreSQL. Специализированные процедуры:
+
+- `deploy/minio/dr/README.md` — MinIO active-passive DR, WORM и resync;
+- `deploy/dr/REBUILD_AND_DRILL.md` — guarded Patroni replica rebuild из
+  pgBackRest и объединённый HA/DR drill;
+- `deploy/monitoring/README.md` — HA/DR monitoring;
+- `deploy/alertmanager/README.md` — доставка аварийных уведомлений.
+
+Наличие этих файлов в Git не подтверждает SLA: RPO/RTO должны быть измерены на
+реальной целевой инфраструктуре.
 
 ## 1. Цели восстановления
 
@@ -11,146 +20,113 @@
 | Параметр | Значение | Статус |
 |---|---:|---|
 | RPO — допустимая потеря данных | **TBD** | требуется решение Заказчика |
-| RTO — допустимое время восстановления сервиса | **TBD** | требуется решение Заказчика |
+| RTO — допустимое время восстановления | **TBD** | требуется решение Заказчика |
 | Retention полных backup | bootstrap: 4 | требует утверждения |
 | Retention differential backup | bootstrap: 14 | требует утверждения |
 | Срок хранения истории manifest | bootstrap: 365 дней | требует утверждения |
-| Географически/инфраструктурно отдельный backup site | **TBD** | требуется адресный план |
+| Отдельный backup failure domain | **TBD** | требуется адресный план |
 
-Значения retention в `pgbackrest.conf.example` — техническая стартовая точка
-для испытаний, а не юридическая/эксплуатационная политика хранения.
+Bootstrap-значения нужны только для испытаний и не являются юридической или
+эксплуатационной политикой хранения.
 
 ## 2. Что защищает каждый механизм
 
 - **Patroni + streaming replication** — отказ одного PostgreSQL-узла;
 - **etcd quorum** — согласованный выбор leader и защита от split-brain;
-- **PgBouncer + HAProxy** — прозрачное переключение приложения на новый primary;
-- **pgBackRest + WAL archive** — логическое повреждение, ошибочное удаление,
-  потеря всего PostgreSQL-кластера и Point-in-Time Recovery;
-- **резервирование MinIO** — отдельный контур; backup PostgreSQL не содержит
-  бинарные оригиналы/бланки из S3 и сам по себе не восстанавливает MinIO.
+- **PgBouncer + HAProxy** — стабильный DB endpoint приложения;
+- **pgBackRest + WAL archive** — логическая ошибка, потеря кластера, PITR;
+- **MinIO bucket replication** — отдельный active-passive DR для S3 objects;
+- **Alertmanager HA** — доставка HA/DR alerts в утверждённые каналы.
 
-Реплика не является backup: `DELETE`, ошибочная миграция или повреждение данных
-будут реплицированы на standby.
+Реплика не является backup: логическая ошибка или ошибочная миграция также
+реплицируются на standby.
 
 ## 3. Backup repository
 
-Repository pgBackRest должен находиться **в другом failure domain** от `db1..db3`.
-Минимум для первой партии — отдельный сервер/том с отдельными учётными данными.
-Целевая production-схема должна дополнительно определить off-site/offline копию
-или второй repository после утверждения требований Заказчика.
+Repository pgBackRest должен находиться в другом failure domain от `db1..db3`.
+Backup шифруется, а cipher passphrase хранится отдельно от Git и production
+репозитория. Потеря ключа означает потерю возможности восстановить backup.
 
-Backup шифруется `aes-256-cbc`; cipher passphrase не хранится в Git и должен
-иметь отдельную процедуру escrow/восстановления. Потеря passphrase означает
-потерю возможности восстановить backup.
+Конфигурация reference находится в `pgbackrest.conf.example`.
 
 ## 4. Инициализация pgBackRest
 
-Конфигурацию pgBackRest, каталог spool/log и доступ к отдельному repository
-готовим **на всех PostgreSQL-узлах** до ввода HA-кластера в эксплуатацию:
-
-```bash
-sudo install -d -o postgres -g postgres -m 0750 /var/log/pgbackrest
-sudo install -d -o postgres -g postgres -m 0750 /var/spool/pgbackrest
-```
-
-`stanza-create` выполняется после появления первого работающего Patroni primary.
-Создавать одну и ту же stanza отдельно на каждой реплике не требуется: stanza —
-состояние общего backup repository, а не локальная сущность DB-узла. На текущем
-primary:
+На всех DB-узлах заранее готовятся pgBackRest, каталоги spool/log и доступ к
+repository. `stanza-create` выполняется после появления первого Patroni primary:
 
 ```bash
 sudo -u postgres pgbackrest --stanza=bz-get stanza-create
 sudo -u postgres pgbackrest --stanza=bz-get check
-```
-
-Первый full backup выполняется только после успешного `check`:
-
-```bash
 sudo -u postgres pgbackrest --stanza=bz-get --type=full backup
 sudo -u postgres pgbackrest --stanza=bz-get info
 ```
 
-После failover `check`/backup должны успешно выполняться уже с нового primary —
-это отдельный пункт приёмочного сценария, а не предположение о переносимости
-конфигурации.
+`patroni.yml.example` включает непрерывный `archive_command` и
+`archive_timeout=60s`. Это не обещает RPO=60 секунд: фактический RPO зависит от
+успешности archive-push, repository, сети и согласованной MinIO object version.
 
-`patroni.yml.example` включает непрерывный `archive_command` через pgBackRest и
-`archive_timeout=60s`. Это уменьшает окно между принудительными переключениями
-WAL при низкой нагрузке, но **не является обещанием RPO=60 секунд**: RPO зависит
-также от доступности repository, сети и фактической успешности `archive-push`.
+## 5. Bootstrap schedule для стенда
 
-## 5. Рекомендуемый schedule для стендовых испытаний
-
-До утверждения SLA расписание не считается production-политикой. Для
-интеграционного/приёмочного стенда можно использовать:
+До утверждения SLA:
 
 - full — раз в неделю;
 - differential — ежедневно;
 - incremental — каждые 6 часов;
 - WAL — непрерывно через `archive_command`.
 
-После каждого backup необходимо проверять exit code, `pgbackrest info` и
-мониторинг свежести последнего backup/WAL. Просто наличие cron/systemd timer без
-контроля результата не считается резервным копированием.
+После каждого backup контролируются exit code, `pgbackrest info`, freshness
+metrics и WAL archive.
 
 ## 6. Ежедневная неразрушающая проверка
 
 ```bash
 sudo -u postgres pgbackrest --stanza=bz-get check
 sudo -u postgres pgbackrest --stanza=bz-get info
+patronictl -c /etc/patroni/patroni.yml list
 ```
 
-Проверить дополнительно:
-
-1. `patronictl list` — один leader и ожидаемое число replicas;
-2. WAL archive не имеет растущей очереди/ошибок;
-3. backup repository доступен и не заполнен;
-4. последний успешный backup укладывается в утверждённую политику;
-5. cipher key/SSH credentials доступны по процедуре, но не лежат на общем
-   файловом ресурсе в открытом виде.
+Проверяются один leader, ожидаемые replicas, отсутствие растущего replication
+lag, свежий backup/WAL и доступность независимого repository.
 
 ## 7. Сценарий A — отказ одного DB-узла
 
-Это **HA**, а не DR restore.
+Это HA, а не PITR.
 
-1. Проверить новый leader: `patronictl -c /etc/patroni/patroni.yml list`.
+1. Подтвердить новый leader через `patronictl list`.
 2. Проверить Web/API через обычный адрес приложения.
-3. Проверить, что локальный HAProxy каждого app-узла видит только новый primary.
-4. Не выполнять `pgbackrest restore`, пока кластер имеет здоровый leader.
-5. Вернуть отказавший узел как replica (`pg_rewind` либо reclone).
-6. После возврата проверить streaming replication и `pgbackrest check`.
+3. Проверить HAProxy/PgBouncer routing.
+4. Не выполнять PITR при здоровом leader.
+5. Вернуть отказавший узел как replica через `pg_rewind`, basebackup или
+   guarded pgBackRest rebuild.
+6. Проверить streaming/sync standby, lag и `pgbackrest check`.
+
+Автоматизированный replica rebuild описан в `REBUILD_AND_DRILL.md`. Он никогда
+не должен применяться к leader/primary.
 
 ## 8. Сценарий B — логическая ошибка / ошибочная миграция
 
-Если данные уже повреждены и ошибка реплицировалась, автоматический failover не
-поможет. Нужен PITR.
+Failover не помогает, если ошибка уже реплицировалась. Нужен PITR.
 
-### 8.1 Зафиксировать точку восстановления
+### 8.1 Зафиксировать recovery point
 
-Определить timestamp **до** ошибочной операции. Использовать UTC/часовой пояс
-явно, а не неоднозначное локальное время. Зафиксировать источник времени
-(аудит/журнал изменения/операторская заявка).
+Определить UTC timestamp **до** ошибочной операции и источник времени:
+WORM-аудит, журнал изменения или change/incident record.
 
 ### 8.2 Остановить запись
 
-- перевести приложение в maintenance/read-only режим организационными
-  средствами;
-- остановить Django workers, которые могут писать в БД;
-- остановить Celery tasks, выполняющие запись;
-- остановить Patroni на DB-узлах, чтобы cluster manager не перезапустил
-  PostgreSQL во время restore.
+- перевести приложение в maintenance/read-only;
+- остановить writers Django/Gunicorn;
+- остановить Celery tasks, которые пишут данные;
+- исключить автоматический restart PostgreSQL во время isolated restore.
 
-### 8.3 Не уничтожать исходный кластер
+### 8.3 Сохранить исходное состояние
 
-Перед restore сохранить повреждённый data directory/диски как forensic copy,
-если позволяет ёмкость. Не выполнять `rm -rf` как первый шаг аварийного
-восстановления.
+Не начинать recovery с безусловного `rm -rf`. При возможности сохранить
+повреждённый PGDATA/диски как forensic copy.
 
-### 8.4 Restore на изолированный recovery-узел
+### 8.4 PITR на isolated recovery host
 
-На чистом recovery host с той же major-версией PostgreSQL и совместимой
-версией pgBackRest:
+На совместимом recovery host:
 
 ```bash
 sudo -u postgres pgbackrest \
@@ -161,84 +137,93 @@ sudo -u postgres pgbackrest \
   restore
 ```
 
-После запуска восстановленного PostgreSQL проверить бизнес-данные, контрольные
-записи и целостность схемы **до** переключения приложения.
+`target-action=promote` допустим здесь, потому что это изолированный DR primary,
+а не replica rebuild. До переключения приложения обязательно проверить
+бизнес-данные, схему, audit trail и согласованные MinIO object versions.
 
-Важное ограничение первой партии: автоматический Patroni custom-bootstrap из
-pgBackRest ещё не включён. DR restore сначала валидируется на изолированном
-узле; автоматизация восстановления Patroni-кластера из backup — следующая
-подпартия Этапа 4. Это сознательная граница, чтобы разрушительная процедура не
-была добавлена без стендовой проверки.
+После подтверждённого ручного PITR можно подписать combined drill как PASS и
+через `approve-pgbackrest-rebuild.sh` разрешить автоматизированный pgBackRest
+path для **реплик** Patroni.
 
 ## 9. Сценарий C — потеря всего PostgreSQL-кластера
 
-1. Объявить DR-инцидент и остановить все writers.
-2. Убедиться, что etcd DCS старого кластера не сможет одновременно вернуть
-   старый primary (изоляция/остановка старых DB-узлов).
-3. Поднять отдельный recovery DB host и восстановить последнюю согласованную
-   точку из pgBackRest.
-4. Провести функциональную валидацию восстановленной БД.
-5. Только после валидации сформировать новый Patroni cluster identity/DCS state
-   и добавить новые replicas.
-6. Переключить HAProxy/PgBouncer на восстановленный кластер.
-7. Поднять приложение и Celery сначала ограниченным контуром, затем полностью.
-8. Выполнить новый full backup после стабилизации.
+1. Объявить DR-инцидент и остановить writers.
+2. Изолировать старые DB-узлы/DCS от возможности вернуть старый primary.
+3. Восстановить выбранную точку на isolated recovery host.
+4. Провести бизнес-валидацию и сверку MinIO object versions.
+5. Только после валидации сформировать новый Patroni cluster identity/DCS state.
+6. Добавить replicas; для них после approval допустим pgBackRest rebuild.
+7. Переключить HAProxy/PgBouncer на новый кластер.
+8. Поднять приложение ограниченно, затем полностью.
+9. Выполнить новый full backup после стабилизации.
 
-**Нельзя** одновременно запускать старый и восстановленный primary с одной
-боевой клиентской точкой — это split-brain на уровне данных, даже если DCS у них
-разный.
+Партия 4 **не автоматизирует** удаление DCS, выбор PITR target или создание
+нового primary. Эти действия остаются change-controlled из-за риска split-brain
+и необратимой потери данных.
 
 ## 10. MinIO / файловое хранилище
 
-PostgreSQL хранит метаданные и ссылки на объекты, но сами файлы находятся в
-MinIO. Поэтому полноценный DR должен восстанавливать **согласованную пару**:
-PostgreSQL + S3-объекты.
+MinIO DR реализован отдельной партией 3 в `deploy/minio/dr/`:
 
-В этой первой партии Этапа 4 MinIO DR **не автоматизирован**. До production
-необходимо утвердить отдельную схему репликации/backup бакетов `originals` и
-`working`, учитывая Object Lock/WORM для `originals`, и провести совместный
-restore drill. Бэкап БД без бэкапа объектов не считается полной DR-защитой АИС.
+- one-way active-passive bucket replication;
+- `originals` с Object Lock/WORM на обеих площадках;
+- `working` с Versioning;
+- least-privilege replication credentials;
+- controlled failover/failback/resync;
+- stable application S3 endpoint.
 
-## 11. Restore drill — обязательная приёмка
+PostgreSQL recovery считается успешным для всей АИС только если выбранной точке
+БД соответствуют реально существующие object versions MinIO.
 
-Минимальный сценарий испытания:
+## 11. Объединённый restore/failover drill
 
-1. создать контрольный документ/пользователя на стенде;
-2. выполнить full backup;
-3. внести ещё одно изменение и дождаться архивирования WAL;
-4. имитировать логическую ошибку после зафиксированного времени;
-5. восстановить БД на отдельный recovery host на точку до ошибки;
-6. проверить контрольные записи и запуск Django `manage.py check` против
-   восстановленной БД;
-7. измерить фактические RPO/RTO;
-8. записать результат и все ручные действия;
-9. повторить процедуру другим оператором только по этому runbook.
+`combined-drill.sh` собирает evidence вокруг операторских действий, но не
+выполняет разрушительные операции сам.
 
-Если второй оператор не может воспроизвести восстановление без устных подсказок,
-DR-регламент не считается готовым.
+Минимальная последовательность:
+
+1. `combined-drill.sh preflight`;
+2. создать контрольный документ/файлы и дождаться WAL + MinIO replication;
+3. planned switchover;
+4. unplanned leader loss;
+5. rebuild одной replica;
+6. тестовая логическая ошибка + isolated PITR;
+7. MinIO failover/failback/resync;
+8. synthetic warning/critical + отказ одного Alertmanager;
+9. application/business validation;
+10. заполнить incident/last durable/service restored UTC;
+11. `combined-drill.sh finish`;
+12. второй оператор повторяет процедуру по runbook.
+
+Детальный сценарий и PASS criteria находятся в `REBUILD_AND_DRILL.md`.
 
 ## 12. Что фиксировать по каждому DR-тесту
 
-- номер/дата теста;
-- тип инцидента;
-- backup set и target time;
-- последний доступный WAL;
+- drill/change/incident ID;
+- тип отказа;
+- backup set и PITR target;
+- последний подтверждённый WAL;
+- MinIO object keys/version IDs/checksums;
+- WORM/retention состояние `originals`;
 - время объявления инцидента;
-- время готовности восстановленной БД;
-- время готовности приложения;
-- фактический RPO;
-- фактический RTO;
-- ошибки/ручные обходы;
-- ответственный оператор;
-- решение: pass/fail и корректирующие действия.
+- время выбора нового leader;
+- время готовности БД/объектов/приложения;
+- observed RPO upper bound;
+- observed RTO;
+- alerts firing/resolved/delivery timestamps;
+- ошибки, ручные обходы и корректирующие действия;
+- оператор/approver;
+- PASS/FAIL.
 
 ## 13. Definition of Done DR-подчасти Этапа 4
 
 - backup repository физически отделён от PostgreSQL-кластера;
-- pgBackRest stanza/check/full backup проходят штатно;
-- WAL archive непрерывен и мониторится;
-- выполнен PITR на отдельный recovery host;
-- выполнен restore после полной потери тестового PostgreSQL-кластера;
-- согласован и испытан DR для MinIO;
-- RPO/RTO утверждены Заказчиком и подтверждены измерениями;
-- регламент повторяем вторым оператором без авторских подсказок.
+- full/diff/incr backup и непрерывный WAL проверены;
+- выполнен isolated PITR;
+- выполнен planned и unplanned Patroni failover;
+- MinIO DR реально испытан с Object Lock и resync;
+- critical notification доставляется при отказе одного Alertmanager;
+- после подписанного PASS испытан pgBackRest-based rebuild одной replica;
+- combined drill повторён вторым оператором;
+- фактические RPO/RTO записаны и утверждены;
+- bootstrap alert thresholds заменены на SLA-derived значения.
