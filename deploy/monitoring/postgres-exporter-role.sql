@@ -1,7 +1,6 @@
 -- Run as a PostgreSQL superuser once per cluster.
--- The exporter role is read-only and receives the predefined pg_monitor role.
--- Replace CHANGE_ME_POSTGRES_EXPORTER_PASSWORD before execution and do not
--- commit the resulting credential anywhere.
+-- The exporter runs locally under the OS account `postgres_exporter` and uses
+-- Unix-socket peer authentication. No database password is required.
 
 DO $$
 BEGIN
@@ -12,12 +11,10 @@ END
 $$;
 
 ALTER ROLE postgres_exporter
-    WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;
+    WITH NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION;
 
+-- pg_monitor is the predefined read-only statistics role intended for
+-- monitoring. INHERIT is required so the exporter receives its privileges
+-- without issuing SET ROLE.
 GRANT pg_monitor TO postgres_exporter;
-ALTER ROLE postgres_exporter PASSWORD 'CHANGE_ME_POSTGRES_EXPORTER_PASSWORD';
-
--- Allow the exporter to connect to the application database. pg_monitor gives
--- access to the statistics views used by postgres_exporter; it does not grant
--- write access to application tables.
 GRANT CONNECT ON DATABASE bz_get TO postgres_exporter;
