@@ -45,30 +45,34 @@ DB-узла.
 
 ## 2. postgres_exporter
 
-На каждом DB-узле:
+На каждом DB-узле exporter запускается локально под отдельной OS-учёткой
+`postgres_exporter`. Подключение к PostgreSQL идёт через Unix socket и уже
+существующее правило Patroni `local all all peer`, поэтому отдельный пароль БД,
+client certificate и сетевой доступ к 5432 exporter'у не нужны.
 
-1. создать отдельную OS-учётку `postgres_exporter` без shell;
-2. выполнить `postgres-exporter-role.sql` от PostgreSQL superuser, заменив
-   `CHANGE_ME_POSTGRES_EXPORTER_PASSWORD`;
-3. создать отдельный client certificate для exporter'а, если применяется
-   mTLS PostgreSQL;
-4. положить `postgres-exporter.env.example` как
-   `/etc/bz-get/postgres-exporter.env`, права `0600`;
-5. установить бинарник `postgres_exporter` в `/usr/local/bin/`;
-6. установить `deploy/systemd/get-postgres-exporter.service`;
-7. разрешить TCP/9187 только от Prometheus.
+Порядок:
+
+1. создать OS-учётку `postgres_exporter` без shell;
+2. выполнить `postgres-exporter-role.sql` от PostgreSQL superuser;
+3. положить `postgres-exporter.env.example` как
+   `/etc/bz-get/postgres-exporter.env`;
+4. установить бинарник `postgres_exporter` в `/usr/local/bin/`;
+5. установить `deploy/systemd/get-postgres-exporter.service`;
+6. разрешить TCP/9187 только от Prometheus.
+
+SQL-роль получает `INHERIT`, predefined role `pg_monitor` и `CONNECT` к
+`bz_get`. `INHERIT` важен: без него права `pg_monitor` не применялись бы к
+обычным запросам exporter'а. Application user и PostgreSQL superuser credentials
+для мониторинга не используются.
 
 Проверка:
 
 ```bash
+sudo -u postgres_exporter psql -h /var/run/postgresql -d bz_get -c 'select 1'
 curl http://DB_MONITORING_IP:9187/metrics | grep '^pg_up'
 ```
 
 Ожидается `pg_up 1`.
-
-Роль получает только predefined role `pg_monitor` и `CONNECT` к `bz_get` —
-использовать application/postgres superuser credentials для мониторинга не
-нужно.
 
 ## 3. PgBouncer exporter
 
@@ -78,7 +82,9 @@ curl http://DB_MONITORING_IP:9187/metrics | grep '^pg_up'
 который требуется community `pgbouncer_exporter`.
 
 `userlist.txt` должен содержать SCRAM verifier для `pgbouncer_exporter`.
-Реальный пароль в Git не хранится.
+Реальный пароль в Git не хранится. Env-переменная называется
+`PGBOUNCER_EXPORTER_CONNECTION_STRING` — это имя, которое поддерживает
+актуальный exporter.
 
 Установка:
 
@@ -110,9 +116,12 @@ curl http://APP_MONITORING_IP:9127/metrics | grep '^pgbouncer_'
   `pgbackrest_exporter_up 0`, чтобы сбой был виден Prometheus.
 
 Рекомендуемое место запуска — backup/operations host, имеющий read access к
-pgBackRest repository. Установить скрипт как
-`/usr/local/libexec/bz-get/pgbackrest_exporter.py`, env-файл —
-`/etc/bz-get/pgbackrest-exporter.env`, unit —
+pgBackRest repository. Его `pgbackrest.conf` должен описывать repository с
+точки зрения этого host; конфигурацию DB-узла с `repo1-host` нельзя механически
+копировать на сам repository-host, если это создаёт петлю подключения.
+
+Установить скрипт как `/usr/local/libexec/bz-get/pgbackrest_exporter.py`,
+env-файл — `/etc/bz-get/pgbackrest-exporter.env`, unit —
 `get-pgbackrest-exporter.service`.
 
 Проверка:
