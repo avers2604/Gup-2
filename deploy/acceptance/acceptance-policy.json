@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "search_reindex_documents_min": 10000,
+  "search_reindex_seconds_max": 3600,
+  "minio_version_sample_min": 500
+}
