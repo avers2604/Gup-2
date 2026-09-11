@@ -375,28 +375,27 @@ ACTIVITY_LIMIT = 20
 
 
 def _document_activity(document):
-    """Записи WORM-журнала по этому документу — «кто опубликовал, кто
-    отменил, кто менял связи» (решение Заказчика по доступу к журналу).
+    """Записи WORM-журнала по этому документу.
 
-    Видна всем, у кого есть доступ к карточке: это не контроль
-    безопасности, а обычная работа — до этого Методист не мог узнать, кто
-    опубликовал его же приказ, иначе как через Офицера ИБ. Полный журнал
-    по-прежнему закрыт (`apps/audit/permissions.py`).
-
-    Записи ищутся и по UUID, и по регистрационному номеру: с этой партии
-    журнал по НРД ключуется UUID (как бланки и пользователи), но записи,
-    сделанные раньше, привязаны к рег. номеру, а журнал WORM — переписать
-    их нельзя. Совпадение по номеру может принадлежать другой карточке с
-    тем же номером (он не уникален) — цена обратной совместимости, и она
-    уменьшается сама по мере накопления новых записей.
+    Новые записи однозначно ключуются UUID. Старые записи могут быть
+    привязаны только к `reg_number`; их разрешено показывать лишь когда этот
+    номер глобально однозначен среди карточек НРД. Если номер дублируется,
+    невозможно доказать, к какой карточке относится legacy-событие, поэтому
+    такой fallback fail-closed и не используется вовсе.
     """
     from django.db.models import Q
 
     from apps.audit.models import AuditLog
 
+    identity = Q(object_id=str(document.pk))
+    if not type(document).objects.filter(reg_number=document.reg_number).exclude(
+        pk=document.pk
+    ).exists():
+        identity |= Q(object_id=document.reg_number)
+
     return (
         AuditLog.objects.filter(
-            Q(object_id=str(document.pk)) | Q(object_id=document.reg_number),
+            identity,
             object_type="NormativeDocument",
         )
         .select_related("actor")
