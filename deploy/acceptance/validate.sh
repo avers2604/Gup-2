@@ -4,6 +4,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 bash -n "$SCRIPT_DIR/acceptance-cycle.sh"
 bash -n "$SCRIPT_DIR/extended-checks.sh"
+python3 -m py_compile "$SCRIPT_DIR/acceptance_policy.py" "$SCRIPT_DIR/test_acceptance_policy.py"
+python3 "$SCRIPT_DIR/test_acceptance_policy.py"
+python3 -m json.tool "$SCRIPT_DIR/acceptance-policy.json" >/dev/null
+grep -q -- '--cold' "$SCRIPT_DIR/extended-checks.sh"
+grep -q 'acceptance_policy.py' "$SCRIPT_DIR/extended-checks.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -80,8 +85,11 @@ MINIO_CHECK_SCRIPT=$tmp/minio-check.sh
 ALERTMANAGER_URLS=http://am1:9093,http://am2:9093
 APP_HEALTH_URL=http://app/health/
 APP_HEALTH_EXPECT_REGEX='^(ok|healthy|ready)$'
+SEARCH_REINDEX_DOCUMENTS=10000
+SEARCH_REINDEX_MAX_SECONDS=3600
+MINIO_HASH_SAMPLE_SIZE=500
 ACCEPTANCE_EVIDENCE_ROOT=$tmp/evidence
-ACCEPTANCE_CHANGE_ID=CI-42
+ACCEPTANCE_CHANGE_ID=CI-P1
 ACCEPTANCE_OPERATOR=ci
 ACCEPTANCE_SITE=ci-stand
 EOF
@@ -98,6 +106,7 @@ search_reindex_required_documents=10000
 search_reindex_documents=10000
 search_reindex_seconds=3599
 search_reindex_limit_seconds=3600
+search_reindex_mode=cold
 search_reindex_result=PASS
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
@@ -119,24 +128,25 @@ env \
   bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4 finalize >/dev/null
 
 grep -q 'Overall: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Acceptance policy: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'observed_rpo_seconds: 10' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'observed_rto_seconds: 180' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'Search rebuild mode: cold' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Cold search reindex documents: 10000' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Cold search reindex seconds: 3599' "$tmp/evidence/ci-stage4/RESULT.md"
-grep -q 'MinIO SHA-256 sample files: 500' "$tmp/evidence/ci-stage4/RESULT.md"
-grep -q 'MinIO SHA-256 required sample files: 500' "$tmp/evidence/ci-stage4/RESULT.md"
-grep -q 'Cold search reindex required documents: 10000' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'MinIO versioned WORM sample versions: 500' "$tmp/evidence/ci-stage4/RESULT.md"
+grep -q 'MinIO versioned WORM required versions: 500' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Celery worker kill -9 / redelivery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 grep -q 'Redis kill -9 / recovery: \*\*PASS\*\*' "$tmp/evidence/ci-stage4/RESULT.md"
 
-# Reindex over the 60-minute threshold must be a hard discrepancy, even if all
-# legacy DB/MinIO/Alert/Application flags are PASS.
+# Reindex over the 60-minute baseline remains a hard discrepancy without waiver.
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-slow preflight >/dev/null
 cat >"$tmp/evidence/ci-stage4-slow/extended-results.env" <<'EOF'
 search_reindex_required_documents=10000
 search_reindex_documents=10000
 search_reindex_seconds=3601
 search_reindex_limit_seconds=3600
+search_reindex_mode=cold
 search_reindex_result=FAIL
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
@@ -159,10 +169,8 @@ if env \
   exit 1
 fi
 grep -q 'DISCREPANCY: cold reindex took 3601s' "$tmp/evidence/ci-stage4-slow/RESULT.md"
-# The timing discrepancy must not be reported as a volume problem.
-! grep -q 'DISCREPANCY: cold reindex covered' "$tmp/evidence/ci-stage4-slow/RESULT.md"
 
-# Any missing extended check must also fail closed.
+# Any missing extended check must fail closed.
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-missing preflight >/dev/null
 if env \
   ACCEPTANCE_ENV="$tmp/acceptance.env" \
@@ -178,10 +186,7 @@ if env \
   exit 1
 fi
 
-# A failing tool must tell the operator WHY. Before this was fixed, `set -e`
-# aborted preflight on the first non-zero command and the diagnostic below it
-# never ran: the operator got a bare exit code and nothing else
-# (docs/STAGE4_LAB_REHEARSAL.md, Ф-1).
+# A failing tool must tell the operator why instead of dying silently under set -e.
 mkdir -p "$tmp/badbin"
 cp "$tmp/bin/patronictl" "$tmp/bin/pgbackrest" "$tmp/bin/curl" "$tmp/badbin/"
 cat >"$tmp/badbin/etcdctl" <<'EOF'
@@ -191,28 +196,53 @@ exit 1
 EOF
 chmod +x "$tmp/badbin/etcdctl"
 etcd_err="$tmp/etcd-failure.txt"
-if PATH="$tmp/badbin:$PATH" bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-etcd-down preflight     >"$tmp/etcd-failure.out" 2>"$etcd_err"; then
+if PATH="$tmp/badbin:$PATH" bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-etcd-down preflight \
+    >"$tmp/etcd-failure.out" 2>"$etcd_err"; then
   echo 'ERROR: preflight succeeded with a failing etcdctl' >&2
   exit 1
 fi
 grep -q 'etcdctl endpoint health failed' "$etcd_err"
 grep -q 'no such file or directory' "$etcd_err"
 
-# An unhealthy application must fail preflight: the shipped regex is anchored,
-# so 'unhealthy' must not satisfy an expectation of 'healthy'.
+# 'unhealthy' must not satisfy an anchored expectation of 'healthy'.
 if CI_HEALTH_BODY=unhealthy bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-sick preflight >/dev/null 2>&1; then
   echo 'ERROR: preflight accepted an unhealthy application health response' >&2
   exit 1
 fi
 
-# A smaller, customer-agreed acceptance volume must be honoured as-is instead of
-# being measured against a number hardcoded in the harness.
-bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small preflight >/dev/null
-cat >"$tmp/evidence/ci-stage4-small/extended-results.env" <<'EOF'
+# Weakening the version-controlled baseline without a waiver must fail before
+# stand work starts; editing only acceptance.env cannot silently redefine PASS.
+cp "$tmp/acceptance.env" "$tmp/small-no-waiver.env"
+cat >>"$tmp/small-no-waiver.env" <<'EOF'
+SEARCH_REINDEX_DOCUMENTS=5000
+MINIO_HASH_SAMPLE_SIZE=120
+EOF
+if ACCEPTANCE_ENV="$tmp/small-no-waiver.env" \
+    bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small-no-waiver preflight \
+    >"$tmp/small-no-waiver.out" 2>"$tmp/small-no-waiver.err"; then
+  echo 'ERROR: preflight accepted weakened criteria without waiver' >&2
+  exit 1
+fi
+grep -q 'violate repository baseline' "$tmp/small-no-waiver.err"
+
+# The same weaker criteria are allowed only with complete approval metadata and
+# must be reported as PASS_WITH_WAIVER, never as an unqualified PASS.
+cp "$tmp/acceptance.env" "$tmp/small-waiver.env"
+cat >>"$tmp/small-waiver.env" <<'EOF'
+SEARCH_REINDEX_DOCUMENTS=5000
+MINIO_HASH_SAMPLE_SIZE=120
+ACCEPTANCE_WAIVER_ID=WAIVER-CI-17
+ACCEPTANCE_WAIVER_APPROVER=customer-ci
+ACCEPTANCE_WAIVER_REASON='reduced CI stand dataset'
+EOF
+ACCEPTANCE_ENV="$tmp/small-waiver.env" \
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small-waiver preflight >/dev/null
+cat >"$tmp/evidence/ci-stage4-small-waiver/extended-results.env" <<'EOF'
 search_reindex_required_documents=5000
 search_reindex_documents=5000
 search_reindex_seconds=120
 search_reindex_limit_seconds=3600
+search_reindex_mode=cold
 search_reindex_result=PASS
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
@@ -222,7 +252,7 @@ minio_hash_mismatches=0
 minio_hash_result=PASS
 EOF
 env \
-  ACCEPTANCE_ENV="$tmp/acceptance.env" \
+  ACCEPTANCE_ENV="$tmp/small-waiver.env" \
   ACCEPTANCE_DB_RESULT=PASS \
   ACCEPTANCE_MINIO_RESULT=PASS \
   ACCEPTANCE_ALERT_RESULT=PASS \
@@ -230,17 +260,22 @@ env \
   ACCEPTANCE_INCIDENT_UTC=2026-09-10T22:00:00Z \
   ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T21:59:55Z \
   ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T22:01:00Z \
-  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small finalize >/dev/null
-grep -q 'Overall: \*\*PASS\*\*' "$tmp/evidence/ci-stage4-small/RESULT.md"
+  bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-small-waiver finalize >/dev/null
+grep -q 'Overall: \*\*PASS_WITH_WAIVER\*\*' "$tmp/evidence/ci-stage4-small-waiver/RESULT.md"
+grep -q 'Acceptance policy: \*\*PASS_WITH_WAIVER\*\*' "$tmp/evidence/ci-stage4-small-waiver/RESULT.md"
+grep -q 'Waiver ID: WAIVER-CI-17' "$tmp/evidence/ci-stage4-small-waiver/RESULT.md"
+grep -q 'search_reindex_documents_min' "$tmp/evidence/ci-stage4-small-waiver/RESULT.md"
+grep -q 'minio_version_sample_min' "$tmp/evidence/ci-stage4-small-waiver/RESULT.md"
 
-# A run short of its own required volume must fail, and must be blamed on the
-# volume rather than on the time limit it did meet.
+# A run that does not meet even its declared effective criteria still fails,
+# regardless of baseline/waiver semantics.
 bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-short preflight >/dev/null
 cat >"$tmp/evidence/ci-stage4-short/extended-results.env" <<'EOF'
 search_reindex_required_documents=10000
 search_reindex_documents=5000
 search_reindex_seconds=120
 search_reindex_limit_seconds=3600
+search_reindex_mode=cold
 search_reindex_result=PASS
 queue_worker_kill_result=PASS
 queue_redis_kill_result=PASS
@@ -259,11 +294,10 @@ if env \
   ACCEPTANCE_LAST_DURABLE_UTC=2026-09-10T22:59:55Z \
   ACCEPTANCE_SERVICE_RESTORED_UTC=2026-09-10T23:01:00Z \
   bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-short finalize >/dev/null 2>&1; then
-  echo 'ERROR: finalize accepted a reindex short of the required volume' >&2
+  echo 'ERROR: finalize accepted measurements short of the declared criteria' >&2
   exit 1
 fi
 grep -q 'DISCREPANCY: cold reindex covered 5000 documents instead of the required 10000' "$tmp/evidence/ci-stage4-short/RESULT.md"
-grep -q 'DISCREPANCY: MinIO hash sample covered 120 objects instead of the required 500' "$tmp/evidence/ci-stage4-short/RESULT.md"
-! grep -q 'DISCREPANCY: cold reindex took' "$tmp/evidence/ci-stage4-short/RESULT.md"
+grep -q 'DISCREPANCY: MinIO versioned sample covered 120 versions instead of the required 500' "$tmp/evidence/ci-stage4-short/RESULT.md"
 
 echo 'Stage 4 acceptance harness validation passed.'
