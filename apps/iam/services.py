@@ -95,6 +95,16 @@ def _resolve_department(path: str) -> Department:
     department = None
     for segment in segments:
         try:
+            # .get(), не filter().first(): UniqueConstraint(name, parent)
+            # на Department (iam.0004) гарантирует не более одной строки
+            # для parent != NULL, так что MultipleObjectsReturned здесь —
+            # не гипотетический случай "на всякий", а сигнал реального
+            # повреждения данных в обход этого констрейнта (например,
+            # прямым SQL) — не должен тихо резолвиться в первую попавшуюся
+            # запись через first(). Для уровня 1 (parent=NULL) констрейнт
+            # НЕ защищает (см. Department.Meta) — MultipleObjectsReturned
+            # там всё ещё теоретически возможен и обрабатывается так же,
+            # явной ошибкой, а не first().
             department = Department.objects.get(name=segment, parent=parent)
         except Department.DoesNotExist:
             raise ValueError(f"Подразделение «{segment}» не найдено в пути «{path}».")
@@ -129,6 +139,12 @@ def _format_error(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return "; ".join(exc.messages)
     if isinstance(exc, IntegrityError):
+        # Гонка параллельного импорта: между проверкой full_clean() (своим
+        # SELECT) и реальным INSERT другая транзакция успела создать
+        # запись с тем же tab_number — уникальный констрейнт БД
+        # (iam_user_personnel_number_key) отработал как задумано. Строка
+        # помечается ошибкой вместо падения всего импорта — оператор
+        # перезапустит именно её.
         return "Табельный номер уже создан параллельной операцией импорта — повторите загрузку этой строки."
     return str(exc)
 
@@ -218,9 +234,23 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
                 user.status = status
 
                 user.full_clean(exclude=["password"])
+                # Транзитный атрибут (не поле модели) — User.save() читает
+                # его, чтобы записать оператора в комплексный аудит смены
+                # роли (USER_ROLE_CHANGED), если role реально изменилась.
                 user._audit_actor = actor
                 user.save()
 
+                # Массовое удаление через импорт не выполняется: строки,
+                # отсутствующие в файле, здесь никак не затрагиваются —
+                # цикл работает только с tab_number, реально присутствующими
+                # в текущем файле. Единственный способ деактивировать
+                # учётную запись — status=blocked явно в файле (выше).
+                # Узкий сигнал «роль повышена при импорте» — отдельно от
+                # комплексного "user.role.changed", который публикует сам
+                # User.save() на любое изменение роли (намеренное
+                # пересечение под разных потребителей, см. STACK.md).
+                # Запись в WORM-журнал делает обработчик события
+                # (apps/audit/handlers.py), не этот модуль.
                 if is_update and _is_role_elevated(previous_role, role):
                     publish(
                         "user.role.elevated",
@@ -246,6 +276,11 @@ _CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
 
 def _csv_safe(value) -> str:
+    """Защита от CSV/formula injection (Excel/LibreOffice выполняют ячейку,
+    начинающуюся с =, +, -, @ как формулу). tab_number и detail приходят из
+    ячеек загружаемого .xlsx — потенциально не от HR, а от кого угодно,
+    приславшего файл дальше по цепочке — и уходят прямиком в CSV,
+    рассчитанный на открытие в Excel (BOM utf-8-sig ниже)."""
     text = str(value)
     if text.startswith(_CSV_FORMULA_PREFIXES):
         return "'" + text
@@ -253,6 +288,10 @@ def _csv_safe(value) -> str:
 
 
 def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
+    """Три отдельных CSV — success/updated/errors (точки-в-разрезе результата
+    импорта, а не листы одного файла: у CSV нет листов). ; как разделитель
+    и BOM (utf-8-sig) — чтобы Excel в русской локали открывал файл сразу
+    корректно, без ручного выбора кодировки."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = {}
@@ -274,9 +313,26 @@ def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
 
 
 # --- Вход и 2FA/TOTP (ТЗ 4.7) --------------------------------------------
+#
+# Общая бизнес-логика для ДВУХ независимых HTTP-контуров (решение
+# Заказчика): Web GUI (apps/iam/views.py, серверный рендеринг, сессия) и
+# External API (apps/iam/api.py, DRF + JWT). Ни views.py, ни api.py не
+# обращаются к User.objects/verify_totp_code напрямую — только через
+# функции этого раздела, чтобы правила (кто должен пройти 2FA, что
+# считается верным кодом, что пишется в аудит) не разъехались между
+# контурами.
+#
+# Двухшаговый вход одинаков в обоих контурах: шаг 1 проверяет пароль и,
+# если у пользователя включена 2FA, возвращает подписанный "pending"-
+# тикет вместо готовой авторизации — сама авторизация (django_login() в
+# Web, выдача JWT в API) происходит только в шаге 2, после верного кода.
+# Тикет подписан через django.core.signing (не Django-сессия): так шаг 2
+# одинаково работает и для контура с cookie (Web), и для контура без
+# состояния на сервере (API/JWT) — не пришлось заводить два разных
+# механизма "ожидания кода" под два контура.
 
 _TOTP_PENDING_TICKET_SALT = "apps.iam.services.totp_pending_ticket"
-_TOTP_PENDING_TICKET_MAX_AGE = 5 * 60
+_TOTP_PENDING_TICKET_MAX_AGE = 5 * 60  # 5 минут на ввод кода после шага 1
 
 
 class TotpEnrollmentNotStarted(Exception):
@@ -284,6 +340,19 @@ class TotpEnrollmentNotStarted(Exception):
 
 
 class LoginBlocked(Exception):
+    """Табельный номер и/или IP-адрес временно заблокированы после серии
+    неудачных попыток (rate limiting/lockout, см. is_locked_out()/
+    is_ip_locked_out() ниже) — отдельное исключение, не None, как у
+    обычной неверной пары логин/пароль: вызывающий код должен показать
+    другое сообщение ("слишком много попыток"), это не раскрывает данные
+    об учётной записи, поскольку счётчик неудач копится независимо от
+    того, существует ли такой табельный номер вообще (см. check_credentials).
+
+    retry_after — секунд до снятия блокировки (login_retry_after_seconds),
+    вычисляется в месте вызова raise, где ещё есть доступ к
+    personnel_number/IP — API-контур (apps/iam/api.py) читает его для
+    заголовка Retry-After на 429, ничего не пересчитывая сам."""
+
     def __init__(self, retry_after: int = 0):
         self.retry_after = retry_after
         super().__init__("Слишком много неудачных попыток входа.")
@@ -300,6 +369,10 @@ def _client_ip(request) -> str:
     return client_ip(request) if request is not None else ""
 
 
+# Rate limiting / lockout на подбор пароля или TOTP-кода (ТЗ 4.7).
+# Порог по учётке — 5 неудач / 15 минут; независимый IP-порог — 20 / 15.
+# В отличие от прежней реализации, hot path больше не читает WORM AuditLog:
+# operational sliding window хранится в индексированной LoginFailure.
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_WINDOW = timedelta(minutes=15)
 IP_LOCKOUT_MAX_ATTEMPTS = 20
@@ -316,7 +389,13 @@ def _record_login_failure(
     reason: str,
     object_id: str = "",
 ) -> None:
-    """Atomically persist IAM lockout state and the matching WORM event."""
+    """Атомарно записать operational lockout state и соответствующий WORM-аудит.
+
+    LoginFailure — источник для быстрых security queries; AuditLog остаётся
+    доказательным WORM-контуром и записывается обработчиком critical event.
+    Если audit handler отсутствует/падает, fail-closed bus роняет транзакцию,
+    поэтому projection и аудит не могут тихо разойтись.
+    """
     LoginFailure.objects.create(
         personnel_number=personnel_number,
         ip_address=ip_address,
@@ -344,6 +423,7 @@ def _recent_failed_attempts(personnel_number: str) -> int:
 
 
 def is_locked_out(personnel_number: str) -> bool:
+    """Скользящее окно по индексированной IAM projection, не по WORM-журналу."""
     return _recent_failed_attempts(personnel_number) >= LOCKOUT_MAX_ATTEMPTS
 
 
@@ -361,6 +441,7 @@ def is_ip_locked_out(ip_address: str) -> bool:
 
 
 def _window_expires_at(window: timedelta, max_attempts: int, **filter_kwargs):
+    """Момент, когда счётчик неудач впервые опустится ниже max_attempts."""
     cutoff = timezone.now() - window
     recent_failures = list(
         LoginFailure.objects.filter(
@@ -401,6 +482,7 @@ def seconds_until_ip_unlock(ip_address: str) -> int | None:
 
 
 def login_retry_after_seconds(personnel_number: str, ip_address: str) -> int:
+    """Секунд до снятия обоих независимых lockout для Retry-After."""
     candidates = [
         seconds_until_unlock(personnel_number),
         seconds_until_ip_unlock(ip_address),
@@ -410,6 +492,12 @@ def login_retry_after_seconds(personnel_number: str, ip_address: str) -> int:
 
 
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
+    """Шаг 1: проверить lockout и пароль, не раскрывая существование учётки.
+
+    Заблокированная попытка не создаёт новую LoginFailure — иначе sliding
+    window самопродлевался бы от самого факта повторных запросов. Реальная
+    неудача аутентификации создаёт и operational projection, и WORM event.
+    """
     ip_address = _client_ip(request)
     if is_locked_out(personnel_number) or is_ip_locked_out(ip_address):
         raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
@@ -435,6 +523,7 @@ def make_totp_pending_ticket(user: User) -> str:
 
 @transaction.atomic
 def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
+    """Шаг 2: проверить pending ticket/TOTP и общий account/IP lockout."""
     ip_address = _client_ip(request)
     if is_ip_locked_out(ip_address):
         raise LoginBlocked(login_retry_after_seconds("", ip_address))
@@ -465,6 +554,7 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
             object_id=str(user.pk) if user else "",
         )
         return None
+    # Парольные и TOTP-неудачи одного пользователя входят в один счётчик.
     if is_locked_out(user.personnel_number):
         raise LoginBlocked(login_retry_after_seconds(user.personnel_number, ip_address))
 
@@ -491,7 +581,6 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
             object_id=str(user.pk),
         )
         return None
-
     UsedLoginTicket.objects.create(
         digest=digest,
         expires_at=timezone.now() + timedelta(minutes=5),
@@ -502,6 +591,7 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
 
 
 def user_auth_summary(user: User) -> dict:
+    """Общий вид ответа после успешного входа для Web/API."""
     return {
         "personnel_number": user.personnel_number,
         "full_name": user.full_name,
@@ -515,6 +605,7 @@ def user_auth_summary(user: User) -> dict:
 
 
 def record_session_login(user: User, request=None) -> None:
+    """Синхронно зафиксировать успешный вход в WORM-аудите через event boundary."""
     publish(
         "auth.session.login",
         user=user,
@@ -532,6 +623,7 @@ def record_session_logout(user: User, request=None) -> None:
 
 @transaction.atomic
 def start_totp_enrollment(user: User) -> dict:
+    """Stage an encrypted secret; an enabled factor requires administrative reset."""
     from django.core.exceptions import PermissionDenied
 
     from .totp_crypto import encrypt_totp_secret
