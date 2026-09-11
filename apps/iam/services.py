@@ -17,15 +17,17 @@
   для конкретного tab_number.
 """
 import csv
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 
 import openpyxl
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core import signing
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
@@ -370,13 +372,41 @@ def _client_ip(request) -> str:
 
 
 # Rate limiting / lockout на подбор пароля или TOTP-кода (ТЗ 4.7).
-# Порог по учётке — 5 неудач / 15 минут; независимый IP-порог — 20 / 15.
+# Порог по учётке — 5 неудач / 15 минут. Независимый IP-порог имеет
+# технический default 20 / 15, но не является числом из ТЗ и должен быть
+# откалиброван на стенде с учётом корпоративного NAT/fan-in.
 # В отличие от прежней реализации, hot path больше не читает WORM AuditLog:
 # operational sliding window хранится в индексированной LoginFailure.
 LOCKOUT_MAX_ATTEMPTS = 5
 LOCKOUT_WINDOW = timedelta(minutes=15)
 IP_LOCKOUT_MAX_ATTEMPTS = 20
 IP_LOCKOUT_WINDOW = LOCKOUT_WINDOW
+
+
+def ip_lockout_max_attempts() -> int:
+    """Эффективный IP threshold.
+
+    Django setting имеет приоритет (удобно для тестов/явной конфигурации),
+    затем читается одноимённый ENV. Default 20 — технический baseline, не
+    утверждённый корпоративный норматив. Некорректное значение fail-closed:
+    приложение не должно молча отключить или чрезмерно ужесточить защиту.
+    """
+    raw_value = getattr(
+        settings,
+        "IAM_IP_LOCKOUT_MAX_ATTEMPTS",
+        os.environ.get("IAM_IP_LOCKOUT_MAX_ATTEMPTS", IP_LOCKOUT_MAX_ATTEMPTS),
+    )
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ImproperlyConfigured(
+            "IAM_IP_LOCKOUT_MAX_ATTEMPTS должен быть целым числом >= 1."
+        ) from exc
+    if value < 1:
+        raise ImproperlyConfigured(
+            "IAM_IP_LOCKOUT_MAX_ATTEMPTS должен быть целым числом >= 1."
+        )
+    return value
 
 
 @transaction.atomic
@@ -437,7 +467,7 @@ def _recent_failed_attempts_by_ip(ip_address: str) -> int:
 
 
 def is_ip_locked_out(ip_address: str) -> bool:
-    return _recent_failed_attempts_by_ip(ip_address) >= IP_LOCKOUT_MAX_ATTEMPTS
+    return _recent_failed_attempts_by_ip(ip_address) >= ip_lockout_max_attempts()
 
 
 def _window_expires_at(window: timedelta, max_attempts: int, **filter_kwargs):
@@ -473,7 +503,7 @@ def seconds_until_ip_unlock(ip_address: str) -> int | None:
         return None
     expires_at = _window_expires_at(
         IP_LOCKOUT_WINDOW,
-        IP_LOCKOUT_MAX_ATTEMPTS,
+        ip_lockout_max_attempts(),
         ip_address=ip_address,
     )
     if expires_at is None:
