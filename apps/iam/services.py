@@ -21,6 +21,7 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
+from hashlib import sha256
 from pathlib import Path
 
 import openpyxl
@@ -28,7 +29,7 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core import signing
 from django.core.exceptions import ImproperlyConfigured, ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, connection, transaction
 from django.utils import timezone
 
 from apps.core.csv_safety import csv_safe
@@ -369,6 +370,37 @@ IP_LOCKOUT_MAX_ATTEMPTS = 20
 IP_LOCKOUT_WINDOW = LOCKOUT_WINDOW
 
 
+def _lockout_advisory_key(namespace: str, value: str) -> int:
+    """Стабильный signed bigint для PostgreSQL advisory lock."""
+    digest = sha256(f"bz-get:login-lockout:{namespace}:{value}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+def _lock_login_identities(*, personnel_number: str = "", ip_address: str = "") -> None:
+    """Сериализовать check→authenticate/TOTP→failure по account/IP.
+
+    Счётчик должен поддерживать и несуществующие табельные номера, поэтому
+    строковый `select_for_update()` здесь принципиально не подходит. Advisory
+    lock живёт до commit/rollback и позволяет держать один и тот же барьер для
+    password и TOTP путей. Ключи сортируются глобально, чтобы запросы,
+    пересекающиеся по account и IP, не образовывали взаимную блокировку.
+    """
+    if not connection.in_atomic_block:
+        raise RuntimeError("login lockout advisory locks require transaction.atomic()")
+
+    keys = set()
+    if personnel_number:
+        keys.add(_lockout_advisory_key("account", personnel_number))
+    if ip_address:
+        keys.add(_lockout_advisory_key("ip", ip_address))
+
+    if not keys:
+        return
+    with connection.cursor() as cursor:
+        for key in sorted(keys):
+            cursor.execute("SELECT pg_advisory_xact_lock(%s)", [key])
+
+
 def ip_lockout_max_attempts() -> int:
     """Эффективный IP threshold.
 
@@ -507,14 +539,19 @@ def login_retry_after_seconds(personnel_number: str, ip_address: str) -> int:
     return max(values) if values else 0
 
 
+@transaction.atomic
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
     """Шаг 1: проверить lockout и пароль, не раскрывая существование учётки.
 
     Заблокированная попытка не создаёт новую LoginFailure — иначе sliding
     window самопродлевался бы от самого факта повторных запросов. Реальная
     неудача аутентификации создаёт и operational projection, и WORM event.
+    Check, password verification и запись failure выполняются под общими
+    account/IP advisory locks, поэтому параллельные запросы не перескакивают
+    через последний доступный слот окна.
     """
     ip_address = _client_ip(request)
+    _lock_login_identities(personnel_number=personnel_number, ip_address=ip_address)
     if is_locked_out(personnel_number) or is_ip_locked_out(ip_address):
         raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
     user = authenticate(request, username=personnel_number, password=password)
@@ -541,8 +578,6 @@ def make_totp_pending_ticket(user: User) -> str:
 def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     """Шаг 2: проверить pending ticket/TOTP и общий account/IP lockout."""
     ip_address = _client_ip(request)
-    if is_ip_locked_out(ip_address):
-        raise LoginBlocked(login_retry_after_seconds("", ip_address))
     try:
         data = signing.loads(
             ticket,
@@ -550,6 +585,11 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
             max_age=_TOTP_PENDING_TICKET_MAX_AGE,
         )
     except signing.BadSignature:
+        # У невалидного ticket нет доказуемой account identity, поэтому
+        # сериализуем только общий IP-счётчик и проверяем его до записи failure.
+        _lock_login_identities(ip_address=ip_address)
+        if is_ip_locked_out(ip_address):
+            raise LoginBlocked(login_retry_after_seconds("", ip_address))
         _record_login_failure(
             actor=None,
             personnel_number="",
@@ -559,11 +599,20 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
         )
         return None
 
+    # Row lock по-прежнему нужен для защиты TOTP replay state (`totp_last_step`).
+    # После того как account identity известна из актуальной строки, берём те же
+    # account/IP advisory locks, что и password path. Password-проверка не берёт
+    # row lock User, поэтому этот порядок не создаёт циклической зависимости.
     user = User.objects.select_for_update().filter(pk=data.get("user_id")).first()
+    personnel_number = user.personnel_number if user else ""
+    _lock_login_identities(personnel_number=personnel_number, ip_address=ip_address)
+
+    if is_ip_locked_out(ip_address):
+        raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
     if user is None or not user.is_active:
         _record_login_failure(
             actor=user,
-            personnel_number=user.personnel_number if user else "",
+            personnel_number=personnel_number,
             ip_address=ip_address,
             stage="totp",
             reason="user_inactive_or_missing",
@@ -573,8 +622,6 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
     # Парольные и TOTP-неудачи одного пользователя входят в один счётчик.
     if is_locked_out(user.personnel_number):
         raise LoginBlocked(login_retry_after_seconds(user.personnel_number, ip_address))
-
-    from hashlib import sha256
 
     from .models import UsedLoginTicket
     from .totp import matching_step
