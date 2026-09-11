@@ -4,16 +4,12 @@ DDD-граница, объявленная в STACK.md: единственное
 версия бланка и учитывается скачивание. `views.py` и админка вызывают
 эти функции, а не пишут в модель напрямую.
 """
-import logging
-
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F
 
 from . import permissions
 from .models import Template, TemplateFamily
-
-logger = logging.getLogger(__name__)
 
 
 def publish_version(*, actor, family, form=None, **attrs):
@@ -24,6 +20,11 @@ def publish_version(*, actor, family, form=None, **attrs):
     корректировки. Поэтому «правки» тут нет — есть только выпуск новой
     строки, которая переводит предыдущую активную версию в
     `superseded` и связывается с ней в обе стороны.
+
+    Файлы опубликованной версии сначала записываются в mutable staging
+    (`working/staging/worm`) и попадают в `originals` с Governance/Legal
+    Hold только после успешного commit. Поэтому rollback никогда не делает
+    DELETE в WORM — он удаляет только staging-объекты.
     """
     if not permissions.can_manage_templates(actor):
         raise PermissionDenied(
@@ -61,25 +62,12 @@ def publish_version(*, actor, family, form=None, **attrs):
             try:
                 previous.save(update_fields=["status", "superseded_by", "updated_at"])
             except Exception:
-                # template.save() выше уже физически записал file_editable/
-                # file_sample в WORM-бакет originals (Model.save() пишет
-                # FileField в storage синхронно, до коммита транзакции БД —
-                # эта запись не транзакционна с Postgres и не откатится
-                # сама). Если этот save() всё же бросит исключение,
-                # транзакция откатится, а строка Template с ней исчезнет —
-                # файлы, если их не подчистить явно, останутся висеть в
-                # WORM-бакете без ссылающейся строки в БД.
-                for field_name in ("file_editable", "file_sample"):
-                    field_file = getattr(template, field_name)
-                    if not field_file:
-                        continue
-                    try:
-                        field_file.delete(save=False)
-                    except Exception:
-                        logger.exception(
-                            "Не удалось удалить осиротевший файл %s=%r после отката публикации версии (family=%s)",
-                            field_name, field_file.name, family.pk,
-                        )
+                # The new version has not reached Object-Locked storage yet.
+                # Its staging files are mutable and can be safely discarded;
+                # the promotion/outbox rows roll back with this transaction.
+                from apps.core.staged_files import discard_staged_uploads
+
+                discard_staged_uploads(template)
                 raise
 
     return template
