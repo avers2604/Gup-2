@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.core.cache import cache
 from django.test import TestCase
 
@@ -34,6 +36,17 @@ class SearchMetricSemanticsTests(TestCase):
         record_search(0, logical_search_key="search-a")
         record_search(5, logical_search_key="search-b")
         self.assertEqual(self._value("search_requests"), 2)
+        self.assertEqual(self._value("search_zero_results"), 1)
+
+    def test_cache_failure_is_fail_open_and_search_metric_is_still_counted(self):
+        with patch(
+            "apps.core.business_metrics.cache.add",
+            side_effect=ConnectionError("redis unavailable"),
+        ):
+            with self.assertLogs("apps.core.business_metrics", level="ERROR"):
+                record_search(0, logical_search_key="redis-down")
+
+        self.assertEqual(self._value("search_requests"), 1)
         self.assertEqual(self._value("search_zero_results"), 1)
 
     def test_search_key_normalizes_query_but_preserves_filters_and_surface(self):
@@ -74,4 +87,3 @@ class SearchMetricSemanticsTests(TestCase):
             record_search(5, page_number=0, logical_search_key="x")
         with self.assertRaises(ValueError):
             record_search(5, page_number=-1, logical_search_key="x")
-

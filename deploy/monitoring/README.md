@@ -61,6 +61,26 @@ Dashboard: `BZ GET — Stage 4 Business Indicators`
 удаляется после успешной обработки. Для исторических записей migration
 инициализирует best-available timestamp из существующей карточки.
 
+## Reliability-метрики приложения
+
+Тот же endpoint `/metrics/business/` содержит эксплуатационные метрики, которые
+не являются четырьмя бизнес-индикаторами ТЗ, но используются для контроля
+надёжности приложения и maintenance jobs.
+
+Для retention IAM projection экспортируются:
+
+- `bz_get_login_failure_purge_success_total` — число успешно завершённых
+  `purge_login_failures`;
+- `bz_get_login_failure_purge_last_success_unixtime` — timestamp последнего
+  успешного purge; `0` означает, что успешный запуск ещё ни разу не подтверждён.
+
+Prometheus rule `LoginFailurePurgeStale` в
+`deploy/prometheus/rules/application.yml` выдаёт warning, если heartbeat старше
+48 часов (`172800` секунд), отсутствует или ещё равен `0`. Условие должно
+сохраняться 15 минут. Это контроль housekeeping/capacity drift, а не lockout
+correctness: online security queries по-прежнему ограничены 15-минутным окном.
+Runbook и действия оператора: `docs/STAGE4_P2_LOCKOUT_PROJECTION.md`.
+
 ## Prometheus и Grafana
 
 Reference Prometheus конфигурация опрашивает Patroni, PostgreSQL/PgBouncer,
@@ -74,6 +94,7 @@ pgBackRest, оба Alertmanager и `/metrics/business/` приложения. К
 promtool check config /etc/prometheus/prometheus.yml
 promtool check rules /etc/prometheus/rules/ha-dr.yml
 promtool check rules /etc/prometheus/rules/alert-delivery.yml
+promtool check rules /etc/prometheus/rules/application.yml
 ```
 
 Provisioning Grafana содержит datasource `Infrastructure Prometheus` и два
@@ -93,6 +114,10 @@ backup freshness и состояние Alertmanager. После реальног
 пороговые alert rules для них должны задаваться только там, где ТЗ/Заказчик
 зафиксировал порог реакции. Для двух индикаторов порог уже является частью
 самой метрики (`OCR >14 дней`, `revision >3 лет`).
+
+Порог `LoginFailurePurgeStale=48h` относится не к бизнес-SLA, а к внутреннему
+maintenance guard: daily timer имеет двукратный запас до warning и не должен
+незаметно простаивать несколько суток.
 
 ## Alert delivery
 
@@ -115,7 +140,10 @@ warning/critical routes, receiver URL через root-owned `url_file`,
 6. наличие всех четырёх `bz_get_*` бизнес-индикаторов в Prometheus;
 7. отображение всех четырёх панелей business dashboard;
 8. корректное изменение zero-result ratio после тестовых поисков;
-9. инкремент 403/404/504 link counters при контролируемых тестовых отказах.
+9. инкремент 403/404/504 link counters при контролируемых тестовых отказах;
+10. после ручного/таймерного `purge_login_failures` обновляется
+   `bz_get_login_failure_purge_last_success_unixtime`, а synthetic stale-state
+   переводит `LoginFailurePurgeStale` в firing и затем resolved.
 
 Конфигурации в Git не являются доказательством operational acceptance: нужны
 реальные scrape/delivery/drill evidence на стенде.

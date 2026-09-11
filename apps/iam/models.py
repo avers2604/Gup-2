@@ -338,6 +338,34 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
             )
 
 
+class LoginFailure(UUIDPKModel):
+    """Operational IAM projection for sliding-window login lockout.
+
+    WORM AuditLog remains the evidentiary record, but authentication controls
+    must not scan audit JSON on every request. This compact projection stores
+    only the fields needed for account/IP lockout and Retry-After calculation.
+    """
+
+    personnel_number = models.CharField(max_length=32, blank=True)
+    ip_address = models.CharField(max_length=45, blank=True)
+    stage = models.CharField(max_length=32)
+    reason = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(
+                fields=["personnel_number", "created_at"],
+                name="iam_login_fail_person_idx",
+            ),
+            models.Index(
+                fields=["ip_address", "created_at"],
+                name="iam_login_fail_ip_idx",
+            ),
+        ]
+
+
 class PasswordHistoryEntry(UUIDPKModel):
     """Хэши ранее использованных паролей — под запрет повторного
     использования последних PASSWORD_HISTORY_DEPTH (решение Заказчика).
