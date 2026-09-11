@@ -6,4 +6,5 @@ app_name = "audit"
 
 urlpatterns = [
     path("", views.AuditLogListView.as_view(), name="list"),
+    path("export/", views.AuditLogExportView.as_view(), name="export"),
 ]

@@ -291,3 +291,90 @@ class AuditDetailsRenderingTests(TestCase):
         cell = body.split('<span class="caption">created:</span>')[1][:400]
         self.assertNotIn(long_value, cell)
         self.assertIn("…", cell)
+
+
+class AuditLogExportTests(TestCase):
+    """Выгрузка журнала (ТЗ 4.7): доступ, самофиксация и безопасность файла."""
+
+    def setUp(self):
+        self.officer = make_user(personnel_number="0420", role=User.Role.SECURITY_OFFICER)
+        self.reader = make_user(personnel_number="0421")
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.DOCUMENT_PUBLISHED,
+            actor_personnel_number="0999", object_type="NormativeDocument",
+            object_id="B1-п", details={"reg_number": "B1-п"},
+        )
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN,
+            actor_personnel_number="0888", object_type="User", object_id="u2",
+        )
+
+    def _client(self, user):
+        client = Client()
+        client.login(personnel_number=user.personnel_number, password=PASSWORD)
+        return client
+
+    @staticmethod
+    def _body(response):
+        return b"".join(response.streaming_content).decode("utf-8")
+
+    def test_requires_login(self):
+        self.assertEqual(Client().get(reverse("audit:export")).status_code, 302)
+
+    def test_reader_gets_404_like_the_log_itself(self):
+        response = self._client(self.reader).get(reverse("audit:export"))
+        self.assertEqual(response.status_code, 404)
+
+    def test_officer_downloads_csv_attachment(self):
+        response = self._client(self.officer).get(reverse("audit:export"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response["Content-Type"])
+        self.assertIn("attachment;", response["Content-Disposition"])
+        body = self._body(response)
+        self.assertTrue(body.startswith("﻿"), "нужен BOM, иначе Excel ломает кириллицу")
+        self.assertIn("B1-п", body)
+        self.assertIn("u2", body)
+
+    def test_export_records_itself_in_the_log(self):
+        """Выгрузка журнала безопасности сама является событием безопасности."""
+        before = AuditLog.objects.filter(
+            event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED
+        ).count()
+
+        response = self._client(self.officer).get(
+            reverse("audit:export"), {"event_type": AuditLog.EventType.SESSION_LOGIN}
+        )
+        self._body(response)
+
+        entries = AuditLog.objects.filter(event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED)
+        self.assertEqual(entries.count(), before + 1)
+        entry = entries.latest("created_at")
+        self.assertEqual(entry.actor_personnel_number, "0420")
+        # Применённые фильтры фиксируются: проверяющему важно, какой именно
+        # срез журнала вынесли наружу, а не только сам факт выгрузки.
+        self.assertEqual(entry.details["filters"]["event_type"], AuditLog.EventType.SESSION_LOGIN)
+        self.assertEqual(entry.details["matched_entries"], 1)
+
+    def test_filters_apply_to_the_file_not_only_to_the_screen(self):
+        response = self._client(self.officer).get(
+            reverse("audit:export"), {"event_type": AuditLog.EventType.SESSION_LOGIN}
+        )
+        body = self._body(response)
+
+        self.assertIn("u2", body)
+        self.assertNotIn("B1-п", body)
+
+    def test_formula_injection_is_neutralised(self):
+        """Значение из журнала не должно исполниться при открытии в Excel."""
+        # Классический DDE-вектор; уложен в max_length поля табельного номера.
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.SESSION_LOGIN_FAILED,
+            actor_personnel_number="=cmd|'/c calc'!A1",
+            object_type="User", object_id="u3",
+        )
+
+        body = self._body(self._client(self.officer).get(reverse("audit:export")))
+
+        self.assertIn("'=cmd|", body, "опасное значение должно быть экранировано апострофом")
+        self.assertNotIn(";=cmd|", body, "неэкранированная формула не должна попасть в ячейку")
