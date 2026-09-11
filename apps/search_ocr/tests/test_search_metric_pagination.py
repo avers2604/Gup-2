@@ -59,6 +59,11 @@ class SearchPaginationMetricIntegrationTests(TestCase):
 
     def test_different_filter_is_a_distinct_logical_search(self):
         url = reverse("search_ocr:search")
-        self.client.get(url, {"q": "контактной сети"})
-        self.client.get(url, {"q": "контактной сети", "category": "order"})
+        first = self.client.get(url, {"q": "контактной сети"})
+        filtered = self.client.get(
+            url,
+            {"q": "контактной сети", "category": "doc.type"},
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(filtered.status_code, 200)
         self.assertEqual(self._value("search_requests"), 2)
