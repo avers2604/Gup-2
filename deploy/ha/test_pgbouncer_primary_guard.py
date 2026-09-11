@@ -41,6 +41,24 @@ class PrimaryGuardTests(unittest.TestCase):
                 )
             )
 
+    def test_renamed_proxy_section_is_honoured_not_silently_ignored(self):
+        """Имя секции HAProxy настраивается и должно совпадать с haproxy.cfg.
+
+        Рассинхрон не громкий: `show stat` просто не вернёт строк для
+        неизвестного proxy, и guard будет вечно считать топологию
+        неоднозначной, ни разу не сделав RECONNECT. Поэтому имя и
+        прокидывается параметром, и сверяется deploy/ha/validate.sh.
+        """
+        payload = stat(
+            "pg_write,db1,DOWN,2",
+            "pg_write,db2,UP,2",
+        )
+        self.assertEqual(
+            guard.parse_primary_backend(payload, proxy_name="pg_write"), "db2"
+        )
+        with self.assertRaises(guard.TopologyAmbiguous):
+            guard.parse_primary_backend(payload)
+
     @patch.object(guard, "reconnect_pgbouncer")
     @patch.object(guard, "haproxy_stats")
     def test_startup_reconnects_once_and_steady_state_does_not(self, stats, reconnect):
