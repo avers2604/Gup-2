@@ -17,13 +17,19 @@
 - если handlers нет вообще — поднимается `MissingDomainEventHandler`;
 - критичный side effect больше не может исчезнуть бесследно из-за сломанного импорта handler-модуля.
 
+Дополнительно `require_handlers()` проверяет subscriptions уже при старте приложения:
+
+- `IamConfig.ready()` импортирует IAM handlers и требует `user.blocked`, `user.password.changed`;
+- `AuditConfig.ready()` импортирует audit handlers и требует `user.role.changed`, `user.role.elevated`;
+- обрыв handler import теперь валит startup, а не ждёт первого реального изменения роли/пароля/статуса.
+
 `publish_after_commit()` остаётся отдельным каналом для некритичных интеграций:
 
 - выполняется после коммита;
 - отсутствие subscribers допустимо;
 - исключение handler логируется и не может откатить уже состоявшийся commit.
 
-Таким образом, семантика двух API теперь различается не только документацией, но и runtime-поведением.
+Таким образом, семантика двух API различается и на startup, и на runtime.
 
 ## Покрытие
 
@@ -33,6 +39,7 @@
 - propagation исключений;
 - idempotent registration;
 - обязательный FAIL при synchronous publish без handler;
+- `require_handlers()` с полным списком отсутствующих critical events;
 - допустимый no-op без subscriber у after-commit channel;
 - наличие известных IAM/audit handlers после `AppConfig.ready()`.
 
