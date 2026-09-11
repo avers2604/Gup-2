@@ -8,6 +8,7 @@ from django.shortcuts import redirect
 from django.views.decorators.http import require_GET
 
 from apps.core.business_metrics import record_link_generation_failure
+from apps.core.limits import client_ip
 from apps.core.staged_files import promotion_pending_for
 
 from . import permissions
@@ -44,6 +45,10 @@ def document_file_link(request, pk, kind: str):
     expose a link to an object that does not exist yet. We return 409 instead;
     this is an expected transient application state and is not counted as a
     MinIO/link-generation failure.
+
+    Выдача файла документа с грифом ДСП пишется в WORM-журнал событием
+    ``EXPORT_RESTRICTED`` (ТЗ 4.7) — по тому же принципу, что и
+    ``ARCHIVE_DOWNLOAD`` для архивных бланков.
     """
     field_name = _ALLOWED_FIELDS.get(kind)
     if field_name is None:
@@ -85,4 +90,42 @@ def document_file_link(request, pk, kind: str):
         record_link_generation_failure(status_code)
         return HttpResponse("link unavailable\n", status=status_code, content_type="text/plain")
 
+    _record_restricted_export(request, document, kind)
     return redirect(url)
+
+
+def _record_restricted_export(request, document, kind: str) -> None:
+    """Событие выдачи файла документа с грифом ДСП.
+
+    Пишется ТОЛЬКО для `RESTRICTED`: журналировать каждое скачивание каждого
+    общедоступного документа — значит утопить в шуме именно те записи, ради
+    которых журнал и заводился.
+
+    Порядок важен: ссылка уже получена, но пользователю ещё не отдана. Если
+    запись в журнал упадёт, вызов завершится ошибкой и ссылка не уйдёт —
+    выдача ДСП без следа в WORM-журнале недопустима. Неудачная генерация
+    ссылки, наоборот, доступа не даёт, и события не порождает.
+
+    Сама presigned-ссылка в журнал НЕ попадает: до истечения срока она
+    работает как предъявительский пропуск к файлу, а журнал аудита читают
+    шире, чем сам ДСП-документ.
+    """
+    if document.access_level != NormativeDocument.AccessLevel.RESTRICTED:
+        return
+
+    from apps.audit.models import AuditLog
+
+    actor = request.user
+    AuditLog.objects.create(
+        event_type=AuditLog.EventType.EXPORT_RESTRICTED,
+        actor=actor,
+        actor_personnel_number=getattr(actor, "personnel_number", ""),
+        object_type="NormativeDocument",
+        object_id=str(document.pk),
+        details={
+            "reg_number": document.reg_number,
+            "kind": kind,
+            "status": document.status,
+            "ip_address": client_ip(request),
+        },
+    )
