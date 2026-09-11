@@ -12,7 +12,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Count, Max
-from django.http import FileResponse, Http404, HttpResponseRedirect
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
@@ -40,9 +40,6 @@ class TemplateFamilyListView(LoginRequiredMixin, View):
 
         paginator = Paginator(queryset, PAGE_SIZE)
         page_obj = paginator.get_page(request.GET.get("page"))
-
-        # Действующая версия каждого семейства — одним запросом на
-        # страницу, а не запросом на строку в шаблоне.
         active = {
             template.family_id: template
             for template in Template.objects.filter(
@@ -90,10 +87,7 @@ class TemplateFamilyCreateView(LoginRequiredMixin, View):
         form = TemplateFamilyForm(request.POST)
         if form.is_valid():
             family = form.save()
-            messages.success(
-                request,
-                "Семейство форм создано. Выпустите его первую версию.",
-            )
+            messages.success(request, "Семейство форм создано. Выпустите его первую версию.")
             return HttpResponseRedirect(
                 reverse("templates_bank:version_create", args=[family.pk])
             )
@@ -101,9 +95,7 @@ class TemplateFamilyCreateView(LoginRequiredMixin, View):
 
 
 class TemplateVersionCreateView(LoginRequiredMixin, View):
-    """Выпуск новой версии бланка. Правки существующей версии нет и быть
-    не может: ТЗ 4.3.1 требует инкремента версии даже при минорной
-    корректировке."""
+    """Выпуск новой версии бланка; существующая версия не правится на месте."""
 
     template_name = "templates_bank/version_form.html"
 
@@ -122,22 +114,16 @@ class TemplateVersionCreateView(LoginRequiredMixin, View):
 
     def post(self, request, pk):
         family = get_object_or_404(TemplateFamily, pk=pk)
-        form = TemplateVersionForm(
-            request.POST, request.FILES, user=request.user, family=family
-        )
+        form = TemplateVersionForm(request.POST, request.FILES, user=request.user, family=family)
         if form.is_valid():
             try:
-                template = services.publish_version(
-                    actor=request.user, family=family, form=form
-                )
+                template = services.publish_version(actor=request.user, family=family, form=form)
             except ValidationError as error:
                 form.add_error(None, error)
             except PermissionDenied as error:
                 form.add_error(None, str(error))
             else:
-                messages.success(
-                    request, f"Выпущена версия {template.version}."
-                )
+                messages.success(request, f"Выпущена версия {template.version}.")
                 return HttpResponseRedirect(
                     reverse("templates_bank:family_detail", args=[family.pk])
                 )
@@ -155,11 +141,10 @@ class TemplateVersionCreateView(LoginRequiredMixin, View):
 
 
 class TemplateDownloadView(LoginRequiredMixin, View):
-    """Выдача файла бланка с учётом скачивания (ТЗ 4.3.1).
+    """Выдача файла бланка с учётом только состоявшегося скачивания.
 
-    Файл отдаётся приложением, а не прямой ссылкой в хранилище: иначе
-    `download_count` и запись в WORM-журнал о выдаче архивной формы
-    обойти можно было бы простым копированием ссылки.
+    Пока WORM promotion не завершён, staging наружу не выдаётся: пользователь
+    получает 409 + Retry-After, а download_count/audit остаются неизменными.
     """
 
     def get(self, request, pk, field_name):
@@ -170,6 +155,10 @@ class TemplateDownloadView(LoginRequiredMixin, View):
             field_file = services.register_download(
                 actor=request.user, template=template, field_name=field_name
             )
+        except services.FilePromotionPending as error:
+            response = HttpResponse(str(error) + "\n", status=409, content_type="text/plain")
+            response["Retry-After"] = "5"
+            return response
         except ValidationError:
             raise Http404
         except PermissionDenied as error:
