@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 from datetime import timedelta
 
+from django.conf import settings
+from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import F, Q
 from django.utils import timezone
 
 from .models import BusinessMetricCounter, OcrReviewQueueEntry
 
+logger = logging.getLogger(__name__)
+
 SEARCH_REQUESTS = "search_requests"
 SEARCH_ZERO_RESULTS = "search_zero_results"
 LINK_FAILURE_PREFIX = "link_generation_failure_"
 LINK_FAILURE_STATUSES = (403, 404, 504)
+DEFAULT_SEARCH_METRIC_DEDUP_SECONDS = 30
 
 
 def increment_counter(name: str, amount: int = 1) -> None:
@@ -25,18 +33,70 @@ def increment_counter(name: str, amount: int = 1) -> None:
         BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
 
 
-def record_search(result_count: int, *, page_number: int = 1) -> None:
-    """Record one logical search, not every HTTP page fetch.
+def build_search_metric_key(
+    *,
+    user_id,
+    query: str,
+    category=None,
+    service=None,
+    surface: str,
+) -> str:
+    """Build an unambiguous short-window identity for one logical search.
 
-    Web and API pagination repeat the same query while the user/client walks
-    pages 2..N. Counting every page as a fresh search makes the zero-result
-    ratio depend on result-set length and navigation behavior instead of search
-    quality. Only the resolved first page represents the logical search event.
+    Whitespace/case changes in the same query are normalized. Filters, user and
+    delivery surface remain part of the identity so semantically different
+    searches are never collapsed together.
+    """
+    normalized_query = " ".join(str(query or "").split()).casefold()
+    payload = {
+        "user_id": str(user_id),
+        "query": normalized_query,
+        "category": str(category or ""),
+        "service": str(service or ""),
+        "surface": str(surface or ""),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def record_search(
+    result_count: int,
+    *,
+    page_number: int = 1,
+    logical_search_key: str | None = None,
+) -> None:
+    """Record one logical search, excluding pagination and short-window repeats.
+
+    Page 2..N is navigation through an already counted result set. Repeated
+    first-page GETs with the same logical key (double-click, refresh, retry) are
+    collapsed for a short configurable window using the shared Django cache.
+    Production uses Redis, so the identity is consistent across app workers.
     """
     if page_number < 1:
         raise ValueError("page_number must be >= 1")
     if page_number != 1:
         return
+    if not logical_search_key:
+        raise ValueError("logical_search_key is required for first-page search metrics")
+
+    timeout = int(
+        getattr(settings, "SEARCH_METRIC_DEDUP_SECONDS", DEFAULT_SEARCH_METRIC_DEDUP_SECONDS)
+    )
+    if timeout <= 0:
+        raise ValueError("SEARCH_METRIC_DEDUP_SECONDS must be > 0")
+
+    dedupe_key = f"bz-get:business-metric:search:{logical_search_key}"
+    try:
+        is_new = cache.add(dedupe_key, "1", timeout=timeout)
+    except Exception:
+        # Search availability must not depend on observability cache health.
+        # Count the event rather than fail the user request; monitoring should
+        # separately surface Redis/cache availability.
+        logger.exception("Search metric dedupe cache is unavailable")
+        is_new = True
+    if not is_new:
+        return
+
     increment_counter(SEARCH_REQUESTS)
     if result_count == 0:
         increment_counter(SEARCH_ZERO_RESULTS)
@@ -112,13 +172,13 @@ def render_prometheus() -> str:
         "# HELP bz_get_templates_revision_overdue_total Active templates not reviewed for more than 3 years.",
         "# TYPE bz_get_templates_revision_overdue_total gauge",
         f"bz_get_templates_revision_overdue_total {overdue_templates}",
-        "# HELP bz_get_search_requests_total Logical Web/API search executions; pagination pages after the first are excluded.",
+        "# HELP bz_get_search_requests_total Logical Web/API search executions; pagination and short-window repeats are excluded.",
         "# TYPE bz_get_search_requests_total counter",
         f"bz_get_search_requests_total {search_total}",
-        "# HELP bz_get_search_zero_results_total Logical first-page searches that returned zero documents.",
+        "# HELP bz_get_search_zero_results_total Logical searches that returned zero documents after pagination/retry dedupe.",
         "# TYPE bz_get_search_zero_results_total counter",
         f"bz_get_search_zero_results_total {search_zero}",
-        "# HELP bz_get_search_zero_result_ratio Lifetime ratio of logical searches with zero results; pagination is excluded.",
+        "# HELP bz_get_search_zero_result_ratio Lifetime ratio of deduplicated logical searches with zero results.",
         "# TYPE bz_get_search_zero_result_ratio gauge",
         f"bz_get_search_zero_result_ratio {zero_ratio:.8f}",
         "# HELP bz_get_link_generation_failures_total Storage/link-generation failures by HTTP status; business 404/409 states are excluded.",
