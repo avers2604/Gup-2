@@ -26,6 +26,7 @@ from pathlib import PurePosixPath
 
 from botocore.exceptions import ClientError
 from django.apps import apps
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import F
 from django.db.models.signals import post_save, pre_save
@@ -71,6 +72,32 @@ def stage_uploaded_field(instance, field_name: str, *, update_fields=None) -> Pe
     if not field_file or getattr(field_file, "_committed", True):
         return None
 
+    # Do not allow a second immutable replacement to overtake one that is
+    # already durably committed but has not reached WORM yet. Without this
+    # guard two final keys could be promoted even though only the newer one is
+    # referenced by the model. The window is normally seconds and is surfaced
+    # by the pending-promotion metrics.
+    if instance.pk and StagedFilePromotion.objects.filter(
+        model_label=instance._meta.label_lower,
+        object_id=str(instance.pk),
+        field_name=field_name,
+        completed_at__isnull=True,
+    ).exists():
+        raise ValidationError(
+            {field_name: "Предыдущая загрузка ещё переносится в WORM-хранилище. Повторите после завершения."}
+        )
+
+    # A second save of the same Python object inside one still-open transaction
+    # must not create another staging object for this field. post_save keeps
+    # the pending intent on the instance until the outermost transaction
+    # commits specifically so rollback + retry remains safe.
+    current = list(getattr(instance, _PENDING_ATTR, ()))
+    existing = next((item for item in current if item.field_name == field_name), None)
+    if existing is not None:
+        field_file.name = existing.destination_name
+        field_file._committed = True
+        return existing
+
     model_field = instance._meta.get_field(field_name)
     generated = model_field.generate_filename(instance, field_file.name)
     destination_name = _unique_destination_name(generated)
@@ -95,7 +122,6 @@ def stage_uploaded_field(instance, field_name: str, *, update_fields=None) -> Pe
         staging_name=saved_staging_name,
         destination_name=destination_name,
     )
-    current = list(getattr(instance, _PENDING_ATTR, ()))
     current.append(pending)
     setattr(instance, _PENDING_ATTR, current)
     return pending
@@ -139,33 +165,52 @@ def _lock_values(instance) -> tuple[str, datetime | None, bool]:
     return lock_mode, retain_until, legal_hold
 
 
+def _clear_pending_after_commit(instance) -> None:
+    setattr(instance, _PENDING_ATTR, [])
+
+
 def _queue_pending_promotions(instance) -> list[StagedFilePromotion]:
     pending = list(getattr(instance, _PENDING_ATTR, ()))
     if not pending:
         return []
 
     lock_mode, retain_until, legal_hold = _lock_values(instance)
-    created = []
+    rows = []
     for item in pending:
-        promotion = StagedFilePromotion.objects.create(
+        promotion, created = StagedFilePromotion.objects.get_or_create(
             model_label=instance._meta.label_lower,
             object_id=str(instance.pk),
             field_name=item.field_name,
-            staging_name=item.staging_name,
             destination_name=item.destination_name,
-            lock_mode=lock_mode,
-            retain_until=retain_until,
-            legal_hold=legal_hold,
+            defaults={
+                "staging_name": item.staging_name,
+                "lock_mode": lock_mode,
+                "retain_until": retain_until,
+                "legal_hold": legal_hold,
+            },
         )
-        enqueue("apps.core.tasks.promote_staged_file", [str(promotion.pk)])
-        created.append(promotion)
+        if promotion.staging_name != item.staging_name:
+            raise RuntimeError(
+                f"promotion identity collision for {instance._meta.label_lower}:{instance.pk}:{item.field_name}"
+            )
+        if created:
+            enqueue("apps.core.tasks.promote_staged_file", [str(promotion.pk)])
+        rows.append(promotion)
 
-    # A second save() on the same Python instance must not enqueue the same
-    # staging object again. If the outer DB transaction later rolls back the
-    # durable rows disappear; the mutable staging object is intentionally left
-    # for the bucket lifecycle rule to reap.
+    # Do not clear immediately: PostgreSQL can still roll back after post_save,
+    # while the in-memory model object and its FieldFile do not. Keeping the
+    # intent until outer commit makes a retry on the same object recreate the
+    # durable row instead of persisting a final key with no promotion record.
+    transaction.on_commit(lambda: _clear_pending_after_commit(instance))
+    return rows
+
+
+def discard_staged_uploads(instance) -> None:
+    """Best-effort cleanup for a caller that knows its DB transaction failed."""
+    pending = list(getattr(instance, _PENDING_ATTR, ()))
+    for item in pending:
+        _delete_staging_object(item.staging_name)
     setattr(instance, _PENDING_ATTR, [])
-    return created
 
 
 @receiver(pre_save, sender="documents.NormativeDocument", dispatch_uid="stage_nrd_original")
