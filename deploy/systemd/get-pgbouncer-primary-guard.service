@@ -6,15 +6,16 @@ Requires=haproxy.service pgbouncer.service
 
 [Service]
 Type=simple
-# Must match the PgBouncer Unix user: the special admin-console user
-# "pgbouncer" is passwordless only over a Unix socket from the same UID.
+# Same UID as PgBouncer: the built-in console user "pgbouncer" is
+# passwordless only on the local Unix socket for the owning Unix account.
 User=pgbouncer
 Group=pgbouncer
-# HAProxy Runtime API socket is mode 0660 and owned by group haproxy.
-SupplementaryGroups=haproxy
+# HAProxy creates /run/haproxy/guard.sock as group pgbouncer, level=user.
+# No supplementary membership in the HAProxy/admin group is required.
 ExecStart=/usr/bin/python3 /usr/local/libexec/bz-get/pgbouncer_primary_guard.py
 Restart=always
 RestartSec=2
+SyslogIdentifier=bz-get-pgbouncer-primary-guard
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
