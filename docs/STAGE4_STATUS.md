@@ -205,8 +205,21 @@ SLA возникает только после утверждения Заказ
 2. Развернуть две физически разделённые MinIO площадки.
 3. Развернуть два Alertmanager и подключить реальные warning/critical receivers.
 4. Заполнить `/etc/bz-get/stage4-acceptance.env` реальными endpoints/TLS paths,
-   а также согласовать с Заказчиком объёмы приёмки (`SEARCH_REINDEX_DOCUMENTS`,
-   `MINIO_HASH_SAMPLE_SIZE`): значения по умолчанию — 10 000 и 500.
+   а также согласовать с Заказчиком:
+   - объёмы приёмки — `SEARCH_REINDEX_DOCUMENTS` (10 000 по умолчанию) и
+     `MINIO_HASH_SAMPLE_SIZE` (500);
+   - `MINIO_HASH_SAMPLE_SEED` — выборка объектов MinIO детерминирована по
+     этому seed, чтобы повторный прогон и прогон другим оператором
+     проверяли те же объекты, а не разные;
+   - `SEARCH_REINDEX_MAX_SECONDS` — предельное время переиндексации, выше
+     которого прогон считается проваленным;
+   - `ACCEPTANCE_ALLOW_DESTRUCTIVE_REINDEX` — явный opt-in на разрушительный
+     cold rebuild поискового read-model; без него harness fail-closed
+     отказывается выполнять destructive-сценарий;
+   - `ACCEPTANCE_WAIVER_ID` / `ACCEPTANCE_WAIVER_REASON` /
+     `ACCEPTANCE_WAIVER_APPROVER` — заполняются только если приёмка
+     сдаётся с отступлением: итог тогда `PASS_WITH_WAIVER`, а не `PASS`,
+     и все три поля попадают в evidence.
 5. Выполнить acceptance preflight и сохранить evidence.
 6. Провести planned switchover и unplanned PostgreSQL failover.
 7. Провести full/diff/incr pgBackRest + continuous WAL и isolated PITR.
@@ -219,9 +232,19 @@ SLA возникает только после утверждения Заказ
 12. Утвердить измеренные RPO/RTO и заменить bootstrap alert thresholds на
     SLA-derived значения. RTO измеряется `write-path-probe.sh` с точки зрения
     приложения, а не подключением к HAProxy.
-13. Принять решение по Ф-4 (`docs/STAGE4_LAB_REHEARSAL.md`): порядок слоёв
-    PgBouncer/HAProxy либо иной механизм сброса пула после смены лидера.
-    До решения плановое переключение нельзя считать прозрачным для АИС.
+13. Замерить на стенде окно Ф-4 (`docs/STAGE4_LAB_REHEARSAL.md`). Из двух
+    вариантов — менять порядок слоёв PgBouncer/HAProxy либо сбрасывать пул
+    после смены лидера — реализован второй:
+    `deploy/ha/pgbouncer_primary_guard.py` поллит read-only Runtime API
+    HAProxy и на смене лидера выполняет `RECONNECT` + `WAIT_CLOSE` для
+    PgBouncer. Топология менять не требуется, решение Заказчика больше не
+    блокирует приёмку. **Но «реализовано» ≠ «измерено»:** guard сокращает
+    окно, а не обнуляет его — оно равно сходимости health-check HAProxy +
+    до одного интервала поллинга (по умолчанию 1 с) + время
+    RECONNECT/WAIT_CLOSE, причём `WAIT_CLOSE` дожидается завершения уже
+    идущих транзакций. Приёмка обязана перемерить это окно на плановом
+    switchover через `deploy/acceptance/write-path-probe.sh` на порту
+    PgBouncer 6432 и сверить с целевым RTO.
 
 ## Граница автоматизации
 

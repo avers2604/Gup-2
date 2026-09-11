@@ -85,4 +85,28 @@ grep -q 'RECONNECT' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 grep -q 'WAIT_CLOSE' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 grep -q '/run/haproxy/guard.sock' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 
+# Имя секции HAProxy, обслуживающей запись, должно совпадать с тем, что ищет
+# guard в `show stat`. Рассинхрон здесь не даёт ошибки: guard просто не найдёт
+# строк для неизвестного proxy, будет считать топологию неоднозначной и НИ РАЗУ
+# не выполнит RECONNECT — защита от Ф-4 молча выключится.
+GUARD_PROXY_NAME="${PGB_PRIMARY_GUARD_PROXY_NAME:-$(
+  python3 - "$SCRIPT_DIR/pgbouncer_primary_guard.py" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+match = re.search(r'^DEFAULT_PROXY_NAME\s*=\s*"([^"]+)"', text, re.MULTILINE)
+print(match.group(1) if match else "")
+PY
+)}"
+if [[ -z "$GUARD_PROXY_NAME" ]]; then
+  echo "ERROR: cannot determine guard proxy name from pgbouncer_primary_guard.py" >&2
+  exit 2
+fi
+if ! grep -Eq "^[[:space:]]*(listen|backend)[[:space:]]+${GUARD_PROXY_NAME}[[:space:]]*$" "$HAPROXY_CONFIG"; then
+  echo "ERROR: $HAPROXY_CONFIG has no 'listen/backend ${GUARD_PROXY_NAME}' section;" >&2
+  echo "       PgBouncer primary guard would never issue RECONNECT." >&2
+  echo "       Rename the section or set PGB_PRIMARY_GUARD_PROXY_NAME." >&2
+  exit 2
+fi
+echo "HAProxy write section matches guard proxy name: ${GUARD_PROXY_NAME}"
+
 echo "HA configuration validation: OK"

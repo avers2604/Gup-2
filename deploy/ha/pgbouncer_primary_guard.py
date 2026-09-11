@@ -43,6 +43,12 @@ import time
 LOG = logging.getLogger("pgbouncer-primary-guard")
 
 DEFAULT_HAPROXY_SOCKET = "/run/haproxy/guard.sock"
+# Must match the HAProxy section name serving writes (`listen postgres_primary`
+# in haproxy.cfg.example). A mismatch is not a loud failure: `show stat` simply
+# reports no rows for the unknown proxy, the guard treats every sample as an
+# ambiguous topology and never issues RECONNECT. deploy/ha/validate.sh asserts
+# the two stay in sync.
+DEFAULT_PROXY_NAME = "postgres_primary"
 DEFAULT_PGBOUNCER_SOCKET_DIR = "/var/run/postgresql"
 DEFAULT_PGBOUNCER_PORT = 6432
 DEFAULT_DATABASE = "bz_get"
@@ -54,7 +60,7 @@ class TopologyAmbiguous(RuntimeError):
     pass
 
 
-def parse_primary_backend(payload: str, *, proxy_name: str = "postgres_primary") -> str:
+def parse_primary_backend(payload: str, *, proxy_name: str = DEFAULT_PROXY_NAME) -> str:
     """Return the single HAProxy server currently UP for the write backend."""
     if not payload.strip():
         raise TopologyAmbiguous("HAProxy returned an empty stats response")
@@ -149,6 +155,7 @@ def observe_once(
     pgbouncer_port: int,
     command_timeout: float,
     psql: str,
+    proxy_name: str = DEFAULT_PROXY_NAME,
 ) -> str:
     """Observe one topology sample and reconnect if the selected backend changed.
 
@@ -157,7 +164,7 @@ def observe_once(
     was restarted after a switchover.
     """
     payload = haproxy_stats(haproxy_socket)
-    current = parse_primary_backend(payload)
+    current = parse_primary_backend(payload, proxy_name=proxy_name)
     if current == previous_backend:
         return current
 
@@ -211,6 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
             os.environ.get("PGB_PRIMARY_GUARD_COMMAND_TIMEOUT", DEFAULT_COMMAND_TIMEOUT)
         ),
     )
+    parser.add_argument(
+        "--proxy-name",
+        default=os.environ.get("PGB_PRIMARY_GUARD_PROXY_NAME", DEFAULT_PROXY_NAME),
+        help="HAProxy section serving writes; must match haproxy.cfg",
+    )
     parser.add_argument("--psql", default=os.environ.get("PGB_PRIMARY_GUARD_PSQL", "psql"))
     parser.add_argument(
         "--once",
@@ -245,6 +257,7 @@ def main(argv=None) -> int:
                 pgbouncer_port=args.pgbouncer_port,
                 command_timeout=args.command_timeout,
                 psql=args.psql,
+                proxy_name=args.proxy_name,
             )
         except TopologyAmbiguous as exc:
             # Zero UP can be the normal convergence interval of a switchover;
