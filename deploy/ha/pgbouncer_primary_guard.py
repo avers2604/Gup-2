@@ -15,15 +15,18 @@ a downstream component such as HAProxy changes its routing while PgBouncer's
 own database connection string stays unchanged. WAIT_CLOSE then confirms that
 all server connections marked close_needed have actually left the pool.
 
-The guard reads HAProxy's local Runtime API socket. When exactly one UP backend
-in `postgres_primary` changes, it runs on the local PgBouncer admin console:
+Trigger model: this guard POLLS HAProxy's dedicated read-only Unix Runtime API
+socket (default once per second); it is not a Patroni callback. Therefore the
+reaction window is bounded by HAProxy health convergence + <= one poll interval
++ RECONNECT/WAIT_CLOSE. Real acceptance must remeasure that window through
+`deploy/acceptance/write-path-probe.sh` on PgBouncer :6432.
 
-    RECONNECT bz_get;
-    WAIT_CLOSE bz_get;
-
-Run this process as the same Unix user as PgBouncer. The special console user
-`pgbouncer` may then connect over PgBouncer's Unix socket without a password;
-no application or PostgreSQL credentials are needed by this guard.
+The Runtime API is intentionally not exposed over TCP. HAProxy creates a
+separate `level user` socket owned for the pgbouncer Unix account; the guard
+cannot execute HAProxy administrative commands. PgBouncer administration also
+uses the local Unix socket and the built-in same-UID `pgbouncer` console user,
+so the process needs no PostgreSQL/application password. Every topology change,
+ambiguous topology and RECONNECT result is timestamped in the service journal.
 """
 from __future__ import annotations
 
@@ -39,7 +42,7 @@ import time
 
 LOG = logging.getLogger("pgbouncer-primary-guard")
 
-DEFAULT_HAPROXY_SOCKET = "/run/haproxy/admin.sock"
+DEFAULT_HAPROXY_SOCKET = "/run/haproxy/guard.sock"
 DEFAULT_PGBOUNCER_SOCKET_DIR = "/var/run/postgresql"
 DEFAULT_PGBOUNCER_PORT = 6432
 DEFAULT_DATABASE = "bz_get"
@@ -59,7 +62,6 @@ def parse_primary_backend(payload: str, *, proxy_name: str = "postgres_primary")
     lines = payload.splitlines()
     if not lines:
         raise TopologyAmbiguous("HAProxy returned no stats rows")
-    # HAProxy emits '# pxname,...'; csv.DictReader needs the real first key.
     if lines[0].startswith("# "):
         lines[0] = lines[0][2:]
     elif lines[0].startswith("#"):
@@ -85,7 +87,7 @@ def parse_primary_backend(payload: str, *, proxy_name: str = "postgres_primary")
 
 
 def haproxy_stats(socket_path: str, *, timeout: float = 2.0) -> str:
-    """Read `show stat` from the local HAProxy Runtime API Unix socket."""
+    """Read `show stat` from the local read-only HAProxy Runtime API socket."""
     chunks = []
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
@@ -245,14 +247,16 @@ def main(argv=None) -> int:
                 psql=args.psql,
             )
         except TopologyAmbiguous as exc:
-            # During the actual switchover HAProxy may briefly expose zero UP
-            # backends. Do not advance state; the next unique backend will
-            # trigger RECONNECT. Multiple UP backends are also fail-closed.
-            LOG.warning("Topology not ready: %s", exc)
+            # Zero UP can be the normal convergence interval of a switchover;
+            # two or more UP is a split-brain/topology incident. In both cases
+            # fail closed: never advance state, never RECONNECT to an ambiguous
+            # route, and retry forever on the next poll. PatroniPrimaryCountInvalid
+            # provides the independent Prometheus/Alertmanager operator signal.
+            LOG.warning("Topology not ready; state retained and will be retried: %s", exc)
         except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
             # Crucially, previous is not changed on failure. Once HAProxy and
             # PgBouncer become reachable the same topology transition is retried.
-            LOG.error("Primary guard iteration failed: %s", exc)
+            LOG.error("Primary guard iteration failed; state retained for retry: %s", exc)
 
         if args.once:
             return 0 if previous is not None else 2
