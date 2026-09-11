@@ -24,14 +24,23 @@ DEFAULT_SEARCH_METRIC_DEDUP_SECONDS = 30
 
 
 def increment_counter(name: str, amount: int = 1) -> None:
-    """Atomically increment a persisted counter without process-local state."""
-    updated = BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
+    """Atomically increment a persisted counter and its last-mutation timestamp."""
+    now = timezone.now()
+    updated = BusinessMetricCounter.objects.filter(name=name).update(
+        value=F("value") + amount,
+        updated_at=now,
+    )
     if updated:
         return
     try:
         BusinessMetricCounter.objects.create(name=name, value=amount)
     except IntegrityError:
-        BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
+        # Concurrent first writer won the INSERT. QuerySet.update() bypasses
+        # auto_now, so updated_at must be advanced explicitly here as well.
+        BusinessMetricCounter.objects.filter(name=name).update(
+            value=F("value") + amount,
+            updated_at=now,
+        )
 
 
 def build_search_metric_key(
