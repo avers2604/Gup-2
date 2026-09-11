@@ -1,8 +1,10 @@
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
+from django.db import transaction
 from django.utils import timezone
 
+from apps.core.business_metrics import LOGIN_FAILURE_PURGE_SUCCESSES, increment_counter
 from apps.iam.models import LoginFailure
 
 
@@ -23,7 +25,12 @@ class Command(BaseCommand):
             raise CommandError("--older-than-hours должен быть >= 1")
 
         cutoff = timezone.now() - timedelta(hours=hours)
-        deleted, _ = LoginFailure.objects.filter(created_at__lt=cutoff).delete()
+        # Delete + heartbeat are one DB transaction: monitoring may only report
+        # a successful purge after the retention mutation itself committed.
+        with transaction.atomic():
+            deleted, _ = LoginFailure.objects.filter(created_at__lt=cutoff).delete()
+            increment_counter(LOGIN_FAILURE_PURGE_SUCCESSES)
+
         self.stdout.write(
             self.style.SUCCESS(
                 f"Удалено operational LoginFailure: {deleted}; cutoff={cutoff.isoformat()}"
