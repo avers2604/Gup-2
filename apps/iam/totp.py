@@ -27,6 +27,13 @@ def totp_provisioning_uri(*, secret: str, personnel_number: str) -> str:
 
 
 def verify_totp_code(*, secret: str, code: str) -> bool:
+    """НЕ использовать для входа/подтверждения в бою: в отличие от
+    matching_step() ниже, эта функция не возвращает принятый шаг времени —
+    вызывающему нечем закрыть окно повторного использования одного и того
+    же кода (replay), а именно от этого защищает user.totp_last_step в
+    services.py/views.py/api.py. Оставлена как эталонная проверка формата/
+    валидности кода для тестов (apps/iam/tests/test_auth_api.py), не как
+    альтернатива matching_step()."""
     if not secret or not code:
         return False
     return pyotp.totp.TOTP(secret).verify(code, valid_window=_VALID_WINDOW)

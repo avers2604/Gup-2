@@ -189,6 +189,13 @@ SPECTACULAR_SETTINGS = {
     ),
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # drf-spectacular по умолчанию отдаёт схему/Swagger-UI анонимно
+    # (SERVE_PERMISSIONS=AllowAny) — независимо от общего
+    # REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] выше. Без этой строки
+    # /api/v1/schema/ и /api/v1/docs/ раскрывали полную карту External API
+    # (все поля сериализаторов, все эндпоинты) неаутентифицированному
+    # внешнему наблюдателю.
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAuthenticated"],
 }
 
 # Blacklist (rest_framework_simplejwt.token_blacklist, по запросу ревью

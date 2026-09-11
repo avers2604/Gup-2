@@ -26,6 +26,7 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     search_fields = ("reg_number", "title", "summary")
     filter_horizontal = ("applied_depts", "category_tags")
     readonly_fields = ("retention_mode", "retention_until")
+    list_select_related = ("issuer_dept",)
     inlines = [DocumentRelationInline, DocumentStatusHistoryInline]
 
     def get_queryset(self, request):
@@ -64,3 +65,4 @@ class TagAdmin(admin.ModelAdmin):
 class DocumentRelationAdmin(admin.ModelAdmin):
     list_display = ("from_document", "relation_type", "to_document", "created_at")
     list_filter = ("relation_type",)
+    list_select_related = ("from_document", "to_document")

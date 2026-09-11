@@ -4,12 +4,16 @@ DDD-граница, объявленная в STACK.md: единственное
 версия бланка и учитывается скачивание. `views.py` и админка вызывают
 эти функции, а не пишут в модель напрямую.
 """
+import logging
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F
 
 from . import permissions
 from .models import Template, TemplateFamily
+
+logger = logging.getLogger(__name__)
 
 
 def publish_version(*, actor, family, form=None, **attrs):
@@ -54,7 +58,29 @@ def publish_version(*, actor, family, form=None, **attrs):
             previous.status = Template.Status.SUPERSEDED
             previous.superseded_by = template
             previous._audit_actor = actor
-            previous.save(update_fields=["status", "superseded_by", "updated_at"])
+            try:
+                previous.save(update_fields=["status", "superseded_by", "updated_at"])
+            except Exception:
+                # template.save() выше уже физически записал file_editable/
+                # file_sample в WORM-бакет originals (Model.save() пишет
+                # FileField в storage синхронно, до коммита транзакции БД —
+                # эта запись не транзакционна с Postgres и не откатится
+                # сама). Если этот save() всё же бросит исключение,
+                # транзакция откатится, а строка Template с ней исчезнет —
+                # файлы, если их не подчистить явно, останутся висеть в
+                # WORM-бакете без ссылающейся строки в БД.
+                for field_name in ("file_editable", "file_sample"):
+                    field_file = getattr(template, field_name)
+                    if not field_file:
+                        continue
+                    try:
+                        field_file.delete(save=False)
+                    except Exception:
+                        logger.exception(
+                            "Не удалось удалить осиротевший файл %s=%r после отката публикации версии (family=%s)",
+                            field_name, field_file.name, family.pk,
+                        )
+                raise
 
     return template
 

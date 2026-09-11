@@ -32,6 +32,7 @@ class TemplateAdmin(admin.ModelAdmin):
     list_display = ("family", "version", "change_type", "status", "download_count", "last_reviewed_at")
     list_filter = ("status", "change_type")
     search_fields = ("family__name", "version")
+    list_select_related = ("family",)
 
     @staticmethod
     def _can_manage(request):

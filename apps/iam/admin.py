@@ -22,6 +22,7 @@ class UserAdmin(DjangoUserAdmin):
     list_filter = ("role", "status", "department", "dsp_access")
     search_fields = ("personnel_number", "last_name", "first_name", "middle_name")
     readonly_fields = ("full_name", "totp_enabled")
+    list_select_related = ("department",)
     fieldsets = (
         (None, {"fields": ("personnel_number", "password")}),
         ("Персональные данные", {
@@ -57,7 +58,14 @@ class UserAdmin(DjangoUserAdmin):
     def get_readonly_fields(self, request, obj=None):
         fields = tuple(super().get_readonly_fields(request, obj))
         if not request.user.is_superuser:
-            fields += ("is_staff", "is_superuser", "groups", "user_permissions")
+            # role/dsp_access — это фактический механизм авторизации
+            # приложения (apps/documents/permissions.py и др. проверяют
+            # user.role, не is_staff/is_superuser). Без этого ограничения
+            # любой держатель штатного Django-разрешения iam.change_user
+            # мог назначить себе или коллеге role=administrator через
+            # обычную форму редактирования пользователя в админке, минуя
+            # прикладную матрицу прав целиком.
+            fields += ("is_staff", "is_superuser", "groups", "user_permissions", "role", "dsp_access")
         return fields
 
     def save_model(self, request, obj, form, change):

@@ -3,7 +3,7 @@ import datetime
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import FileExtensionValidator, MinValueValidator, MaxValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
@@ -106,13 +106,20 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
     # editable=False (в формах и админке не показывается).
     edit_version = models.PositiveIntegerField(default=0, editable=False)
 
+    # ТЗ 2.2 §4.2.1 задаёт эти поля именно как PDF/A и DOCX/XLSX (OOXML) —
+    # то же предположение, на которое опирается apps.core.macro_check
+    # (структурная ZIP-проверка макросов не имеет смысла для файлов иных
+    # форматов). Без валидатора расширения поле принимало файл любого
+    # содержимого/типа под любым названием.
     files_original = models.FileField(
         upload_to="documents/originals/%Y/%m/", storage=originals_storage,
+        validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
         verbose_name="Скан оригинала (PDF/A)",
     )
     files_original_sha256 = models.CharField(max_length=64, blank=True, verbose_name="SHA-256 оригинала")
     files_editable = models.FileField(
         upload_to="documents/editable/%Y/%m/", storage=working_storage,
+        validators=[FileExtensionValidator(allowed_extensions=["docx", "xlsx"])],
         blank=True, null=True, verbose_name="Редактируемый файл",
     )
 
