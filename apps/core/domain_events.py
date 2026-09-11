@@ -1,10 +1,11 @@
 """Small in-process domain event bus.
 
-Domain events decouple write-model code from audit/session/password-history
-side effects. By default handlers run synchronously in the current database
-transaction: this keeps critical audit/history changes atomic with the write
-and makes rollback semantics deterministic. Non-critical integrations can use
-``publish_after_commit`` explicitly.
+Synchronous ``publish()`` is reserved for critical effects that must succeed or
+fail atomically with the source transaction: WORM audit, password history,
+session invalidation. A missing subscriber is therefore a runtime error rather
+than a silent no-op. Non-critical integrations use ``publish_after_commit()``;
+there an absent subscriber or a handler failure cannot roll back a commit and
+is intentionally tolerated/logged.
 """
 from __future__ import annotations
 
@@ -24,6 +25,10 @@ class DomainEvent:
     payload: dict[str, Any]
 
 
+class MissingDomainEventHandler(RuntimeError):
+    """Critical synchronous event has no registered consumer."""
+
+
 Handler = Callable[[DomainEvent], None]
 _HANDLERS: dict[str, list[Handler]] = {}
 
@@ -40,28 +45,37 @@ def register(event_name: str) -> Callable[[Handler], Handler]:
     return decorator
 
 
-def _dispatch(event: DomainEvent) -> None:
-    for handler in tuple(_HANDLERS.get(event.name, ())):
+def _dispatch(event: DomainEvent, *, require_handler: bool) -> None:
+    handlers = tuple(_HANDLERS.get(event.name, ()))
+    if require_handler and not handlers:
+        raise MissingDomainEventHandler(
+            f"Critical domain event {event.name!r} has no registered handlers"
+        )
+    for handler in handlers:
         handler(event)
 
 
 def publish(event_name: str, **payload: Any) -> None:
-    """Dispatch inside the current transaction.
+    """Dispatch a critical event inside the current transaction.
 
     Critical database side effects such as the WORM audit log and password
-    history must succeed or fail together with the state change, so exceptions
-    intentionally propagate to the caller.
+    history must succeed or fail together with the state change. Handler
+    exceptions intentionally propagate, and a missing handler is itself an
+    error so a broken AppConfig import cannot silently disable the side effect.
     """
-    _dispatch(DomainEvent(name=event_name, payload=payload))
+    _dispatch(
+        DomainEvent(name=event_name, payload=payload),
+        require_handler=True,
+    )
 
 
 def publish_after_commit(event_name: str, **payload: Any) -> None:
-    """Dispatch only after a successful commit for non-critical integrations."""
+    """Dispatch after a successful commit for non-critical integrations."""
     event = DomainEvent(name=event_name, payload=payload)
 
     def callback() -> None:
         try:
-            _dispatch(event)
+            _dispatch(event, require_handler=False)
         except Exception:
             logger.exception("Post-commit domain event handler failed: %s", event_name)
 
