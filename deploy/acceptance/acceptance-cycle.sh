@@ -57,13 +57,10 @@ chmod 0700 "$run_dir"
 checkpoints="$run_dir/checkpoints.csv"
 extended_results="$run_dir/extended-results.env"
 policy_evidence="$run_dir/acceptance-policy.json"
+checkpoint_evidence="$run_dir/acceptance-checkpoints.json"
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Запустить внешний инструмент, сохранив его вывод в evidence. Без этой обёртки
-# `set -e` обрывает preflight на первой же неуспешной команде, а диагностика
-# остаётся только в файле: оператор видит голый код возврата и ни строчки
-# причины. Проверено на реальном стенде-репетиции (etcdctl и pgbackrest).
 run_tool() {
   local label="$1" out="$2"
   shift 2
@@ -102,6 +99,8 @@ queue_redis_kill_result=NOT_RUN
 minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
+minio_hash_seed=
+minio_hash_algorithm=sorted-random-v1
 minio_hash_result=NOT_RUN
 EOF
 }
@@ -124,9 +123,9 @@ check_acceptance_policy() {
   return "$rc"
 }
 
-policy_field() {
-  local field="$1"
-  python3 - "$policy_evidence" "$field" <<'PY'
+json_field() {
+  local path="$1" field="$2"
+  python3 - "$path" "$field" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -137,6 +136,18 @@ if isinstance(value, list):
 else:
     print(value)
 PY
+}
+
+verify_required_checkpoints() {
+  local output="$run_dir/acceptance-checkpoints-output.txt"
+  local rc=0
+  python3 "$SCRIPT_DIR/acceptance_checkpoints.py" "$checkpoints" \
+    --evidence "$checkpoint_evidence" >"$output" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    echo "ERROR: required real-stand acceptance checkpoints are incomplete." >&2
+    cat "$output" >&2
+  fi
+  return "$rc"
 }
 
 require_commands() {
@@ -157,25 +168,20 @@ check_patroni() {
 import json
 import sys
 from pathlib import Path
-
 path, expected_raw, max_lag_raw = sys.argv[1:]
 rows = json.loads(Path(path).read_text())
 if not isinstance(rows, list) or not rows:
     raise SystemExit("Patroni topology is empty")
-
 def norm(row):
     return {str(k).strip().lower(): v for k, v in row.items()}
-
 rows = [norm(r) for r in rows]
 expected = {x.strip() for x in expected_raw.split(",") if x.strip()}
 actual = {str(r.get("member", "")).strip() for r in rows}
 if actual != expected:
     raise SystemExit(f"Patroni members mismatch: expected={sorted(expected)} actual={sorted(actual)}")
-
 leaders = [r for r in rows if str(r.get("role", "")).strip().lower() in {"leader", "primary"}]
 if len(leaders) != 1:
     raise SystemExit(f"expected exactly one leader/primary, found {len(leaders)}")
-
 max_lag = int(max_lag_raw)
 for row in rows:
     role = str(row.get("role", "")).strip().lower()
@@ -214,11 +220,6 @@ check_etcd() {
 
 check_pgbackrest() {
   local out="$run_dir/pgbackrest-preflight.json"
-  # Инвентарь экспортируется целиком через `set -a`, а pgBackRest трактует
-  # PGBACKREST_<OPTION> как собственную опцию: PGBACKREST_BIN даёт
-  # "WARN: environment contains invalid option 'bin'", а имя вроде
-  # PGBACKREST_REPO1_PATH молча переопределило бы репозиторий бэкапов.
-  # Поэтому вызываем инструмент с вычищенным префиксом.
   run_tool "pgbackrest check" "$run_dir/pgbackrest-check.txt" \
     env -u PGBACKREST_BIN -u PGBACKREST_STANZA \
       "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" check
@@ -230,7 +231,6 @@ import json
 import sys
 import time
 from pathlib import Path
-
 path, max_age_raw = sys.argv[1:]
 payload = json.loads(Path(path).read_text())
 if not isinstance(payload, list) or not payload:
@@ -263,8 +263,7 @@ check_minio() {
   # shellcheck disable=SC1090
   . "$MINIO_DR_ENV"
   set +a
-  run_tool "MinIO DR check script" "$run_dir/minio-preflight.txt" \
-    bash "$MINIO_CHECK_SCRIPT"
+  run_tool "MinIO DR check script" "$run_dir/minio-preflight.txt" bash "$MINIO_CHECK_SCRIPT"
   sed 's/^/    /' "$run_dir/minio-preflight.txt"
   echo "MinIO DR OK"
 }
@@ -324,12 +323,10 @@ finalize_report() {
   python3 - "$incident" "$durable" "$restored" >"$run_dir/metrics.env" <<'PY'
 from datetime import datetime
 import sys
-
 def parse(value, name):
     if not value or not value.endswith("Z"):
         raise SystemExit(f"{name} must be explicit UTC and end with Z")
     return datetime.fromisoformat(value[:-1] + "+00:00")
-
 incident = parse(sys.argv[1], "ACCEPTANCE_INCIDENT_UTC")
 durable = parse(sys.argv[2], "ACCEPTANCE_LAST_DURABLE_UTC")
 restored = parse(sys.argv[3], "ACCEPTANCE_SERVICE_RESTORED_UTC")
@@ -348,12 +345,20 @@ PY
   local search_reindex_mode="${search_reindex_mode:-NOT_RUN}"
   local search_required="${search_reindex_required_documents:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
   local minio_required="${minio_hash_required_count:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
-  local policy_rc=0
+  local minio_seed="${minio_hash_seed:-${MINIO_HASH_SAMPLE_SEED:-$run_id}}"
+  local minio_algorithm="${minio_hash_algorithm:-sorted-random-v1}"
+
+  local policy_rc=0 checkpoint_rc=0
   check_acceptance_policy "$search_required" "$search_reindex_limit_seconds" "$minio_required" || policy_rc=$?
-  local policy_status="$(policy_field status)"
-  local policy_waiver_id="$(policy_field waiver_id)"
-  local policy_waiver_approver="$(policy_field waiver_approver)"
-  local policy_weakened="$(policy_field weakened_criteria)"
+  verify_required_checkpoints || checkpoint_rc=$?
+
+  local policy_status="$(json_field "$policy_evidence" status)"
+  local policy_waiver_id="$(json_field "$policy_evidence" waiver_id)"
+  local policy_waiver_approver="$(json_field "$policy_evidence" waiver_approver)"
+  local policy_waiver_reason="$(json_field "$policy_evidence" waiver_reason)"
+  local policy_weakened="$(json_field "$policy_evidence" weakened_criteria)"
+  local checkpoint_status="$(json_field "$checkpoint_evidence" status)"
+  local checkpoint_missing="$(json_field "$checkpoint_evidence" missing)"
 
   local -a discrepancies=()
 
@@ -361,6 +366,12 @@ PY
   if (( policy_rc != 0 )) || [[ "$policy_status" == FAIL ]]; then
     policy_effective=FAIL
     discrepancies+=("acceptance criteria are weaker than the repository baseline without a complete approved waiver. See acceptance-policy.json evidence.")
+  fi
+
+  local checkpoint_effective=PASS
+  if (( checkpoint_rc != 0 )) || [[ "$checkpoint_status" != PASS ]]; then
+    checkpoint_effective=FAIL
+    discrepancies+=("required real-stand checkpoints are incomplete: ${checkpoint_missing:-unknown}. Record every required HA/DR validation checkpoint before finalize.")
   fi
 
   local search_effective=PASS
@@ -412,6 +423,10 @@ PY
     minio_hash_effective=FAIL
     discrepancies+=("MinIO versioned sample found $minio_hash_mismatches mismatches. VersionId/SHA-256/Object Lock consistency is not proven; investigate before acceptance.")
   fi
+  if [[ -z "$minio_seed" ]]; then
+    minio_hash_effective=FAIL
+    discrepancies+=("MinIO sample seed is empty, so the sampled version set cannot be reproduced.")
+  fi
 
   local legacy_effective=PASS
   if [[ "$db_result" != PASS || "$minio_result" != PASS || "$alert_result" != PASS || "$app_result" != PASS ]]; then
@@ -425,6 +440,7 @@ PY
   [[ "$queue_effective" == PASS ]] || overall=FAIL
   [[ "$minio_hash_effective" == PASS ]] || overall=FAIL
   [[ "$policy_effective" == PASS ]] || overall=FAIL
+  [[ "$checkpoint_effective" == PASS ]] || overall=FAIL
   if [[ "$overall" == PASS && "$policy_status" == PASS_WITH_WAIVER ]]; then
     overall=PASS_WITH_WAIVER
   fi
@@ -436,7 +452,10 @@ PY
     echo "- Acceptance policy: **$policy_status**"
     echo "- Waiver ID: ${policy_waiver_id:-—}"
     echo "- Waiver approver: ${policy_waiver_approver:-—}"
+    echo "- Waiver reason: ${policy_waiver_reason:-—}"
     echo "- Weakened criteria: ${policy_weakened:-—}"
+    echo "- Required checkpoints: **$checkpoint_status**"
+    echo "- Missing required checkpoints: ${checkpoint_missing:-—}"
     echo "- Site: ${ACCEPTANCE_SITE:-TBD}"
     echo "- Change: ${ACCEPTANCE_CHANGE_ID:-TBD}"
     echo "- Operator: ${ACCEPTANCE_OPERATOR:-TBD}"
@@ -462,6 +481,8 @@ PY
     echo "- Redis kill -9 / recovery: **$queue_redis_kill_result**"
     echo "- MinIO versioned WORM sample versions: $minio_hash_sample_count"
     echo "- MinIO versioned WORM required versions: $minio_required"
+    echo "- MinIO sample seed: ${minio_seed:-—}"
+    echo "- MinIO sample algorithm: $minio_algorithm"
     echo "- MinIO version/SHA/Object-Lock mismatches: $minio_hash_mismatches"
     echo "- MinIO versioned WORM verification: **$minio_hash_effective**"
     echo
@@ -476,13 +497,14 @@ PY
     echo
     echo "Evidence directory: $run_dir"
     echo "Acceptance policy evidence: $policy_evidence"
+    echo "Checkpoint evidence: $checkpoint_evidence"
     echo
-    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object-version/checksum/Object-Lock checks, queue kill/recovery commands, synthetic alert delivery confirmation and application smoke-test results."
+    echo "Required manual evidence: failover/switchover commands, PITR target and validation, replica rebuild, MinIO failover/failback version checks, Alertmanager peer loss, application smoke test and write-path switchover measurement."
     echo
     echo "## Decision"
     echo
     if [[ "$overall" == PASS_WITH_WAIVER ]]; then
-      echo "This run met the effective criteria only under the approved waiver identified above. It must never be represented as an unqualified PASS."
+      echo "This run met the effective criteria only under waiver ${policy_waiver_id:-UNKNOWN}, approved by ${policy_waiver_approver:-UNKNOWN}: ${policy_waiver_reason:-NO_REASON}. Weakened criteria: ${policy_weakened:-UNKNOWN}. It must never be represented as an unqualified PASS."
       echo
     fi
     echo "This generated result is technical evidence only. Production RPO/RTO/SLA acceptance requires the designated customer/operations approver."
