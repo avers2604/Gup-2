@@ -50,3 +50,28 @@ def queue_acceptance_probe(self, probe_id: int, sleep_seconds: int = 15):
 def dispatch_task_outbox():
     from .outbox import dispatch_pending
     return dispatch_pending()
+
+
+@shared_task(
+    bind=True,
+    max_retries=100,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    track_started=True,
+)
+def promote_staged_file(self, promotion_id: str):
+    """Promote one mutable staging object into Object-Locked originals.
+
+    The operation is idempotent: the destination carries the durable
+    promotion UUID in object metadata, so worker loss after S3 copy but before
+    PostgreSQL commit does not create another immutable version on retry.
+    """
+    from .staged_files import promote_staged_file_once, record_promotion_error
+
+    try:
+        digest = promote_staged_file_once(promotion_id)
+    except Exception as exc:
+        record_promotion_error(promotion_id, exc)
+        delay = min(300, 2 ** min(self.request.retries + 1, 8))
+        raise self.retry(exc=exc, countdown=delay)
+    return {"promotion_id": promotion_id, "sha256": digest}
