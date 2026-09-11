@@ -58,6 +58,7 @@ minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
 minio_hash_seed=
+minio_hash_algorithm=sorted-random-v1
 minio_hash_result=NOT_RUN
 EOF
 }
@@ -170,8 +171,6 @@ PY
     ;;
 
   minio-hash-500|minio-hash)
-    # Resolve before MINIO_DR_ENV is sourced: the acceptance inventory owns the
-    # required sample and the MinIO helper env may not silently override it.
     sample_size="${MINIO_HASH_SAMPLE_SIZE:-500}"
     [[ "$sample_size" =~ ^[0-9]+$ ]] && (( sample_size > 0 )) || {
       echo "ERROR: MINIO_HASH_SAMPLE_SIZE must be a positive integer" >&2
@@ -181,6 +180,7 @@ PY
     [[ -n "$sample_seed" ]] || { echo "ERROR: MinIO sample seed must not be empty" >&2; exit 64; }
     set_result minio_hash_required_count "$sample_size"
     set_result minio_hash_seed "$sample_seed"
+    set_result minio_hash_algorithm sorted-random-v1
     : "${MINIO_DR_ENV:?MINIO_DR_ENV is required}"
     [[ -r "$MINIO_DR_ENV" ]] || { echo "ERROR: unreadable $MINIO_DR_ENV" >&2; exit 66; }
     set -a
