@@ -49,9 +49,13 @@ class DocumentSearchAPIView(APIView):
         if page is None:
             page = []
             count = len(page)
+            page_number = 1
         else:
             count = paginator.page.paginator.count
-        record_search(count)
+            page_number = paginator.page.number
+        # Page 2..N is navigation through the same logical query and must not
+        # bias zero-result/search-request metrics toward large result sets.
+        record_search(count, page_number=page_number)
 
         results = [
             {
