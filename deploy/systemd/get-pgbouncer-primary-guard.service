@@ -1,0 +1,28 @@
+[Unit]
+Description=BZ GET PgBouncer primary routing guard
+After=network-online.target haproxy.service pgbouncer.service
+Wants=network-online.target
+Requires=haproxy.service pgbouncer.service
+
+[Service]
+Type=simple
+# Must match the PgBouncer Unix user: the special admin-console user
+# "pgbouncer" is passwordless only over a Unix socket from the same UID.
+User=pgbouncer
+Group=pgbouncer
+# HAProxy Runtime API socket is mode 0660 and owned by group haproxy.
+SupplementaryGroups=haproxy
+ExecStart=/usr/bin/python3 /usr/local/libexec/bz-get/pgbouncer_primary_guard.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
