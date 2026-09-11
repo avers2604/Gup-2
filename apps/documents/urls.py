@@ -7,6 +7,12 @@ app_name = "documents"
 urlpatterns = [
     path("", views.DocumentListView.as_view(), name="list"),
     path("new/", views.DocumentCreateView.as_view(), name="create"),
+    path("consolidated/", views.ConsolidatedListView.as_view(), name="consolidated_list"),
+    path(
+        "consolidated/<uuid:pk>/",
+        views.ConsolidatedDetailView.as_view(),
+        name="consolidated_detail",
+    ),
     path("ocr-review/", views.OcrReviewQueueView.as_view(), name="ocr_review_queue"),
     path("ocr-review/<uuid:pk>/", views.OcrReviewView.as_view(), name="ocr_review"),
     # "new/" объявлен ДО "<uuid:pk>/": иначе конвертер uuid всё равно не

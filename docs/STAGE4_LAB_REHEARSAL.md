@@ -234,7 +234,11 @@ HAProxy, а в том, что PgBouncer после переподключени�
 
 Вариант 4 (ретраи приложения на «read-only transaction») guard не отменяет: он
 остаётся страховкой на случай, если guard не запущен или окно поллинга совпало
-с запросом. В коде он пока не реализован.
+с запросом. **Реализован:** `apps/core/write_retry.py` — декоратор
+`retry_on_read_only_primary` распознаёт SQLSTATE 25006 по цепочке `__cause__`,
+закрывает соединение и повторяет операцию один раз; применён к операциям
+записи, не зависящим от уже прочитанного upload
+(`change_document_status`, `add_relation`, `remove_relation`).
 
 Приёмочный RTO в любом случае обязан измеряться
 `deploy/acceptance/write-path-probe.sh`, а не подключением к HAProxy.

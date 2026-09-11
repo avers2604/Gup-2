@@ -163,9 +163,9 @@ groups:
         labels:
           severity: high
           source: export.restricted
-          status: dormant-no-producer-yet
+          status: active
         annotations:
-          summary: "Табельный номер скачал более 5 документов ДСП за час (EXPORT_RESTRICTED). Честная граница: событие пока ничем не пишется, см. STACK.md."
+          summary: "Табельный номер скачал более 5 документов ДСП за час (EXPORT_RESTRICTED). Событие пишется при выдаче ссылки на файл ДСП-документа (apps/documents/file_views.py)."
 
       - uid: audit-alert-offhours-status-change
         title: "Смена статуса документа в нерабочее время"
@@ -248,9 +248,9 @@ groups:
         labels:
           severity: high
           source: audit_log.exported
-          status: dormant-no-producer-yet
+          status: active
         annotations:
-          summary: "Журнал аудита выгружен (AUDIT_LOG_EXPORTED). Честная граница: события экспорта журнала в проекте пока нет ни в одном контуре, см. STACK.md."
+          summary: "Журнал аудита выгружен (AUDIT_LOG_EXPORTED). Событие пишется перед началом отдачи CSV (apps/audit/views.py, AuditLogExportView)."
 
 contactPoints:
   - orgId: 1

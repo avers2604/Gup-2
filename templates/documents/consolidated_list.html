@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Сводные редакции · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Действующие требования</p>
+  <h1 class="title">Сводные редакции</h1>
+  <p class="caption" style="margin-top: var(--space-2);">
+    Документы, в которые внесены действующие изменения. Сводка собирает
+    базовый документ и все изменяющие его документы в одном месте — она
+    не порождает единый «сшитый» текст: система хранит сканы, а не
+    структуру пунктов.
+  </p>
+
+  <div style="margin-top: var(--space-8);">
+    {% if documents %}
+      <p class="caption">
+        Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
+        всего: {{ page_obj.paginator.count }}
+      </p>
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Рег. номер</th>
+              <th>Наименование</th>
+              <th>Служба-эмитент</th>
+              <th>Изменений</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for document in documents %}
+              <tr>
+                <td>{{ document.reg_number }}</td>
+                <td>{{ document.title }}</td>
+                <td>{{ document.issuer_dept.name }}</td>
+                <td class="data">{{ document.amendment_count }}</td>
+                <td>
+                  <a class="btn btn--secondary"
+                     href="{% url 'documents:consolidated_detail' document.pk %}">Сводка</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.has_other_pages %}
+        <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--secondary" href="?page={{ page_obj.previous_page_number }}">Назад</a>
+          {% endif %}
+          {% if page_obj.has_next %}
+            <a class="btn btn--secondary" href="?page={{ page_obj.next_page_number }}">Вперёд</a>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="card">
+        <p>Действующих изменений к документам нет — сводить нечего.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  {% if stale %}
+    <div class="card" style="margin-top: var(--space-8);">
+      <p class="label">Статус разошёлся со связями</p>
+      <p class="caption" style="margin-top: var(--space-2);">
+        У этих документов статус «Действует с изм.», но ни одного
+        действующего изменения не осталось — все изменяющие документы
+        отменены или аннулированы. Статус возвращает в «Действует»
+        Контролёр/Юрист; до этого карточка сообщает об изменениях,
+        которых нет.
+      </p>
+      <div class="table-scroll" style="margin-top: var(--space-4);">
+        <table class="table">
+          <thead><tr><th>Рег. номер</th><th>Наименование</th><th></th></tr></thead>
+          <tbody>
+            {% for document in stale %}
+              <tr>
+                <td>{{ document.reg_number }}</td>
+                <td>{{ document.title }}</td>
+                <td><a href="{% url 'documents:detail' document.pk %}">Карточка</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %}
