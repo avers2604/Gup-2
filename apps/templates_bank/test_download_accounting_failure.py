@@ -17,7 +17,7 @@ class FailedDownloadAccountingTests(TestCase):
         self.user = make_user(personnel_number="0340")
         self.template = _make_template(
             status=Template.Status.SUPERSEDED,
-            version="v-storage-failure",
+            version="v-storage-fail",
         )
         self.template.file_editable = "templates/editable/2026/missing.docx"
         self.template.save(update_fields=["file_editable"])
