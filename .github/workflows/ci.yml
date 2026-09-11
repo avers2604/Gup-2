@@ -79,6 +79,11 @@ jobs:
           bash -n deploy/minio/dr/validate.sh
           bash deploy/minio/dr/validate.sh
 
+      - name: Проверить PgBouncer guard planned switchover
+        run: |
+          python3 -m py_compile deploy/ha/pgbouncer_primary_guard.py
+          python3 deploy/ha/test_pgbouncer_primary_guard.py
+
       - name: Проверить Alertmanager Этапа 4
         # Без установленного amtool helper выполняет shell-проверки и честно
         # пропускает только semantic check Alertmanager. На HA/DR стенде с
