@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.test import Client, TestCase
 from django.urls import reverse
 
@@ -9,6 +10,7 @@ from apps.iam.models import Department, User
 
 class SearchPaginationMetricIntegrationTests(TestCase):
     def setUp(self):
+        cache.clear()
         dept, _ = Department.objects.get_or_create(
             name="Служба метрик поиска",
             defaults={"level": Department.Level.SERVICE},
@@ -47,3 +49,16 @@ class SearchPaginationMetricIntegrationTests(TestCase):
         self.assertEqual(self._value("search_requests"), 1)
         self.assertEqual(self._value("search_zero_results"), 0)
 
+    def test_immediate_repeat_of_same_first_page_counts_once(self):
+        url = reverse("search_ocr:search")
+        first = self.client.get(url, {"q": "контактной сети"})
+        repeat = self.client.get(url, {"q": "  КОНТАКТНОЙ   СЕТИ  "})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(repeat.status_code, 200)
+        self.assertEqual(self._value("search_requests"), 1)
+
+    def test_different_filter_is_a_distinct_logical_search(self):
+        url = reverse("search_ocr:search")
+        self.client.get(url, {"q": "контактной сети"})
+        self.client.get(url, {"q": "контактной сети", "category": "order"})
+        self.assertEqual(self._value("search_requests"), 2)
