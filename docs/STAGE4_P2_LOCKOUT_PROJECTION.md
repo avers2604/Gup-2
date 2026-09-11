@@ -115,7 +115,43 @@ Baseline retention — 24 часа, то есть существенно бол�
 
 Timer запускает cleanup ежедневно, использует `Persistent=true` и небольшой randomized delay. Его следует **включать только на одном scheduler/maintenance узле площадки**, аналогично single-instance scheduler: параллельный запуск на каждом app-node не нужен, хотя сама операция удаления устаревших rows идемпотентна.
 
-Даже если cleanup временно не сработал, correctness lockout не меняется: security queries всегда ограничены текущим временным окном и используют индексы.
+Даже если cleanup временно не сработал, correctness lockout не меняется: security queries всегда ограничены текущим временным окном и используют индексы. Риск здесь эксплуатационный: таблица будет расти до восстановления scheduler-узла.
+
+### Мониторинг очистки и порог 48 часов
+
+Каждый **успешно завершившийся** `purge_login_failures` в той же транзакции, что и DELETE, увеличивает устойчивый PostgreSQL-счётчик `BusinessMetricCounter(name="login_failure_purge_successes")`. Поле `updated_at` этого счётчика явно обновляется при каждом increment и является временем последней подтверждённой очистки. Если DELETE или запись heartbeat не коммитятся, успешный heartbeat не появляется.
+
+`/metrics/business/` экспортирует:
+
+- `bz_get_login_failure_purge_success_total` — число успешных запусков purge;
+- `bz_get_login_failure_purge_last_success_unixtime` — Unix timestamp последнего успешного purge; `0` означает, что успешная очистка ещё ни разу не была подтверждена.
+
+Prometheus rule `LoginFailurePurgeStale` (`deploy/prometheus/rules/application.yml`) выдаёт warning, если:
+
+- с последнего успешного purge прошло более **172800 секунд (48 часов)**;
+- heartbeat-метрика отсутствует;
+- timestamp равен `0` — то есть после rollout ещё не было ни одной подтверждённой очистки.
+
+Условие должно сохраняться 15 минут (`for: 15m`), чтобы кратковременный scrape/rollout transient не создавал шум. На первом production rollout warning до первого успешного purge является **ожидаемым fail-safe поведением**: отсутствие baseline heartbeat не трактуется как «всё хорошо».
+
+`Persistent=true` позволяет systemd выполнить пропущенный timer после возвращения scheduler-узла, но не помогает, пока сам узел недоступен. Именно поэтому heartbeat хранится в общей PostgreSQL и проверяется Prometheus независимо от timer-узла: длительное отсутствие scheduler становится наблюдаемым, и оператор может перенести/включить timer на другом maintenance-узле.
+
+При срабатывании `LoginFailurePurgeStale` проверить:
+
+```bash
+systemctl status get-login-failure-purge.timer get-login-failure-purge.service
+systemctl list-timers get-login-failure-purge.timer
+journalctl -u get-login-failure-purge.service
+```
+
+После устранения причины допустимо выполнить штатную команду вручную:
+
+```bash
+cd /opt/get
+/opt/get/venv/bin/python manage.py purge_login_failures --older-than-hours 24
+```
+
+После этого убедиться, что `bz_get_login_failure_purge_last_success_unixtime` обновился, `bz_get_login_failure_purge_success_total` вырос и warning снялся. Ручной запуск не меняет WORM `AuditLog` и не требует отдельной repair-процедуры.
 
 ## Контракты тестов
 
@@ -132,4 +168,8 @@ Timer запускает cleanup ежедневно, использует `Persi
 - read-only integrity check PASS/FAIL, diagnostics, legacy normalization и отсутствие мутаций;
 - оба требуемых индекса присутствуют в модели;
 - retention cleanup удаляет только устаревшие operational rows;
+- каждый успешный purge обновляет durable counter и **продвигает** его `updated_at`;
+- ошибочный purge не создаёт ложный heartbeat;
+- `/metrics/business/` экспортирует purge counter/timestamp, включая состояние `0` до первого успеха;
+- monitoring validation требует `LoginFailurePurgeStale`, 48-часовой threshold и absent-metric guard;
 - старые Web/API/TOTP lockout и `Retry-After` тесты продолжают проверять пользовательскую семантику.
