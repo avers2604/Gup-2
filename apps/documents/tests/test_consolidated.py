@@ -53,6 +53,33 @@ class ConsolidatedListTests(TestCase):
 
         self.assertNotContains(response, "ОДИНОЧКА")
 
+    def test_restricted_only_amendment_does_not_reveal_base_without_clearance(self):
+        base = make_document(reg_number="БАЗА-СЕКРЕТ", status=NormativeDocument.Status.ACTIVE)
+        secret = make_document(
+            reg_number="ИЗМ-СЕКРЕТ",
+            status=NormativeDocument.Status.ACTIVE,
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+        amend(secret, base)
+
+        response = self.client_.get(reverse("documents:consolidated_list"))
+
+        self.assertNotContains(response, "БАЗА-СЕКРЕТ")
+
+    def test_amendment_count_excludes_restricted_changes_without_clearance(self):
+        secret = make_document(
+            reg_number="ИЗМ-СЕКРЕТ-2",
+            status=NormativeDocument.Status.ACTIVE,
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+        amend(secret, self.base)
+
+        response = self.client_.get(reverse("documents:consolidated_list"))
+        listed = list(response.context["documents"])
+        listed_base = next(document for document in listed if document.pk == self.base.pk)
+
+        self.assertEqual(listed_base.amendment_count, 1)
+
     def test_revoked_amendment_drops_out_of_the_summary(self):
         """Утратившее силу изменение больше ничего не меняет.
 
