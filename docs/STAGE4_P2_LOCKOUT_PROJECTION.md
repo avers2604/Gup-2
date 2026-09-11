@@ -2,7 +2,7 @@
 
 Статус: вторая партия P2, stacked поверх fail-closed domain event bus. Это application hardening; реальный HA/DR стенд для доказательства корректности самой проекции не требуется.
 
-## Проблемма
+## Проблема
 
 До этой партии `apps/iam/services.py` использовал WORM `AuditLog` сразу в двух ролях:
 
