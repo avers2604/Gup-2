@@ -103,16 +103,33 @@ def prepare_download(*, actor, template, field_name):
 def register_download(*, actor, template, field_name):
     """Учесть скачивание после подтверждения доступности файла.
 
-    Сервис оставляет собственную проверку прав/готовности, чтобы прямой вызов
-    не мог обойти бизнес-границу. HTTP-view вызывает `prepare_download()`,
-    реально открывает object storage и только затем приходит сюда.
+    HTTP-view сначала открывает object storage через `prepare_download()`, а
+    затем приходит сюда. Между этими двумя шагами версия может стать
+    `SUPERSEDED`, поэтому решение о WORM-аудите нельзя принимать по переданному
+    (возможно stale) экземпляру. Текущая строка перечитывается под row lock и
+    именно её статус определяет, является ли выдача архивной.
+
+    Повторный `prepare_download()` на заблокированной строке сохраняет
+    сервисную границу для прямых вызовов и проверяет актуальное имя файла/
+    состояние promotion перед учётом.
     """
-    field_file = prepare_download(actor=actor, template=template, field_name=field_name)
-
     with transaction.atomic():
-        Template.objects.filter(pk=template.pk).update(download_count=F("download_count") + 1)
+        current = (
+            Template.objects.select_for_update()
+            .select_related("family")
+            .get(pk=template.pk)
+        )
+        field_file = prepare_download(
+            actor=actor,
+            template=current,
+            field_name=field_name,
+        )
 
-        if template.status == Template.Status.SUPERSEDED:
+        Template.objects.filter(pk=current.pk).update(
+            download_count=F("download_count") + 1
+        )
+
+        if current.status == Template.Status.SUPERSEDED:
             from apps.audit.models import AuditLog
 
             AuditLog.objects.create(
@@ -120,10 +137,10 @@ def register_download(*, actor, template, field_name):
                 actor=actor,
                 actor_personnel_number=getattr(actor, "personnel_number", ""),
                 object_type="Template",
-                object_id=str(template.pk),
+                object_id=str(current.pk),
                 details={
-                    "family": template.family.name,
-                    "version": template.version,
+                    "family": current.family.name,
+                    "version": current.version,
                     "field": field_name,
                 },
             )
