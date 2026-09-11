@@ -99,3 +99,47 @@ class TaskOutbox(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["delivered_at", "next_attempt_at"], name="outbox_pending_idx")]
+
+
+class StagedFilePromotion(models.Model):
+    """Durable intent to promote a mutable staging object into WORM storage.
+
+    The uploaded bytes first live in the mutable `working` bucket under the
+    `staging/worm/` prefix. The database row that references the final object
+    name and this promotion record are committed atomically. Only afterwards
+    does a worker copy the object into `originals` with Object Lock headers.
+
+    This deliberately separates transaction rollback from immutable storage:
+    a failed database transaction can leave only a disposable staging object,
+    never an orphaned WORM object that cannot be deleted.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    model_label = models.CharField(max_length=120)
+    object_id = models.CharField(max_length=64)
+    field_name = models.CharField(max_length=64)
+    staging_name = models.TextField(unique=True)
+    destination_name = models.TextField()
+    lock_mode = models.CharField(max_length=16, blank=True)
+    retain_until = models.DateTimeField(null=True, blank=True)
+    legal_hold = models.BooleanField(default=False)
+    sha256 = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    last_error = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["model_label", "object_id", "field_name", "destination_name"],
+                name="unique_staged_file_promotion",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["completed_at", "created_at"], name="staged_promotion_pending_idx"),
+        ]
+
+    def __str__(self):
+        state = "done" if self.completed_at else "pending"
+        return f"{self.model_label}:{self.object_id}:{self.field_name} ({state})"

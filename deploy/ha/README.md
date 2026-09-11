@@ -49,9 +49,15 @@ PgBouncer и HAProxy запускаются **на каждом узле при�
 - `etcd.env.example` — переменные одного члена трёхузлового etcd;
 - `haproxy.cfg.example` — локальный маршрутизатор на текущий Patroni primary;
 - `pgbouncer.ini.example` — локальный пул соединений приложения;
+- `pgbouncer_primary_guard.py` — app-local guard против stale PgBouncer pool
+  после planned switchover;
+- `test_pgbouncer_primary_guard.py` — регрессия на смену backend и
+  `RECONNECT`/`WAIT_CLOSE`;
 - `validate.sh` — неразрушающая проверка реальных HA-конфигов;
 - `../dr/pgbackrest.conf.example` — архивирование WAL и backup repository;
-- `../dr/README.md` — DR-регламент и порядок восстановления.
+- `../dr/README.md` — DR-регламент и порядок восстановления;
+- `../systemd/get-pgbouncer-primary-guard.service` — systemd unit guard на
+  каждом app-узле.
 
 Все `CHANGE_ME_*` значения должны заменяться при развёртывании. Пароли,
 приватные ключи и реальные backup cipher passphrase в Git не хранятся.
@@ -138,11 +144,50 @@ patronictl -c /etc/patroni/patroni.yml list
 инициализируется с data checksums, а `wal_log_hints=on`; оба механизма дают
 Patroni возможность использовать `pg_rewind` при возврате бывшего primary.
 
-### 6. Поднять локальный HAProxy и PgBouncer на каждом app-узле
+### 6. Поднять локальный HAProxy, PgBouncer и primary guard на каждом app-узле
 
 HAProxy слушает только `127.0.0.1:6433` и направляет TCP-трафик на PostgreSQL
 того DB-узла, чей Patroni REST отвечает `200` на `/primary`.
 PgBouncer слушает `127.0.0.1:6432` и направляет server connections на HAProxy.
+
+Важно: сам факт, что HAProxy поменял backend, **не заставляет PgBouncer закрыть
+уже открытые server connections**. При planned switchover бывший primary
+остаётся доступен как replica, поэтому stale connection продолжает принимать
+`SELECT`, но отказывает на записи. Именно это было воспроизведено в лаборатории
+Этапа 4 (Ф-4).
+
+На каждом app-узле установить guard:
+
+```bash
+sudo install -d -m 0755 /usr/local/libexec/bz-get
+sudo install -m 0755 deploy/ha/pgbouncer_primary_guard.py \
+  /usr/local/libexec/bz-get/pgbouncer_primary_guard.py
+sudo install -m 0644 deploy/systemd/get-pgbouncer-primary-guard.service \
+  /etc/systemd/system/get-pgbouncer-primary-guard.service
+
+# Guard работает от того же UID, что PgBouncer, чтобы войти в admin console
+# через Unix socket как специальный пользователь pgbouncer без пароля.
+# Дополнительная группа нужна только для /run/haproxy/admin.sock mode 0660.
+sudo usermod -a -G haproxy pgbouncer
+sudo systemctl daemon-reload
+sudo systemctl enable --now get-pgbouncer-primary-guard.service
+```
+
+Guard читает только локальный HAProxy Runtime API socket. Когда единственный
+`UP` server в backend `postgres_primary` меняется, он выполняет в локальной
+PgBouncer admin database:
+
+```sql
+RECONNECT bz_get;
+WAIT_CLOSE bz_get;
+```
+
+`RECONNECT`, а не `RELOAD`, выбран намеренно: connection string PgBouncer
+остаётся `127.0.0.1:6433`, меняется только downstream routing HAProxy.
+`WAIT_CLOSE` не считает переключение завершённым, пока старые server connections,
+помеченные `close_needed`, реально не покинули pool. При 0 или >1 `UP` backend
+guard ничего не переключает и повторяет проверку — неоднозначная топология
+fail-closed.
 
 Для Django в HA-среде:
 
@@ -164,8 +209,9 @@ PGBOUNCER_CONFIG=/etc/pgbouncer/pgbouncer.ini \
 ./deploy/ha/validate.sh
 ```
 
-Скрипт проверяет Patroni schema/GUC, HAProxy syntax и обязательный проектный
-контракт PgBouncer, не выполняя failover и не меняя данные.
+Скрипт проверяет Patroni schema/GUC, HAProxy syntax, обязательный проектный
+контракт PgBouncer и unit-регрессию primary guard, не выполняя failover и не
+меняя данные.
 
 ## Режим синхронной репликации
 
@@ -195,7 +241,19 @@ synchronous_node_count: 1
 
 ## Planned switchover
 
-Перед обслуживанием primary:
+Ф-4 показала, что проверять только `patronictl`/HAProxy недостаточно: реальный
+RTO должен измеряться через тот же путь, что использует Django — PgBouncer
+`:6432`.
+
+До переключения на одном app-узле запустить probe дольше ожидаемого окна:
+
+```bash
+PGPASSWORD='...' deploy/acceptance/write-path-probe.sh \
+  --dsn-port 6432 --user bz_get --db bz_get \
+  --duration 120 --out /var/lib/bz-get/acceptance/RUN/write-path.csv
+```
+
+Пока probe работает, выполнить:
 
 ```bash
 patronictl -c /etc/patroni/patroni.yml list
@@ -208,9 +266,17 @@ patronictl -c /etc/patroni/patroni.yml switchover
 SELECT pg_is_in_recovery();
 ```
 
-На новом primary ожидается `false`; на репликах — `true`.
-На каждом app-узле новый leader должен автоматически стать единственным healthy
-backend HAProxy, без изменения `.env` Django.
+На новом primary ожидается `false`; на репликах — `true`. На каждом app-узле:
+
+```bash
+systemctl is-active get-pgbouncer-primary-guard.service
+journalctl -u get-pgbouncer-primary-guard.service --since '-5 min'
+```
+
+Должна быть видна смена HAProxy backend и успешная пара
+`RECONNECT/WAIT_CLOSE`. В `write-path.csv` не должно оставаться длинного
+`READ_ONLY` окна, воспроизведённого до исправления. Для приёмочного RTO значим
+показатель `write unavailable`, а не только время появления нового leader.
 
 ## Аварийный failover — приёмочный сценарий
 
@@ -236,6 +302,8 @@ backend HAProxy, без изменения `.env` Django.
   passphrase в репозитории.
 - Не считать наличие реплики резервной копией: логическая/операторская ошибка
   реплицируется мгновенно; DR опирается на отдельный pgBackRest repository.
+- Не измерять planned-switchover RTO прямым `psql` к HAProxy: это обходит
+  PgBouncer и не ловит stale read-only pool.
 - Не объявлять RPO/RTO выполненными до измеренного restore/failover drill.
 
 ## Definition of Done для HA-подчасти Этапа 4
@@ -243,6 +311,8 @@ backend HAProxy, без изменения `.env` Django.
 - 3/3 etcd healthy, потеря одного узла не останавливает DCS;
 - 3 PostgreSQL/Patroni узла: один leader, две streaming replicas;
 - Django работает только через локальный PgBouncer/HAProxy;
+- primary guard включён на каждом app-узле и planned switchover подтверждён
+  через `write-path-probe.sh` без старого read-only окна;
 - автоматический failover одного DB-узла проходит без ручной смены endpoint;
 - бывший primary штатно возвращается replica;
 - WAL непрерывно уходит в отдельный pgBackRest repository;

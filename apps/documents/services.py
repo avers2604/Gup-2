@@ -87,21 +87,21 @@ def _lock_document(document):
     return model.objects.select_for_update().get(pk=document.pk)
 
 
-def _delete_written_files(document, previous_names):
-    """Компенсация отката транзакции ПОСЛЕ физической записи файла.
+def _cleanup_failed_file_writes(document, previous_mutable_names):
+    """Компенсировать только те файлы, которые физически можно удалять.
 
-    Model.save() пишет FileField в storage (S3 PUT к MinIO/originals)
-    синхронно, до коммита транзакции БД — эта запись не транзакционна с
-    Postgres и сама не откатывается. Если что-то после document.save() в
-    той же транзакции ещё бросит исключение (например, form.save_m2m() —
-    гонка с удалением связанного тега/подразделения между валидацией формы
-    и этим вызовом), транзакция БД откатится, а файл останется физически
-    лежать в WORM-бакете при исчезнувшей строке в БД. Удаляем только поля,
-    реально изменившиеся в этом вызове (previous_names) — файл, не
-    тронутый текущей операцией, трогать нельзя: после отката он снова
-    единственный, на который ссылается восстановленное состояние строки.
+    `files_original` больше НИКОГДА не пишется прямо в WORM до коммита БД:
+    apps.core.staged_files кладёт новый оригинал в mutable `working/staging`
+    и лишь после коммита копирует его в `originals` с Object Lock. Поэтому
+    rollback очищает staging, а не вызывает DELETE в WORM-бакете.
+
+    `files_editable` остаётся обычным mutable FileField и пишется синхронно;
+    его новую версию при последующем rollback безопасно удалить.
     """
-    for field_name, previous_name in previous_names.items():
+    from apps.core.staged_files import discard_staged_uploads
+
+    discard_staged_uploads(document)
+    for field_name, previous_name in previous_mutable_names.items():
         field_file = getattr(document, field_name)
         if not field_file or field_file.name == previous_name:
             continue
@@ -109,7 +109,7 @@ def _delete_written_files(document, previous_names):
             field_file.delete(save=False)
         except Exception:
             logger.exception(
-                "Не удалось удалить осиротевший файл %s=%r после отката транзакции (id=%s)",
+                "Не удалось удалить mutable-файл %s=%r после отката транзакции (id=%s)",
                 field_name, field_file.name, getattr(document, "pk", None),
             )
 
@@ -137,7 +137,7 @@ def create_document(*, actor, form=None, **attrs):
             try:
                 form.save_m2m()
             except Exception:
-                _delete_written_files(document, {"files_original": "", "files_editable": ""})
+                _cleanup_failed_file_writes(document, {"files_editable": ""})
                 raise
     return document
 
@@ -157,7 +157,6 @@ def update_document(*, actor, document, form=None, **attrs):
         if locked.edit_version != expected:
             raise ValidationError("Документ уже изменён другим пользователем. Обновите страницу и повторите правку.")
         previous_file_names = {
-            "files_original": locked.files_original.name,
             "files_editable": locked.files_editable.name if locked.files_editable else "",
         }
         from .forms import DocumentForm
@@ -181,7 +180,7 @@ def update_document(*, actor, document, form=None, **attrs):
             try:
                 form.save_m2m()
             except Exception:
-                _delete_written_files(locked, previous_file_names)
+                _cleanup_failed_file_writes(locked, previous_file_names)
                 raise
         document.refresh_from_db()
     return locked

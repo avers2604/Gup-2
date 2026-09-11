@@ -53,6 +53,23 @@ def run_ocr_for_document(self, document_id):
         return
 
     source_name = document.files_original.name
+
+    # The model commits the final originals key together with a durable
+    # StagedFilePromotion, then the promotion worker copies bytes from mutable
+    # staging into Object-Locked storage. The historical OCR outbox entry is
+    # still created by NormativeDocument.save(); if workers run concurrently,
+    # OCR must wait for that promotion instead of classifying a temporary 404
+    # as a permanent OCR failure.
+    from apps.core.staged_files import promotion_pending_for
+
+    if promotion_pending_for(
+        "documents.normativedocument",
+        str(document.pk),
+        "files_original",
+        source_name,
+    ):
+        raise self.retry(countdown=5, max_retries=120)
+
     try:
         with document.files_original.open("rb") as fh:
             from django.conf import settings

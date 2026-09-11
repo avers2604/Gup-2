@@ -3,7 +3,7 @@ from unittest.mock import patch
 from django.test import TestCase
 from django.urls import reverse
 
-from apps.core.models import BusinessMetricCounter
+from apps.core.models import BusinessMetricCounter, StagedFilePromotion
 from apps.iam.models import Department, User
 
 from .factories import make_document
@@ -33,12 +33,28 @@ class DocumentFileLinkMetricsTests(TestCase):
         row = BusinessMetricCounter.objects.filter(name=f"link_generation_failure_{status}").first()
         return row.value if row else 0
 
-    def test_unknown_link_kind_counts_404(self):
+    def test_business_404_does_not_pollute_storage_failure_metric(self):
         response = self.client.get(
             reverse("documents:file-link", args=[self.document.pk, "unknown"])
         )
         self.assertEqual(response.status_code, 404)
-        self.assertEqual(self._counter(404), 1)
+        self.assertEqual(self._counter(404), 0)
+
+    def test_pending_worm_original_returns_409_without_storage_failure_metric(self):
+        StagedFilePromotion.objects.create(
+            model_label="documents.normativedocument",
+            object_id=str(self.document.pk),
+            field_name="files_original",
+            staging_name="staging/worm/test/file.pdf",
+            destination_name=self.document.files_original.name,
+        )
+        response = self.client.get(
+            reverse("documents:file-link", args=[self.document.pk, "original"])
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response["Retry-After"], "5")
+        self.assertEqual(self._counter(404), 0)
+        self.assertEqual(self._counter(504), 0)
 
     @patch("django.core.files.storage.FileSystemStorage.url", side_effect=PermissionError("forbidden"))
     def test_storage_permission_failure_counts_403(self, _url):

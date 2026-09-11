@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load worm_files %}
 {% block title %}{{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
   <p class="label">
@@ -34,15 +35,11 @@
           <tr><th>Издавшее подразделение</th><td>{{ document.issuer_dept.name }}</td></tr>
           <tr>
             <th>Область применения</th>
-            <td>
-              {% for dept in applied_depts %}{{ dept.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
-            </td>
+            <td>{% for dept in applied_depts %}{{ dept.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
           </tr>
           <tr>
             <th>Теги</th>
-            <td>
-              {% for tag in tags %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}
-            </td>
+            <td>{% for tag in tags %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% empty %}—{% endfor %}</td>
           </tr>
           <tr><th>Гриф доступа</th><td>{{ document.get_access_level_display }}</td></tr>
           {% if document.declassification_date %}
@@ -51,7 +48,6 @@
         </tbody>
       </table>
     </div>
-
     {% if document.summary %}
       <p class="label" style="margin-top: var(--space-6);">Аннотация</p>
       <p>{{ document.summary }}</p>
@@ -67,18 +63,19 @@
           <tr><th>Режим</th><td>{{ document.get_retention_mode_display|default:"—" }}</td></tr>
           <tr>
             <th>Хранить до</th>
-            <td class="data">
-              {% if document.retention_until %}{{ document.retention_until|date:"d.m.Y" }}{% else %}бессрочно{% endif %}
-            </td>
+            <td class="data">{% if document.retention_until %}{{ document.retention_until|date:"d.m.Y" }}{% else %}бессрочно{% endif %}</td>
           </tr>
           <tr>
             <th>Скан-оригинал</th>
             <td>
-              {% if document.files_original %}
+              {% if document|worm_file_ready:'files_original' %}
                 <a href="{% url 'documents:file-link' document.pk 'original' %}">Скачать</a>
                 {% if document.files_original_sha256 %}
                   <span class="caption data">SHA-256: {{ document.files_original_sha256 }}</span>
                 {% endif %}
+              {% elif document|worm_file_pending:'files_original' %}
+                <span class="status-pill status-pill--draft">Закрепляется в защищённом хранилище</span>
+                <span class="caption">Скачивание станет доступно после проверки WORM/Object Lock и SHA-256.</span>
               {% else %}—{% endif %}
             </td>
           </tr>
@@ -90,9 +87,7 @@
             <th>Распознавание (OCR)</th>
             <td>
               {{ document.get_ocr_status_display }}
-              {% if document.ocr_confidence %}
-                <span class="caption">уверенность {{ document.ocr_confidence|floatformat:1 }}</span>
-              {% endif %}
+              {% if document.ocr_confidence %}<span class="caption">уверенность {{ document.ocr_confidence|floatformat:1 }}</span>{% endif %}
             </td>
           </tr>
         </tbody>
@@ -103,143 +98,62 @@
   <div class="card" style="margin-top: var(--space-6);">
     <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
       <p class="label" style="margin:0;">Связи версионности</p>
-      {% if can_manage_relations %}
-        <a class="btn btn--ghost" href="{% url 'documents:relation_create' document.pk %}">Добавить связь</a>
-      {% endif %}
+      {% if can_manage_relations %}<a class="btn btn--ghost" href="{% url 'documents:relation_create' document.pk %}">Добавить связь</a>{% endif %}
     </div>
     {% if relations_out or relations_in %}
       <div class="table-scroll">
         <table class="table">
-          <thead>
-            <tr>
-              <th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th>
-              {% if can_manage_relations %}<th></th>{% endif %}
-            </tr>
-          </thead>
+          <thead><tr><th>Направление</th><th>Связь</th><th>Документ</th><th>Примечание</th>{% if can_manage_relations %}<th></th>{% endif %}</tr></thead>
           <tbody>
             {% for relation in relations_out %}
               <tr>
-                <td>Этот документ</td>
-                <td>{{ relation.get_relation_type_display }}</td>
-                <td>
-                  <a href="{% url 'documents:detail' relation.to_document.pk %}">
-                    {{ relation.to_document.reg_number }}
-                  </a>
-                  — {{ relation.to_document.title }}
-                </td>
+                <td>Этот документ</td><td>{{ relation.get_relation_type_display }}</td>
+                <td><a href="{% url 'documents:detail' relation.to_document.pk %}">{{ relation.to_document.reg_number }}</a> — {{ relation.to_document.title }}</td>
                 <td>{{ relation.note|default:"—" }}</td>
-                {% if can_manage_relations %}
-                  <td>
-                    <form method="post"
-                          action="{% url 'documents:relation_delete' document.pk relation.pk %}">
-                      {% csrf_token %}
-                      <button class="btn btn--danger" type="submit">Снять</button>
-                    </form>
-                  </td>
-                {% endif %}
+                {% if can_manage_relations %}<td><form method="post" action="{% url 'documents:relation_delete' document.pk relation.pk %}">{% csrf_token %}<button class="btn btn--danger" type="submit">Снять</button></form></td>{% endif %}
               </tr>
             {% endfor %}
             {% for relation in relations_in %}
               <tr>
-                <td>Входящая</td>
-                <td>{{ relation.get_relation_type_display }}</td>
-                <td>
-                  <a href="{% url 'documents:detail' relation.from_document.pk %}">
-                    {{ relation.from_document.reg_number }}
-                  </a>
-                  — {{ relation.from_document.title }}
-                </td>
+                <td>Входящая</td><td>{{ relation.get_relation_type_display }}</td>
+                <td><a href="{% url 'documents:detail' relation.from_document.pk %}">{{ relation.from_document.reg_number }}</a> — {{ relation.from_document.title }}</td>
                 <td>{{ relation.note|default:"—" }}</td>
-                {% if can_manage_relations %}
-                  {% comment %}
-                    Входящую связь снимают из карточки её источника — там,
-                    где она заведена и где видно, зачем. Кнопка здесь
-                    удаляла бы чужое ребро из чужого графа.
-                  {% endcomment %}
-                  <td class="caption">из карточки источника</td>
-                {% endif %}
+                {% if can_manage_relations %}<td class="caption">из карточки источника</td>{% endif %}
               </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
-    {% else %}
-      <p class="caption">Связей нет.</p>
-    {% endif %}
+    {% else %}<p class="caption">Связей нет.</p>{% endif %}
   </div>
 
   <div class="card" style="margin-top: var(--space-6);">
     <p class="label">История статусов</p>
     {% if status_history %}
-      <div class="table-scroll">
-        <table class="table">
-          <thead><tr><th>Статус</th><th>Период действия</th></tr></thead>
-          <tbody>
-            {% for entry in status_history %}
-              <tr>
-                <td>{{ entry.get_status_display }}</td>
-                <td class="data">
-                  {{ entry.period.lower|date:"d.m.Y" }} —
-                  {% if entry.period.upper %}{{ entry.period.upper|date:"d.m.Y" }}{% else %}по настоящее время{% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <p class="caption">История не заполнена.</p>
-    {% endif %}
+      <div class="table-scroll"><table class="table"><thead><tr><th>Статус</th><th>Период действия</th></tr></thead><tbody>
+        {% for entry in status_history %}<tr><td>{{ entry.get_status_display }}</td><td class="data">{{ entry.period.lower|date:"d.m.Y" }} — {% if entry.period.upper %}{{ entry.period.upper|date:"d.m.Y" }}{% else %}по настоящее время{% endif %}</td></tr>{% endfor %}
+      </tbody></table></div>
+    {% else %}<p class="caption">История не заполнена.</p>{% endif %}
   </div>
 
   <div class="card" style="margin-top: var(--space-6);">
     <p class="label">История действий по документу</p>
     {% if activity %}
-      <div class="table-scroll">
-        <table class="table">
-          <thead><tr><th>Время</th><th>Событие</th><th>Кто</th><th>Основание</th></tr></thead>
-          <tbody>
-            {% for entry in activity %}
-              <tr>
-                <td class="data">{{ entry.created_at|date:"d.m.Y H:i" }}</td>
-                <td>{{ entry.get_event_type_display }}</td>
-                <td>
-                  {% if entry.actor %}{{ entry.actor.full_name }}
-                  {% elif entry.actor_personnel_number %}таб. {{ entry.actor_personnel_number }}
-                  {% else %}—{% endif %}
-                </td>
-                <td>{{ entry.details.comment|default:"—" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <p class="caption" style="margin-top: var(--space-3);">
-        Записи журнала аудита по этому документу. Журнал неизменяем: ни
-        исправить, ни удалить запись нельзя ни из одного контура системы.
-      </p>
-    {% else %}
-      <p class="caption">Действий по документу пока не зафиксировано.</p>
-    {% endif %}
+      <div class="table-scroll"><table class="table"><thead><tr><th>Время</th><th>Событие</th><th>Кто</th><th>Основание</th></tr></thead><tbody>
+        {% for entry in activity %}<tr><td class="data">{{ entry.created_at|date:"d.m.Y H:i" }}</td><td>{{ entry.get_event_type_display }}</td><td>{% if entry.actor %}{{ entry.actor.full_name }}{% elif entry.actor_personnel_number %}таб. {{ entry.actor_personnel_number }}{% else %}—{% endif %}</td><td>{{ entry.details.comment|default:"—" }}</td></tr>{% endfor %}
+      </tbody></table></div>
+      <p class="caption" style="margin-top: var(--space-3);">Записи журнала аудита по этому документу. Журнал неизменяем: ни исправить, ни удалить запись нельзя ни из одного контура системы.</p>
+    {% else %}<p class="caption">Действий по документу пока не зафиксировано.</p>{% endif %}
   </div>
 
   {% if can_edit or can_change_status %}
     <div class="card" style="margin-top: var(--space-6);">
       <p class="label">Доступные действия</p>
       <div style="display:flex; gap: var(--space-3); flex-wrap: wrap;">
-        {% if can_edit %}
-          <a class="btn btn--primary" href="{% url 'documents:edit' document.pk %}">Править черновик</a>
-        {% endif %}
-        {% if can_change_status %}
-          <a class="btn btn--accent" href="{% url 'documents:status' document.pk %}">Изменить статус</a>
-        {% endif %}
+        {% if can_edit %}<a class="btn btn--primary" href="{% url 'documents:edit' document.pk %}">Править черновик</a>{% endif %}
+        {% if can_change_status %}<a class="btn btn--accent" href="{% url 'documents:status' document.pk %}">Изменить статус</a>{% endif %}
       </div>
-      {% if can_change_status and not can_edit and document.status != 'draft' %}
-        <p class="caption" style="margin-top: var(--space-3);">
-          Правка недоступна: документ уже имеет силу и изменяется новой
-          редакцией со связью версионности (ТЗ 4.2.2), а не на месте.
-        </p>
-      {% endif %}
+      {% if can_change_status and not can_edit and document.status != 'draft' %}<p class="caption" style="margin-top: var(--space-3);">Правка недоступна: документ уже имеет силу и изменяется новой редакцией со связью версионности (ТЗ 4.2.2), а не на месте.</p>{% endif %}
     </div>
   {% endif %}
 {% endblock %}

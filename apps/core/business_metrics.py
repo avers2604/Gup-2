@@ -58,9 +58,13 @@ def _counter_values() -> dict[str, int]:
 
 
 def render_prometheus() -> str:
-    """Render the four business indicators required by Stage 4 acceptance."""
+    """Render business and reliability indicators required by Stage 4."""
+    from django.db.models import Count, Min
+
     from apps.documents.models import NormativeDocument
     from apps.templates_bank.models import Template
+
+    from .models import StagedFilePromotion, TaskOutbox
 
     now = timezone.now()
     ocr_cutoff = now - timedelta(days=14)
@@ -106,10 +110,11 @@ def render_prometheus() -> str:
     for status in LINK_FAILURE_STATUSES:
         value = counters[f"{LINK_FAILURE_PREFIX}{status}"]
         lines.append(f'bz_get_link_generation_failures_total{{status="{status}"}} {value}')
-    from django.db.models import Count, Min
-    from .models import TaskOutbox
-    pending = TaskOutbox.objects.filter(delivered_at__isnull=True).aggregate(count=Count("pk"), oldest=Min("created_at"))
-    age = max(0.0, (timezone.now() - pending["oldest"]).total_seconds()) if pending["oldest"] else 0.0
+
+    pending = TaskOutbox.objects.filter(delivered_at__isnull=True).aggregate(
+        count=Count("pk"), oldest=Min("created_at")
+    )
+    age = max(0.0, (now - pending["oldest"]).total_seconds()) if pending["oldest"] else 0.0
     lines.extend([
         "# HELP bz_get_outbox_pending Pending broker delivery intents.",
         "# TYPE bz_get_outbox_pending gauge",
@@ -117,5 +122,21 @@ def render_prometheus() -> str:
         "# HELP bz_get_outbox_oldest_seconds Age of oldest pending broker delivery intent.",
         "# TYPE bz_get_outbox_oldest_seconds gauge",
         f"bz_get_outbox_oldest_seconds {age:.3f}",
+    ])
+
+    promotions = StagedFilePromotion.objects.filter(completed_at__isnull=True).aggregate(
+        count=Count("pk"), oldest=Min("created_at")
+    )
+    promotion_age = (
+        max(0.0, (now - promotions["oldest"]).total_seconds())
+        if promotions["oldest"] else 0.0
+    )
+    lines.extend([
+        "# HELP bz_get_worm_promotions_pending Files committed in DB but not yet verified in Object-Locked storage.",
+        "# TYPE bz_get_worm_promotions_pending gauge",
+        f"bz_get_worm_promotions_pending {promotions['count']}",
+        "# HELP bz_get_worm_promotion_oldest_seconds Age of the oldest unfinished WORM promotion.",
+        "# TYPE bz_get_worm_promotion_oldest_seconds gauge",
+        f"bz_get_worm_promotion_oldest_seconds {promotion_age:.3f}",
     ])
     return "\n".join(lines) + "\n"

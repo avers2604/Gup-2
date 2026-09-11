@@ -8,6 +8,7 @@ from django.shortcuts import redirect
 from django.views.decorators.http import require_GET
 
 from apps.core.business_metrics import record_link_generation_failure
+from apps.core.staged_files import promotion_pending_for
 
 from . import permissions
 from .models import NormativeDocument
@@ -35,33 +36,49 @@ def _status_from_exception(exc: Exception) -> int:
 @login_required
 @require_GET
 def document_file_link(request, pk, kind: str):
-    """Generate/redirect to a storage URL while measuring 403/404/504 failures."""
+    """Generate/redirect to a storage URL while measuring storage failures.
+
+    ``files_original`` is not downloadable while a durable WORM promotion is
+    pending. The database deliberately contains the final immutable key before
+    the copy happens, so resolving ``FieldFile.url`` during that window would
+    expose a link to an object that does not exist yet. We return 409 instead;
+    this is an expected transient application state and is not counted as a
+    MinIO/link-generation failure.
+    """
     field_name = _ALLOWED_FIELDS.get(kind)
     if field_name is None:
-        record_link_generation_failure(404)
         raise Http404
 
     try:
         document = permissions.visible_documents(request.user).get(pk=pk)
     except NormativeDocument.DoesNotExist as exc:
-        record_link_generation_failure(404)
         raise Http404 from exc
 
     field_file = getattr(document, field_name)
     if not field_file:
-        record_link_generation_failure(404)
         raise Http404
+
+    if field_name == "files_original" and promotion_pending_for(
+        "documents.normativedocument",
+        str(document.pk),
+        field_name,
+        field_file.name,
+    ):
+        response = HttpResponse(
+            "file is being secured in immutable storage; retry later\n",
+            status=409,
+            content_type="text/plain",
+        )
+        response["Retry-After"] = "5"
+        return response
 
     try:
         url = field_file.url
     except Exception as exc:
         status_code = _status_from_exception(exc)
-        # _status_from_exception распознаёт настоящие сбои хранилища
-        # (403/404/504 от boto3/сети) — но голый except Exception ловит и
-        # программную регрессию (например, AttributeError после будущего
-        # рефакторинга storage-класса), которая иначе молча становится
-        # неотличимым от "MinIO недоступен" ответом 504 без единого следа
-        # в логах.
+        # Only real storage/link-generation failures are measured here. Bad
+        # route/document/field input above is a business 404 and must not pollute
+        # the Stage 4 infrastructure indicator.
         logger.exception(
             "Не удалось получить ссылку на файл документа %s (%s)", pk, field_name,
         )

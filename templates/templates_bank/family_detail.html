@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load worm_files %}
 {% block title %}{{ family.name }} · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
   <p class="label"><a href="{% url 'templates_bank:family_list' %}">Банк бланков</a></p>
@@ -60,9 +61,17 @@
                 </td>
                 <td class="data">{{ version.download_count }}</td>
                 <td>
-                  <a href="{% url 'templates_bank:download' version.pk 'file_editable' %}">Бланк</a>
+                  {% if version|worm_file_ready:'file_editable' %}
+                    <a href="{% url 'templates_bank:download' version.pk 'file_editable' %}">Бланк</a>
+                  {% elif version|worm_file_pending:'file_editable' %}
+                    <span class="caption">Бланк закрепляется в защищённом хранилище</span>
+                  {% else %}—{% endif %}
                   {% if version.file_sample %}
-                    · <a href="{% url 'templates_bank:download' version.pk 'file_sample' %}">Образец</a>
+                    {% if version|worm_file_ready:'file_sample' %}
+                      · <a href="{% url 'templates_bank:download' version.pk 'file_sample' %}">Образец</a>
+                    {% elif version|worm_file_pending:'file_sample' %}
+                      · <span class="caption">образец закрепляется</span>
+                    {% endif %}
                   {% endif %}
                 </td>
               </tr>
