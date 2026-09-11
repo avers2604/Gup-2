@@ -52,6 +52,8 @@ class BusinessMetricsTests(TestCase):
         self.assertIn('bz_get_link_generation_failures_total{status="403"} 1', body)
         self.assertIn('bz_get_link_generation_failures_total{status="404"} 1', body)
         self.assertIn('bz_get_link_generation_failures_total{status="504"} 1', body)
+        self.assertIn("pagination pages after the first are excluded", body)
+        self.assertIn("business 404/409 states are excluded", body)
 
     def test_ocr_overdue_metric_requires_current_needs_review_status(self):
         now = timezone.now()
