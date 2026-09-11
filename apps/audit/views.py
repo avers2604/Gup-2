@@ -37,8 +37,13 @@ def filtered_entries(form):
     «посмотрел глазами».
     """
     queryset = AuditLog.objects.all().order_by("-created_at")
-    if not form.is_valid():
+    # Непривязанная форма означает обычное открытие журнала без фильтров.
+    # Bound, но невалидная форма — уже попытка задать срез; расширять её до
+    # полного WORM-журнала опасно и расходится с fail-closed поведением CSV.
+    if not form.is_bound:
         return queryset
+    if not form.is_valid():
+        return queryset.none()
 
     data = form.cleaned_data
     if data.get("event_type"):
