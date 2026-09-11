@@ -87,6 +87,62 @@ class AddRelationServiceTests(TestCase):
                 relation_type=DocumentRelation.RelationType.REFERENCES,
             )
 
+    def test_rechecks_target_visibility_after_it_becomes_restricted(self):
+        """Stale GENERAL target не должен обходить актуальный ДСП-гриф."""
+        from django.core.exceptions import PermissionDenied
+
+        NormativeDocument.objects.filter(pk=self.target.pk).update(
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+
+        with self.assertRaises(PermissionDenied):
+            services.add_relation(
+                actor=self.actor,
+                from_document=self.source,
+                to_document=self.target,
+                relation_type=DocumentRelation.RelationType.REFERENCES,
+            )
+
+        self.assertFalse(
+            DocumentRelation.objects.filter(
+                from_document=self.source, to_document=self.target
+            ).exists()
+        )
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RELATION_ADDED,
+                object_id=str(self.source.pk),
+            ).exists()
+        )
+
+    def test_rechecks_source_visibility_after_it_becomes_restricted(self):
+        """Stale GENERAL source не должен позволять менять скрытый граф."""
+        from django.core.exceptions import PermissionDenied
+
+        NormativeDocument.objects.filter(pk=self.source.pk).update(
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+
+        with self.assertRaises(PermissionDenied):
+            services.add_relation(
+                actor=self.actor,
+                from_document=self.source,
+                to_document=self.target,
+                relation_type=DocumentRelation.RelationType.REFERENCES,
+            )
+
+        self.assertFalse(
+            DocumentRelation.objects.filter(
+                from_document=self.source, to_document=self.target
+            ).exists()
+        )
+        self.assertFalse(
+            AuditLog.objects.filter(
+                event_type=AuditLog.EventType.DOCUMENT_RELATION_ADDED,
+                object_id=str(self.source.pk),
+            ).exists()
+        )
+
     def test_cycle_is_rejected(self):
         from django.core.exceptions import ValidationError
 
