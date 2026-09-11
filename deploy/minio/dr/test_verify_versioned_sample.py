@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import pathlib
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -14,6 +15,9 @@ MODULE_PATH = pathlib.Path(__file__).with_name("verify_versioned_sample.py")
 spec = importlib.util.spec_from_file_location("verify_versioned_sample", MODULE_PATH)
 verifier = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+# dataclasses resolves postponed annotations through sys.modules while the
+# module is being executed; register the dynamic module exactly as import does.
+sys.modules[spec.name] = verifier
 spec.loader.exec_module(verifier)
 
 
