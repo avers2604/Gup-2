@@ -1,13 +1,10 @@
 """Шина доменных событий (apps/core/domain_events.py) и её подключение.
 
-Отдельный набор тестов заведён по итогам ревью: побочные эффекты
-(WORM-аудит смены роли, история паролей, сброс сессий) переехали из тела
-User.save() в обработчики событий, и отказ этого механизма ТИХИЙ —
-событие публикуется, подписчика нет, аудит просто не пишется, а сама
-операция проходит успешно. Такой отказ не ловится тестами доменной
-логики: они проверяют результат, а не наличие подписки. Поэтому здесь
-проверяется сам контракт шины и факт регистрации обработчиков на старте
-приложения (AppConfig.ready()).
+Синхронный ``publish()`` используется для критичных эффектов, которые должны
+быть атомарны с исходной операцией: WORM-аудит, история паролей, сброс сессий.
+Поэтому событие без подписчика — runtime-ошибка, а не тихий no-op.
+``publish_after_commit()`` остаётся каналом для некритичных интеграций и может
+не иметь подписчика.
 """
 from django.db import transaction
 from django.test import TestCase, TransactionTestCase
@@ -17,9 +14,6 @@ from apps.core import domain_events
 
 class DomainEventBusTests(TestCase):
     def setUp(self):
-        # Реестр — глобальный на процесс; тесты, которые в него пишут,
-        # обязаны возвращать исходное состояние, иначе подписки потекут
-        # в соседние тесты.
         self._snapshot = {name: list(handlers) for name, handlers in domain_events._HANDLERS.items()}
 
     def tearDown(self):
@@ -32,8 +26,6 @@ class DomainEventBusTests(TestCase):
 
         domain_events.publish("test.sync", value=42)
 
-        # Именно синхронно, без ожидания коммита: запись аудита обязана
-        # быть атомарной со сменой состояния (см. docstring модуля).
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0].payload["value"], 42)
 
@@ -42,9 +34,6 @@ class DomainEventBusTests(TestCase):
             raise RuntimeError("обработчик упал")
 
         domain_events.register("test.failing")(failing_handler)
-
-        # Исключение НЕ глотается: критичный побочный эффект (аудит,
-        # история паролей) должен ронять всю транзакцию, а не пропадать.
         with self.assertRaises(RuntimeError):
             domain_events.publish("test.failing")
 
@@ -57,8 +46,12 @@ class DomainEventBusTests(TestCase):
 
         self.assertEqual(domain_events._HANDLERS["test.idempotent"].count(handler), 1)
 
-    def test_publish_without_subscribers_is_noop(self):
-        domain_events.publish("test.nobody.listens", value=1)
+    def test_publish_without_subscribers_fails_closed(self):
+        with self.assertRaisesRegex(
+            domain_events.MissingDomainEventHandler,
+            "test.nobody.listens",
+        ):
+            domain_events.publish("test.nobody.listens", value=1)
 
     def test_unknown_payload_keys_reach_handler(self):
         received = []
@@ -70,11 +63,7 @@ class DomainEventBusTests(TestCase):
 
 
 class PublishAfterCommitTests(TransactionTestCase):
-    """publish_after_commit() — для НЕкритичных потребителей. Проверяется
-    на TransactionTestCase: под обычным TestCase транзакция теста
-    откатывается и on_commit-колбэк не сработал бы никогда (ровно та
-    ловушка, из-за которой критичные эффекты переведены на synchronous
-    publish())."""
+    """After-commit канал не является атомарным с исходной транзакцией."""
 
     def setUp(self):
         self._snapshot = {name: list(handlers) for name, handlers in domain_events._HANDLERS.items()}
@@ -98,19 +87,15 @@ class PublishAfterCommitTests(TransactionTestCase):
             raise RuntimeError("некритичный потребитель упал")
 
         domain_events.register("test.after_commit_failing")(failing_handler)
-
-        # Коммит уже состоялся — откатывать нечего, поэтому исключение
-        # логируется и гасится (в отличие от синхронного publish()).
         with transaction.atomic():
             domain_events.publish_after_commit("test.after_commit_failing")
 
+    def test_without_subscribers_remains_noop_for_noncritical_channel(self):
+        with transaction.atomic():
+            domain_events.publish_after_commit("test.after_commit.no_subscribers", value=1)
+
 
 class HandlerRegistrationTests(TestCase):
-    """Обработчики подключаются из AppConfig.ready() (apps/iam/apps.py,
-    apps/audit/apps.py). Если импорт модуля обработчиков оттуда пропадёт,
-    события продолжат публиковаться «в пустоту» — аудит и история паролей
-    молча перестанут писаться. Эти проверки ловят именно такой обрыв."""
-
     def test_iam_handlers_are_registered(self):
         from apps.iam.handlers import logout_blocked_user, record_password_history
 
@@ -128,9 +113,6 @@ class HandlerRegistrationTests(TestCase):
         )
 
     def test_every_published_event_has_at_least_one_handler(self):
-        # Список публикуемых событий фиксируется здесь намеренно: новое
-        # событие без подписчика — не ошибка сама по себе, но должно быть
-        # осознанным решением, а не опечаткой в имени события.
         for event_name in (
             "user.blocked",
             "user.role.changed",
@@ -144,9 +126,6 @@ class HandlerRegistrationTests(TestCase):
                 )
 
     def test_user_save_is_not_monkey_patched(self):
-        # Регрессия: раньше apps/iam/handlers.py подменял User.save
-        # собственной функцией, из-за чего тело save() в models.py было
-        # мёртвым кодом, расходившимся с реальным поведением.
         from apps.iam.models import User
 
         self.assertEqual(User.save.__qualname__, "User.save")
