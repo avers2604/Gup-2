@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect
@@ -10,6 +12,8 @@ from apps.core.business_metrics import record_link_generation_failure
 from . import permissions
 from .models import NormativeDocument
 
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_FIELDS = {
     "original": "files_original",
@@ -52,6 +56,15 @@ def document_file_link(request, pk, kind: str):
         url = field_file.url
     except Exception as exc:
         status_code = _status_from_exception(exc)
+        # _status_from_exception распознаёт настоящие сбои хранилища
+        # (403/404/504 от boto3/сети) — но голый except Exception ловит и
+        # программную регрессию (например, AttributeError после будущего
+        # рефакторинга storage-класса), которая иначе молча становится
+        # неотличимым от "MinIO недоступен" ответом 504 без единого следа
+        # в логах.
+        logger.exception(
+            "Не удалось получить ссылку на файл документа %s (%s)", pk, field_name,
+        )
         record_link_generation_failure(status_code)
         return HttpResponse("link unavailable\n", status=status_code, content_type="text/plain")
 

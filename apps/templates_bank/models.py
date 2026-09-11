@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.validators import FileExtensionValidator
 from django.db import models, transaction
 
 from apps.core import antivirus, macro_check
@@ -78,12 +79,18 @@ class Template(TimeStampedModel):
     # является опубликованной версией (см. docstring класса), а не
     # черновиком. Минорная корректировка создаёт НОВУЮ строку/версию, а не
     # заменяет файл этой.
+    # Без валидатора расширения оба поля принимали файл любого формата —
+    # тот же риск, что закрыт в apps.documents.models.NormativeDocument
+    # (files_original/files_editable), и то же предположение, на которое
+    # опирается apps.core.macro_check для file_editable.
     file_editable = models.FileField(
         upload_to="templates/editable/%Y/", storage=originals_storage,
+        validators=[FileExtensionValidator(allowed_extensions=["docx", "xlsx"])],
         verbose_name="Защищённый рабочий бланк (.docx/.xlsx)",
     )
     file_sample = models.FileField(
         upload_to="templates/samples/%Y/", storage=originals_storage,
+        validators=[FileExtensionValidator(allowed_extensions=["pdf"])],
         verbose_name="Эталонный образец заполнения (.pdf)",
     )
 
@@ -111,16 +118,6 @@ class Template(TimeStampedModel):
         return f"{self.family.name} {self.version}"
 
     def save(self, *args, **kwargs):
-        # Усиление аудита (решение Заказчика: «фиксировать все изменения
-        # бланков — кто, что изменил, старый/новый статус»). Тот же
-        # паттерн "сравнить с БД до super().save()", что и у
-        # NormativeDocument.status/retention_category — см. их docstring'и.
-        previous_status = (
-            type(self).objects.filter(pk=self.pk).values_list("status", flat=True).first()
-        )
-        is_new = previous_status is None
-        status_changed = not is_new and previous_status != self.status
-
         # Антивирус + структурная проверка на макросы (ТЗ 4.7,
         # apps/core/antivirus.py, macro_check.py) — до super().save(), тот
         # же принцип, что и у NormativeDocument.save(): заражённый файл
@@ -144,6 +141,23 @@ class Template(TimeStampedModel):
                 )
 
         with transaction.atomic():
+            # Усиление аудита (решение Заказчика: «фиксировать все
+            # изменения бланков — кто, что изменил, старый/новый статус»).
+            # select_for_update() — тот же паттерн, что у
+            # NormativeDocument._save_validated: без блокировки строки два
+            # одновременных save() увидели бы один и тот же previous_status
+            # и оба посчитали бы себя единственным изменением статуса.
+            # Сегодня единственный легитимный вызывающий (publish_version)
+            # уже держит блокировку строки на уровень выше, но прямой
+            # вызов Template.save() в обход сервисного слоя эту гонку не
+            # ловил.
+            previous_status = (
+                type(self).objects.select_for_update().filter(pk=self.pk)
+                .values_list("status", flat=True).first()
+            )
+            is_new = previous_status is None
+            status_changed = not is_new and previous_status != self.status
+
             super().save(*args, **kwargs)
 
             if not status_changed:

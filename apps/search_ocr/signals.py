@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 from django.conf import settings
-from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from apps.documents.models import NormativeDocument
 
 from .search_index import refresh_document_index
-from .tasks import refresh_document_search_index
 
 
 @receiver(post_save, sender=NormativeDocument, dispatch_uid="search_ocr.refresh_document_index")

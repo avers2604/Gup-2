@@ -9,11 +9,15 @@ CHECK видит лишь вставляемую строку, а не весь 
 единицы (A → B → C → A) виден только обходом графа, поэтому это
 рекурсивный запрос, а не ограничение таблицы.
 """
+import logging
+
 from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
 
 from . import permissions, transitions
+
+logger = logging.getLogger(__name__)
 
 
 def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
@@ -83,6 +87,33 @@ def _lock_document(document):
     return model.objects.select_for_update().get(pk=document.pk)
 
 
+def _delete_written_files(document, previous_names):
+    """Компенсация отката транзакции ПОСЛЕ физической записи файла.
+
+    Model.save() пишет FileField в storage (S3 PUT к MinIO/originals)
+    синхронно, до коммита транзакции БД — эта запись не транзакционна с
+    Postgres и сама не откатывается. Если что-то после document.save() в
+    той же транзакции ещё бросит исключение (например, form.save_m2m() —
+    гонка с удалением связанного тега/подразделения между валидацией формы
+    и этим вызовом), транзакция БД откатится, а файл останется физически
+    лежать в WORM-бакете при исчезнувшей строке в БД. Удаляем только поля,
+    реально изменившиеся в этом вызове (previous_names) — файл, не
+    тронутый текущей операцией, трогать нельзя: после отката он снова
+    единственный, на который ссылается восстановленное состояние строки.
+    """
+    for field_name, previous_name in previous_names.items():
+        field_file = getattr(document, field_name)
+        if not field_file or field_file.name == previous_name:
+            continue
+        try:
+            field_file.delete(save=False)
+        except Exception:
+            logger.exception(
+                "Не удалось удалить осиротевший файл %s=%r после отката транзакции (id=%s)",
+                field_name, field_file.name, getattr(document, "pk", None),
+            )
+
+
 def create_document(*, actor, form=None, **attrs):
     """Создать карточку. Всегда черновик — статус не выбирается при
     создании: придание документу силы это отдельное, юридически значимое
@@ -103,7 +134,11 @@ def create_document(*, actor, form=None, **attrs):
         document.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
         document.save()
         if form is not None:
-            form.save_m2m()
+            try:
+                form.save_m2m()
+            except Exception:
+                _delete_written_files(document, {"files_original": "", "files_editable": ""})
+                raise
     return document
 
 
@@ -121,6 +156,10 @@ def update_document(*, actor, document, form=None, **attrs):
         expected = form.cleaned_data["revision"] if form is not None else document.edit_version
         if locked.edit_version != expected:
             raise ValidationError("Документ уже изменён другим пользователем. Обновите страницу и повторите правку.")
+        previous_file_names = {
+            "files_original": locked.files_original.name,
+            "files_editable": locked.files_editable.name if locked.files_editable else "",
+        }
         from .forms import DocumentForm
         fields = DocumentForm._meta.fields
         if form is not None:
@@ -139,7 +178,11 @@ def update_document(*, actor, document, form=None, **attrs):
         locked.save()
         if form is not None:
             form.instance = locked
-            form.save_m2m()
+            try:
+                form.save_m2m()
+            except Exception:
+                _delete_written_files(locked, previous_file_names)
+                raise
         document.refresh_from_db()
     return locked
 

@@ -260,58 +260,75 @@ def import_thesaurus(file_obj, *, actor: User | None = None) -> ThesaurusImportR
         abbr = item.get("abbr")
         if not abbr:
             continue
-        candidates_data = item.get("candidates", []) or []
-        disambiguation = item.get("disambiguation", "") or ""
-        normalized = normalize_term(abbr)
-        existing = ThesaurusAmbiguity.objects.filter(abbr_normalized=normalized).first()
-        is_new = existing is None
-        obj = existing or ThesaurusAmbiguity()
-        changed = is_new or obj.abbr != abbr or obj.disambiguation != disambiguation
-        obj.abbr = abbr
-        obj.disambiguation = disambiguation
-        obj.save()
+        changed = False
+        try:
+            # Своя транзакция и свой try/except на запись — тот же принцип,
+            # что и в цикле по entries выше: без этого необработанное
+            # исключение на одной записи реестра (например, IntegrityError
+            # от гонки с параллельной правкой в ThesaurusAmbiguityAdmin)
+            # прерывало бы весь import_thesaurus() целиком, а вместе с ним —
+            # и AuditLog.objects.create() ниже, которая пишет единственную
+            # запись THESAURUS_UPDATED за весь вызов. Уже закоммиченные
+            # изменения entries (каждая — в своей завершённой транзакции)
+            # тогда остались бы вообще без следа в WORM-журнале.
+            with transaction.atomic():
+                candidates_data = item.get("candidates", []) or []
+                disambiguation = item.get("disambiguation", "") or ""
+                normalized = normalize_term(abbr)
+                existing = ThesaurusAmbiguity.objects.filter(abbr_normalized=normalized).first()
+                is_new = existing is None
+                obj = existing or ThesaurusAmbiguity()
+                changed = is_new or obj.abbr != abbr or obj.disambiguation != disambiguation
+                obj.abbr = abbr
+                obj.disambiguation = disambiguation
+                obj.save()
 
-        # Кандидаты — отдельная модель с FK на ThesaurusEntry (не JSONField,
-        # см. докстринг ThesaurusAmbiguity), синхронизируются как "полная
-        # замена набора": обновляются/создаются присутствующие в файле,
-        # удаляются те, что пропали из файла между импортами.
-        seen_entry_ids: set[str] = set()
-        for cand in candidates_data:
-            entry_id = cand.get("id")
-            if not entry_id:
-                continue
-            weight = cand.get("weight", 1.0)
-            reason = cand.get("reason", "") or ""
-            try:
-                entry_obj = ThesaurusEntry.objects.get(pk=entry_id)
-            except ThesaurusEntry.DoesNotExist:
-                # ambiguity_registry ссылается на id, которого нет среди
-                # entries файла (например опечатка) — не должно молча
-                # потеряться и не должно валить весь импорт целиком.
-                report.warnings.append(
-                    f"ambiguity_registry: «{abbr}» ссылается на несуществующую запись «{entry_id}»."
+                # Кандидаты — отдельная модель с FK на ThesaurusEntry (не
+                # JSONField, см. докстринг ThesaurusAmbiguity),
+                # синхронизируются как "полная замена набора": обновляются/
+                # создаются присутствующие в файле, удаляются те, что
+                # пропали из файла между импортами.
+                seen_entry_ids: set[str] = set()
+                for cand in candidates_data:
+                    entry_id = cand.get("id")
+                    if not entry_id:
+                        continue
+                    weight = cand.get("weight", 1.0)
+                    reason = cand.get("reason", "") or ""
+                    try:
+                        entry_obj = ThesaurusEntry.objects.get(pk=entry_id)
+                    except ThesaurusEntry.DoesNotExist:
+                        # ambiguity_registry ссылается на id, которого нет
+                        # среди entries файла (например опечатка) — не
+                        # должно молча потеряться и не должно валить весь
+                        # импорт целиком.
+                        report.warnings.append(
+                            f"ambiguity_registry: «{abbr}» ссылается на несуществующую запись «{entry_id}»."
+                        )
+                        continue
+                    seen_entry_ids.add(entry_id)
+                    existing_candidate = ThesaurusAmbiguityCandidate.objects.filter(
+                        ambiguity=obj, entry=entry_obj,
+                    ).first()
+                    if (
+                        existing_candidate is None
+                        or existing_candidate.weight != weight
+                        or existing_candidate.reason != reason
+                    ):
+                        changed = True
+                    ThesaurusAmbiguityCandidate.objects.update_or_create(
+                        ambiguity=obj, entry=entry_obj, defaults={"weight": weight, "reason": reason},
+                    )
+
+                stale_candidates = ThesaurusAmbiguityCandidate.objects.filter(ambiguity=obj).exclude(
+                    entry_id__in=seen_entry_ids
                 )
-                continue
-            seen_entry_ids.add(entry_id)
-            existing_candidate = ThesaurusAmbiguityCandidate.objects.filter(
-                ambiguity=obj, entry=entry_obj,
-            ).first()
-            if (
-                existing_candidate is None
-                or existing_candidate.weight != weight
-                or existing_candidate.reason != reason
-            ):
-                changed = True
-            ThesaurusAmbiguityCandidate.objects.update_or_create(
-                ambiguity=obj, entry=entry_obj, defaults={"weight": weight, "reason": reason},
-            )
-
-        stale_candidates = ThesaurusAmbiguityCandidate.objects.filter(ambiguity=obj).exclude(
-            entry_id__in=seen_entry_ids
-        )
-        if stale_candidates.exists():
-            changed = True
-            stale_candidates.delete()
+                if stale_candidates.exists():
+                    changed = True
+                    stale_candidates.delete()
+        except (ValueError, ValidationError, IntegrityError) as exc:
+            report.errors.append((abbr, _format_error(exc)))
+            continue
 
         if changed:
             report.ambiguity_updated.append(abbr)
