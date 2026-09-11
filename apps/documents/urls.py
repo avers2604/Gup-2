@@ -7,6 +7,8 @@ app_name = "documents"
 urlpatterns = [
     path("", views.DocumentListView.as_view(), name="list"),
     path("new/", views.DocumentCreateView.as_view(), name="create"),
+    path("ocr-review/", views.OcrReviewQueueView.as_view(), name="ocr_review_queue"),
+    path("ocr-review/<uuid:pk>/", views.OcrReviewView.as_view(), name="ocr_review"),
     # "new/" объявлен ДО "<uuid:pk>/": иначе конвертер uuid всё равно не
     # совпал бы со словом, но порядок делает намерение явным и защищает от
     # будущей замены конвертера на более широкий.

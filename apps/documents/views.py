@@ -22,7 +22,13 @@ from django.urls import reverse
 from django.views import View
 
 from . import permissions, services, transitions
-from .forms import DocumentFilterForm, DocumentForm, RelationForm, StatusChangeForm
+from .forms import (
+    DocumentFilterForm,
+    DocumentForm,
+    OcrReviewForm,
+    RelationForm,
+    StatusChangeForm,
+)
 from .models import DocumentRelation, DocumentStatusHistory
 
 # Тот же размер страницы, что и в Smart Search (apps/search_ocr/views.py)
@@ -396,3 +402,100 @@ def _document_activity(document):
         .select_related("actor")
         .order_by("-created_at")[:ACTIVITY_LIMIT]
     )
+
+
+class OcrReviewQueueView(LoginRequiredMixin, View):
+    """Очередь ручной вычитки OCR (ТЗ 4.4.1, пункт меню «Вычитка OCR»).
+
+    Очередь велась с Этапа 3 (`OcrReviewQueueEntry`, метрика просрочки в
+    `/metrics/business/`), но разбирать её было негде: документы с низкой
+    уверенностью распознавания копились, и алерт о просрочке было нечем
+    закрыть.
+
+    Порядок — от самых давних: просрочка считается от `required_at`, и
+    показывать нужно в первую очередь то, по чему она набежала.
+    """
+
+    template_name = "documents/ocr_review_queue.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not permissions.can_review_ocr(request.user):
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def get(self, request):
+        from apps.core.models import OcrReviewQueueEntry
+
+        # Два запроса, а не join: OcrReviewQueueEntry живёт в apps.core и
+        # хранит document_id обычным UUIDField без FK — core намеренно не
+        # знает про documents. Объём безопасен: в очереди лежат только
+        # документы с низкой уверенностью распознавания, и каждый уходит из
+        # неё сразу после вычитки.
+        queued = list(
+            OcrReviewQueueEntry.objects.order_by("required_at").values_list(
+                "document_id", "required_at",
+            )
+        )
+        required_at = {document_id: moment for document_id, moment in queued}
+        # visible_documents — тот же фильтр ДСП, что и везде: очередь не
+        # должна показывать существование документа тому, кому не положено
+        # его видеть.
+        documents = {
+            document.pk: document
+            for document in permissions.visible_documents(request.user).filter(
+                pk__in=list(required_at)
+            ).select_related("issuer_dept")
+        }
+
+        entries = [
+            {"document": documents[document_id], "required_at": moment}
+            for document_id, moment in queued
+            if document_id in documents
+        ]
+
+        paginator = Paginator(entries, PAGE_SIZE)
+        page_obj = paginator.get_page(request.GET.get("page"))
+        return render(request, self.template_name, {
+            "page_obj": page_obj,
+            "entries": page_obj.object_list,
+        })
+
+
+class OcrReviewView(LoginRequiredMixin, View):
+    """Вычитка распознанного текста одного документа."""
+
+    template_name = "documents/ocr_review_form.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated and not permissions.can_review_ocr(request.user):
+            raise Http404
+        return super().dispatch(request, *args, **kwargs)
+
+    def _document(self, request, pk):
+        return get_object_or_404(permissions.visible_documents(request.user), pk=pk)
+
+    def get(self, request, pk):
+        document = self._document(request, pk)
+        return render(request, self.template_name, {
+            "document": document,
+            "form": OcrReviewForm(initial={"ocr_body": document.ocr_body}),
+        })
+
+    def post(self, request, pk):
+        document = self._document(request, pk)
+        form = OcrReviewForm(request.POST)
+        if form.is_valid():
+            try:
+                services.apply_ocr_review(
+                    actor=request.user,
+                    document=document,
+                    corrected_text=form.cleaned_data["ocr_body"],
+                )
+            except PermissionDenied as error:
+                form.add_error(None, str(error))
+            else:
+                messages.success(
+                    request, f"Текст документа {document.reg_number} вычитан и проиндексирован."
+                )
+                return HttpResponseRedirect(reverse("documents:ocr_review_queue"))
+        return render(request, self.template_name, {"document": document, "form": form})

@@ -38,6 +38,9 @@
         <a href="{% url 'search_ocr:search' %}">Поиск</a>
         <a href="{% url 'documents:list' %}">Документы</a>
         <a href="{% url 'templates_bank:family_list' %}">Бланки</a>
+        {% if can_review_ocr %}
+          <a href="{% url 'documents:ocr_review_queue' %}">Вычитка OCR</a>
+        {% endif %}
         {% if can_view_audit_log %}
           <a href="{% url 'audit:list' %}">Журнал аудита</a>
         {% endif %}

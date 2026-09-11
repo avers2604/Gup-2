@@ -243,3 +243,22 @@ class RelationForm(forms.ModelForm):
             # ModelForm вызывает её в _post_clean().
             self.instance.from_document = self.from_document
         return cleaned
+
+
+class OcrReviewForm(forms.Form):
+    """Правка распознанного текста.
+
+    Отдельная форма, а не ModelForm по NormativeDocument: вычитка не должна
+    иметь технической возможности задеть реквизиты карточки — в ней ровно одно
+    поле, и в сервис уходит только текст.
+    """
+
+    ocr_body = forms.CharField(
+        label="Распознанный текст",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 24, "spellcheck": "true"}),
+        help_text=(
+            "Сверьте текст со сканом и исправьте ошибки распознавания. "
+            "Сам скан не меняется — правится только текст, по которому идёт поиск."
+        ),
+    )

@@ -154,3 +154,23 @@ def visible_documents(user, queryset=None):
     if can_view_dsp(user):
         return queryset
     return queryset.filter(access_level=NormativeDocument.AccessLevel.GENERAL)
+
+
+def can_review_ocr(user, document=None) -> bool:
+    """Право вычитывать распознанный текст (рабочее место «Вычитка OCR»).
+
+    Намеренно НЕ повторяет `can_edit_document`, хотя роли те же. Правка
+    карточки разрешена только черновику: у документа, уже имеющего силу,
+    реквизиты меняются новой редакцией, а не на месте. С распознанным текстом
+    иначе — `ocr_body` не реквизит документа и не имеет юридического
+    значения, это поисковый материал (ТЗ 2.2 §4.4.1, FTS по ocr_body).
+    Плохое распознавание у действующего документа встречается ровно так же,
+    как у черновика, и запрет на его исправление означал бы, что документ
+    навсегда останется ненаходимым.
+
+    Сам скан при этом неприкосновенен: вычитка правит только извлечённый
+    текст, файл-оригинал лежит в WORM и не меняется.
+    """
+    if not _has_role(user, _editor_roles()):
+        return False
+    return document is None or can_view_document(user, document)

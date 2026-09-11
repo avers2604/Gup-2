@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Вычитка {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Вычитка OCR</p>
+  <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
+
+  <div class="card" style="margin-top: var(--space-6);">
+    <dl style="display:grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-6);">
+      <dt class="caption">Уверенность распознавания</dt>
+      <dd>
+        {% if document.ocr_confidence is not None %}
+          {{ document.ocr_confidence|floatformat:1 }}%
+        {% else %}
+          не измерена
+        {% endif %}
+      </dd>
+      <dt class="caption">Категория распознавания</dt>
+      <dd>{{ document.get_ocr_category_display|default:"—" }}</dd>
+      <dt class="caption">Скан оригинала</dt>
+      <dd>
+        {% if document.files_original %}
+          <a href="{% url 'documents:file-link' document.pk 'original' %}" target="_blank" rel="noopener">
+            Открыть скан
+          </a>
+        {% else %}
+          файл не загружен
+        {% endif %}
+      </dd>
+    </dl>
+  </div>
+
+  <form method="post" style="margin-top: var(--space-6);">
+    {% csrf_token %}
+    <div class="card">
+      {% if form.non_field_errors %}
+        <p class="field-error" style="margin-bottom: var(--space-4);">{{ form.non_field_errors.0 }}</p>
+      {% endif %}
+      <label class="field-label" for="{{ form.ocr_body.id_for_label }}">{{ form.ocr_body.label }}</label>
+      {{ form.ocr_body }}
+      <p class="caption" style="margin-top: var(--space-2);">{{ form.ocr_body.help_text }}</p>
+      {% for error in form.ocr_body.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+    </div>
+
+    <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+      <button class="btn btn--primary" type="submit">Сохранить и снять с очереди</button>
+      <a class="btn btn--ghost" href="{% url 'documents:ocr_review_queue' %}">Вернуться к очереди</a>
+      <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
+    </div>
+  </form>
+{% endblock %}

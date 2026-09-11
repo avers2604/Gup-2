@@ -369,3 +369,59 @@ def _log_relation_event(*, actor, relation, event_name):
             "note": relation.note,
         },
     )
+
+
+@retry_on_read_only_primary
+def apply_ocr_review(*, actor, document, corrected_text):
+    """Сохранить вычитанный человеком текст скана и снять документ с очереди.
+
+    Что именно меняется: `ocr_body` (поисковый материал) и `ocr_status`. Файл
+    оригинала не трогается вовсе — он лежит в WORM-бакете, и вычитка не имеет
+    к нему отношения.
+
+    `ocr_confidence` намеренно НЕ переписывается на 100: это измерение машины,
+    показывающее качество исходного распознавания, и подменять его оценкой
+    «человек проверил» значит потерять статистику, по которой настраиваются
+    пороги (`apps/documents/ocr_thresholds.py`). Факт проверки человеком несёт
+    `ocr_status`, а не уверенность распознавания.
+    """
+    from apps.audit.models import AuditLog
+    from apps.core.business_metrics import sync_ocr_review_queue
+
+    if not permissions.can_review_ocr(actor, document):
+        raise PermissionDenied("Недостаточно прав для вычитки распознанного текста.")
+
+    corrected_text = (corrected_text or "").strip()
+
+    with transaction.atomic():
+        locked = _lock_document(document)
+        previous_length = len(locked.ocr_body or "")
+        locked.ocr_body = corrected_text
+        locked.ocr_status = locked.OcrStatus.INDEXED
+        # update_fields ограничен OCR-полями: правка текста не должна
+        # выглядеть как редакторское изменение карточки и не должна
+        # инвалидировать чужие открытые формы правки (edit_version).
+        locked.save(update_fields=["ocr_body", "ocr_status", "updated_at"])
+
+        sync_ocr_review_queue(locked.pk, needs_review=False)
+
+        AuditLog.objects.create(
+            event_type=AuditLog.EventType.DOCUMENT_OCR_REVIEWED,
+            actor=actor,
+            actor_personnel_number=getattr(actor, "personnel_number", ""),
+            object_type="NormativeDocument",
+            object_id=str(locked.pk),
+            details={
+                "reg_number": locked.reg_number,
+                # Сам текст в журнал не пишется: он может быть на сотни
+                # килобайт и содержать ДСП-содержимое, а WORM-журнал читают
+                # шире, чем сам документ. Для разбора достаточно факта,
+                # автора и масштаба правки.
+                "previous_length": previous_length,
+                "new_length": len(corrected_text),
+                "ocr_confidence": locked.ocr_confidence,
+            },
+        )
+
+    document.refresh_from_db()
+    return locked

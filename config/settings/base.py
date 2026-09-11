@@ -75,6 +75,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "apps.audit.context_processors.audit_access",
+                "apps.documents.context_processors.ocr_review_access",
             ],
         },
     },

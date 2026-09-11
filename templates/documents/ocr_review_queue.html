@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Вычитка OCR · АИС «БЗ ГЭТ»{% endblock %}
+{% block content %}
+  <p class="label">Распознавание сканов</p>
+  <h1 class="title">Вычитка OCR</h1>
+  <p class="caption" style="margin-top: var(--space-2);">
+    Документы, распознанные с уверенностью ниже порога для своей категории.
+    Пока текст не вычитан, документ хуже находится поиском: в формуле
+    ранжирования участвует именно распознанный текст.
+  </p>
+
+  <div style="margin-top: var(--space-8);">
+    {% if page_obj %}
+      <p class="caption">
+        Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
+        в очереди: {{ page_obj.paginator.count }}
+      </p>
+    {% endif %}
+
+    {% if entries %}
+      <div class="table-scroll">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Рег. номер</th>
+              <th>Наименование</th>
+              <th>Уверенность</th>
+              <th>В очереди с</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in entries %}
+              <tr>
+                <td>{{ entry.document.reg_number }}</td>
+                <td>{{ entry.document.title }}</td>
+                <td>
+                  {% if entry.document.ocr_confidence is not None %}
+                    {{ entry.document.ocr_confidence|floatformat:1 }}%
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ entry.required_at|date:"d.m.Y H:i" }}</td>
+                <td>
+                  <a class="btn btn--secondary"
+                     href="{% url 'documents:ocr_review' entry.document.pk %}">Вычитать</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% if page_obj.has_other_pages %}
+        <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+          {% if page_obj.has_previous %}
+            <a class="btn btn--secondary" href="?page={{ page_obj.previous_page_number }}">Назад</a>
+          {% endif %}
+          {% if page_obj.has_next %}
+            <a class="btn btn--secondary" href="?page={{ page_obj.next_page_number }}">Вперёд</a>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% else %}
+      <div class="card">
+        <p>Очередь пуста — все распознанные сканы прошли порог уверенности.</p>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
