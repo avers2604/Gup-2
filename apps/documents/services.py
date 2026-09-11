@@ -427,17 +427,22 @@ def apply_ocr_review(*, actor, document, corrected_text):
     «человек проверил» значит потерять статистику, по которой настраиваются
     пороги (`apps/documents/ocr_thresholds.py`). Факт проверки человеком несёт
     `ocr_status`, а не уверенность распознавания.
+
+    Право проверяется ПОСЛЕ `select_for_update()`: переданный view/клиентом
+    экземпляр может устареть между чтением и записью (например, карточку
+    перевели в ДСП). Решение о записи должно приниматься по актуальной строке,
+    которую эта же транзакция уже заблокировала.
     """
     from apps.audit.models import AuditLog
     from apps.core.business_metrics import sync_ocr_review_queue
-
-    if not permissions.can_review_ocr(actor, document):
-        raise PermissionDenied("Недостаточно прав для вычитки распознанного текста.")
 
     corrected_text = (corrected_text or "").strip()
 
     with transaction.atomic():
         locked = _lock_document(document)
+        if not permissions.can_review_ocr(actor, locked):
+            raise PermissionDenied("Недостаточно прав для вычитки распознанного текста.")
+
         previous_length = len(locked.ocr_body or "")
         locked.ocr_body = corrected_text
         locked.ocr_status = locked.OcrStatus.INDEXED
