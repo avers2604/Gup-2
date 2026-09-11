@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.search_ocr.search_index import rebuild_document_search_index
+
+
+COLD_CONFIRMATION = "TRUNCATE_DOCUMENT_SEARCH_INDEX"
 
 
 class Command(BaseCommand):
@@ -22,11 +26,30 @@ class Command(BaseCommand):
             action="store_true",
             help="Destructive acceptance mode: start from an empty search read model.",
         )
+        parser.add_argument(
+            "--confirm-cold-rebuild",
+            help=(
+                "Required with --cold. Must equal "
+                f"{COLD_CONFIRMATION!r}; the environment must also set "
+                "ACCEPTANCE_ALLOW_DESTRUCTIVE_REINDEX=YES."
+            ),
+        )
         parser.add_argument("--json", action="store_true", dest="as_json")
 
     def handle(self, *args, **options):
-        if options["cold"] and options.get("require_count") is None:
-            raise CommandError("--cold requires --require-count")
+        if options["cold"]:
+            if options.get("require_count") is None:
+                raise CommandError("--cold requires --require-count")
+            if os.environ.get("ACCEPTANCE_ALLOW_DESTRUCTIVE_REINDEX") != "YES":
+                raise CommandError(
+                    "--cold is destructive and requires "
+                    "ACCEPTANCE_ALLOW_DESTRUCTIVE_REINDEX=YES in the acceptance environment"
+                )
+            if options.get("confirm_cold_rebuild") != COLD_CONFIRMATION:
+                raise CommandError(
+                    "--cold requires --confirm-cold-rebuild " + COLD_CONFIRMATION
+                )
+
         try:
             result = rebuild_document_search_index(
                 batch_size=options["batch_size"],
