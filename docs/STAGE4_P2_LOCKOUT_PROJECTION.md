@@ -39,6 +39,20 @@
 
 Оператор должен рассматривать расхождение как incident/data-integrity anomaly: сохранить evidence, определить источник вмешательства и только затем восстанавливать mutable projection контролируемой процедурой на основании подтверждённых данных. `AuditLog` при reconciliation не редактируется и не удаляется. Эта документация не вводит автоматическую команду «восстановить projection из audit»: такая операция способна непосредственно изменить текущий доступ пользователей и должна быть отдельной, явно утверждённой эксплуатационной процедурой с evidence/approval.
 
+### Read-only integrity check
+
+Для обнаружения расхождений добавлена команда:
+
+```bash
+python manage.py check_login_failure_integrity --window-minutes 15 --settle-seconds 5
+```
+
+Она **ничего не изменяет** ни в `LoginFailure`, ни в `AuditLog`. Команда сравнивает мультимножество security-реквизитов `(personnel_number, ip_address, stage, reason)` в settled-части активного окна. Дубли учитываются по количеству, а legacy-аудит без `stage`/`reason` нормализуется теми же правилами, что использует миграция `iam.0009` (`legacy` / `legacy_audit`).
+
+По умолчанию по 5 секунд исключаются с обоих краёв 15-минутного окна. Это уменьшает риск ложного инцидента из-за записи, которая попала точно на временную границу или ещё находится в транзакции. При полном совпадении команда печатает `PASS` и возвращает `0`. При расхождении она печатает количество `projection_without_audit` / `audit_without_projection`, sample keys и завершается с `CommandError`/non-zero status.
+
+Integrity check предназначен для acceptance, диагностики после ручного вмешательства в БД и периодической операционной проверки. Его FAIL **не переключает источник истины**: online lockout по-прежнему читает `LoginFailure`, а `AuditLog` остаётся forensic evidence. Автоматического repair intentionally нет.
+
 ## Атомарность с WORM-аудитом
 
 Неудачная попытка входа проходит через `_record_login_failure()` под `transaction.atomic()`:
@@ -115,6 +129,7 @@ Timer запускает cleanup ежедневно, использует `Persi
 - IP threshold можно переопределить через Django setting/environment без изменения кода;
 - invalid IP threshold (`0`/нечисловое значение) fail-closed отклоняется;
 - startup guard повторно валидирует effective IP threshold;
+- read-only integrity check PASS/FAIL, diagnostics, legacy normalization и отсутствие мутаций;
 - оба требуемых индекса присутствуют в модели;
 - retention cleanup удаляет только устаревшие operational rows;
 - старые Web/API/TOTP lockout и `Retry-After` тесты продолжают проверять пользовательскую семантику.
