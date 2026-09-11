@@ -5,7 +5,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.core.business_metrics import record_link_generation_failure, record_search
-from apps.core.models import OcrReviewQueueEntry
+from apps.core.models import BusinessMetricCounter, OcrReviewQueueEntry
 from apps.documents.models import NormativeDocument
 from apps.documents.tests.factories import make_document
 from apps.templates_bank.models import Template, TemplateFamily
@@ -68,3 +68,23 @@ class BusinessMetricsTests(TestCase):
 
         body = self.client.get(reverse("core:business-metrics")).content.decode()
         self.assertIn("bz_get_ocr_review_overdue_total 0", body)
+
+    def test_exports_login_failure_purge_last_success_and_success_count(self):
+        heartbeat = BusinessMetricCounter.objects.create(
+            name="login_failure_purge_successes",
+            value=3,
+        )
+        last_success = timezone.now() - datetime.timedelta(hours=49)
+        BusinessMetricCounter.objects.filter(pk=heartbeat.pk).update(updated_at=last_success)
+
+        body = self.client.get(reverse("core:business-metrics")).content.decode()
+        self.assertIn(
+            f"bz_get_login_failure_purge_last_success_unixtime {int(last_success.timestamp())}",
+            body,
+        )
+        self.assertIn("bz_get_login_failure_purge_success_total 3", body)
+
+    def test_purge_last_success_is_zero_before_first_successful_run(self):
+        body = self.client.get(reverse("core:business-metrics")).content.decode()
+        self.assertIn("bz_get_login_failure_purge_last_success_unixtime 0", body)
+        self.assertIn("bz_get_login_failure_purge_success_total 0", body)

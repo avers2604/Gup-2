@@ -56,6 +56,11 @@ grep -q 'alert: WormPromotionStuck' "$ROOT_DIR/deploy/prometheus/rules/applicati
 grep -q 'bz_get_worm_promotion_oldest_seconds.*> 900' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
 grep -q 'alert: WormPromotionBacklog' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
 
+grep -q 'alert: LoginFailurePurgeStale' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+grep -q 'bz_get_login_failure_purge_last_success_unixtime' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+grep -q '172800' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+grep -q 'absent(bz_get_login_failure_purge_last_success_unixtime)' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+
 if command -v promtool >/dev/null 2>&1; then
   promtool check config "$ROOT_DIR/deploy/prometheus/prometheus.stage4.yml.example"
   promtool check rules "$ROOT_DIR/deploy/prometheus/rules/ha-dr.yml"

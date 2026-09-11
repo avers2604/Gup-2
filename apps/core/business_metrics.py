@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -19,18 +19,33 @@ SEARCH_REQUESTS = "search_requests"
 SEARCH_ZERO_RESULTS = "search_zero_results"
 LINK_FAILURE_PREFIX = "link_generation_failure_"
 LINK_FAILURE_STATUSES = (403, 404, 504)
+LOGIN_FAILURE_PURGE_SUCCESSES = "login_failure_purge_successes"
 DEFAULT_SEARCH_METRIC_DEDUP_SECONDS = 30
 
 
 def increment_counter(name: str, amount: int = 1) -> None:
-    """Atomically increment a persisted counter without process-local state."""
-    updated = BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
+    """Atomically increment a persisted counter and its last-mutation timestamp."""
+    now = timezone.now()
+    updated = BusinessMetricCounter.objects.filter(name=name).update(
+        value=F("value") + amount,
+        updated_at=now,
+    )
     if updated:
         return
     try:
-        BusinessMetricCounter.objects.create(name=name, value=amount)
+        # The savepoint is required when a caller already owns an outer
+        # transaction (purge_login_failures does): a concurrent first INSERT
+        # may violate the unique name constraint, but must not poison the
+        # caller's whole transaction before the retry UPDATE.
+        with transaction.atomic():
+            BusinessMetricCounter.objects.create(name=name, value=amount)
     except IntegrityError:
-        BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
+        # Concurrent first writer won the INSERT. QuerySet.update() bypasses
+        # auto_now, so updated_at must be advanced explicitly here as well.
+        BusinessMetricCounter.objects.filter(name=name).update(
+            value=F("value") + amount,
+            updated_at=now,
+        )
 
 
 def build_search_metric_key(
@@ -165,6 +180,12 @@ def render_prometheus() -> str:
     search_zero = counters[SEARCH_ZERO_RESULTS]
     zero_ratio = (search_zero / search_total) if search_total else 0.0
 
+    purge_heartbeat = BusinessMetricCounter.objects.filter(
+        name=LOGIN_FAILURE_PURGE_SUCCESSES
+    ).values("value", "updated_at").first()
+    purge_success_total = purge_heartbeat["value"] if purge_heartbeat else 0
+    purge_last_success = int(purge_heartbeat["updated_at"].timestamp()) if purge_heartbeat else 0
+
     lines = [
         "# HELP bz_get_ocr_review_overdue_total Documents waiting for OCR manual review for more than 14 days.",
         "# TYPE bz_get_ocr_review_overdue_total gauge",
@@ -187,6 +208,15 @@ def render_prometheus() -> str:
     for status in LINK_FAILURE_STATUSES:
         value = counters[f"{LINK_FAILURE_PREFIX}{status}"]
         lines.append(f'bz_get_link_generation_failures_total{{status="{status}"}} {value}')
+
+    lines.extend([
+        "# HELP bz_get_login_failure_purge_success_total Successful LoginFailure retention purge executions.",
+        "# TYPE bz_get_login_failure_purge_success_total counter",
+        f"bz_get_login_failure_purge_success_total {purge_success_total}",
+        "# HELP bz_get_login_failure_purge_last_success_unixtime Unix timestamp of the last successful LoginFailure retention purge; 0 means never observed.",
+        "# TYPE bz_get_login_failure_purge_last_success_unixtime gauge",
+        f"bz_get_login_failure_purge_last_success_unixtime {purge_last_success}",
+    ])
 
     pending = TaskOutbox.objects.filter(delivered_at__isnull=True).aggregate(
         count=Count("pk"), oldest=Min("created_at")

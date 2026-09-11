@@ -14,4 +14,8 @@ class AuditConfig(AppConfig):
         require_handlers(
             "user.role.changed",
             "user.role.elevated",
+            "auth.login.failed",
+            "auth.session.login",
+            "auth.session.logout",
+            "auth.totp.reset",
         )

@@ -22,3 +22,14 @@ groups:
           summary: "Очередь WORM promotion не очищается"
           description: "Есть незавершённые staging→originals операции непрерывно более 15 минут. Даже если oldest ещё не перешёл critical-порог, проверить очередь доставки."
           runbook: "deploy/minio/WORM_PROMOTION.md"
+
+      - alert: LoginFailurePurgeStale
+        expr: (time() - max(bz_get_login_failure_purge_last_success_unixtime) > 172800) or absent(bz_get_login_failure_purge_last_success_unixtime)
+        for: 15m
+        labels:
+          severity: warning
+          component: iam
+        annotations:
+          summary: "Очистка IAM LoginFailure не подтверждалась более 48 часов"
+          description: "Последний успешный purge operational LoginFailure старше 172800 секунд, ещё ни разу не был подтверждён (timestamp=0) либо heartbeat-метрика отсутствует. Проверить get-login-failure-purge.timer/service, scheduler/maintenance узел и доступ к PostgreSQL."
+          runbook: "docs/STAGE4_P2_LOCKOUT_PROJECTION.md"
