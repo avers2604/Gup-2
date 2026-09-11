@@ -1,14 +1,41 @@
 # Generated manually for Stage 4 P2 IAM lockout projection.
 
 import uuid
+from datetime import timedelta
 
 from django.db import migrations, models
+from django.utils import timezone
+
+
+def backfill_active_lockout_window(apps, schema_editor):
+    """Preserve failures that can still participate in the 15-minute lockout."""
+    AuditLog = apps.get_model("audit", "AuditLog")
+    LoginFailure = apps.get_model("iam", "LoginFailure")
+    cutoff = timezone.now() - timedelta(minutes=15)
+
+    failures = AuditLog.objects.filter(
+        event_type="session.login_failed",
+        created_at__gte=cutoff,
+    ).order_by("created_at")
+
+    for audit in failures.iterator(chunk_size=500):
+        details = audit.details or {}
+        row = LoginFailure.objects.create(
+            personnel_number=(audit.actor_personnel_number or "")[:32],
+            ip_address=str(details.get("ip_address") or "")[:45],
+            stage=str(details.get("stage") or "legacy")[:32],
+            reason=str(details.get("reason") or "legacy_audit")[:64],
+        )
+        # auto_now_add writes migration time; restore the original failure time
+        # so Retry-After and sliding-window expiry do not get artificially reset.
+        LoginFailure.objects.filter(pk=row.pk).update(created_at=audit.created_at)
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
         ("iam", "0008_usedloginticket_user_auth_version_and_more"),
+        ("audit", "0015_alter_auditlog_event_type"),
     ]
 
     operations = [
@@ -43,5 +70,9 @@ class Migration(migrations.Migration):
                     ),
                 ],
             },
+        ),
+        migrations.RunPython(
+            backfill_active_lockout_window,
+            reverse_code=migrations.RunPython.noop,
         ),
     ]
