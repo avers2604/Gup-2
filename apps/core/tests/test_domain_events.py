@@ -23,9 +23,7 @@ class DomainEventBusTests(TestCase):
     def test_publish_dispatches_synchronously(self):
         received = []
         domain_events.register("test.sync")(lambda event: received.append(event))
-
         domain_events.publish("test.sync", value=42)
-
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0].payload["value"], 42)
 
@@ -43,7 +41,6 @@ class DomainEventBusTests(TestCase):
 
         domain_events.register("test.idempotent")(handler)
         domain_events.register("test.idempotent")(handler)
-
         self.assertEqual(domain_events._HANDLERS["test.idempotent"].count(handler), 1)
 
     def test_publish_without_subscribers_fails_closed(self):
@@ -53,12 +50,22 @@ class DomainEventBusTests(TestCase):
         ):
             domain_events.publish("test.nobody.listens", value=1)
 
+    def test_require_handlers_reports_all_missing_events(self):
+        domain_events.register("test.present")(lambda event: None)
+        with self.assertRaisesRegex(
+            domain_events.MissingDomainEventHandler,
+            "test.missing.one.*test.missing.two",
+        ):
+            domain_events.require_handlers(
+                "test.present",
+                "test.missing.one",
+                "test.missing.two",
+            )
+
     def test_unknown_payload_keys_reach_handler(self):
         received = []
         domain_events.register("test.payload")(lambda event: received.append(event.payload))
-
         domain_events.publish("test.payload", a=1, b="два")
-
         self.assertEqual(received[0], {"a": 1, "b": "два"})
 
 
@@ -75,11 +82,9 @@ class PublishAfterCommitTests(TransactionTestCase):
     def test_fires_after_commit(self):
         received = []
         domain_events.register("test.after_commit")(lambda event: received.append(event))
-
         with transaction.atomic():
             domain_events.publish_after_commit("test.after_commit")
             self.assertEqual(received, [])
-
         self.assertEqual(len(received), 1)
 
     def test_handler_exception_is_swallowed_after_commit(self):
