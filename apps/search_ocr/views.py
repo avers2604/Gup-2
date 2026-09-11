@@ -38,8 +38,11 @@ class SearchView(LoginRequiredMixin, View):
                 service=form.cleaned_data.get("service") or None,
             )
             paginator = Paginator(queryset, PAGE_SIZE)
-            record_search(paginator.count)
             page_obj = paginator.get_page(request.GET.get("page"))
+            # Paginator may normalize invalid page input back to page 1. Record
+            # the resolved page number so only a logical search execution, not
+            # every click on page 2..N, contributes to search quality metrics.
+            record_search(paginator.count, page_number=page_obj.number)
             results = page_obj.object_list
             query_params = request.GET.copy()
             query_params.pop("page", None)
