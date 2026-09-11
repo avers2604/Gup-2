@@ -17,6 +17,8 @@ Usage:
 Acceptance minima/maxima are version-controlled in acceptance-policy.json.
 Stricter stand values are allowed. Weaker values require a complete
 ACCEPTANCE_WAIVER_ID / APPROVER / REASON and are classified PASS_WITH_WAIVER.
+The policy is re-evaluated by every direct extended-check invocation; preflight
+is not a trust boundary.
 EOF
 }
 
@@ -37,7 +39,8 @@ results="$run_dir/extended-results.env"
 policy_evidence="$run_dir/acceptance-policy.json"
 
 # Prevent an operator from silently weakening acceptance by editing only the
-# host-local inventory. The repository policy is the baseline of record.
+# host-local inventory. This runs for EVERY invocation, not only preflight, so
+# calling a drill directly cannot bypass waiver semantics.
 python3 "$SCRIPT_DIR/acceptance_policy.py" --evidence "$policy_evidence" >/dev/null
 
 ensure_results() {
@@ -54,6 +57,7 @@ queue_redis_kill_result=NOT_RUN
 minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
+minio_hash_seed=
 minio_hash_result=NOT_RUN
 EOF
 }
@@ -91,10 +95,11 @@ case "$action" in
     set_result search_reindex_required_documents "$count"
     set_result search_reindex_limit_seconds "$limit"
     set +e
-    bash -lc "cd '$REPO_ROOT' && $manage rebuild_search_index --cold --batch-size '$batch' --require-count '$count' --max-seconds '$limit' --json" >"$out" 2>"$err"
+    bash -lc "cd '$REPO_ROOT' && $manage rebuild_search_index --cold --confirm-cold-rebuild TRUNCATE_DOCUMENT_SEARCH_INDEX --batch-size '$batch' --require-count '$count' --max-seconds '$limit' --json" >"$out" 2>"$err"
     rc=$?
     set -e
-    python3 - "$out" "$results" <<'PY'
+    if (( rc == 0 )); then
+      python3 - "$out" "$results" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -119,13 +124,13 @@ rows.update({
 })
 results.write_text("".join(f"{k}={v}\n" for k, v in rows.items()))
 PY
-    if (( rc == 0 )); then
       checkpoint "cold-reindex-${count}-passed"
       echo "Cold reindex PASS; measurement=$out"
     else
       set_result search_reindex_result FAIL
       checkpoint "cold-reindex-${count}-failed"
       echo "Cold reindex FAILED; measurement=$out stderr=$err" >&2
+      cat "$err" >&2 || true
       exit 1
     fi
     ;;
@@ -172,7 +177,10 @@ PY
       echo "ERROR: MINIO_HASH_SAMPLE_SIZE must be a positive integer" >&2
       exit 64
     }
+    sample_seed="${MINIO_HASH_SAMPLE_SEED:-$run_id}"
+    [[ -n "$sample_seed" ]] || { echo "ERROR: MinIO sample seed must not be empty" >&2; exit 64; }
     set_result minio_hash_required_count "$sample_size"
+    set_result minio_hash_seed "$sample_seed"
     : "${MINIO_DR_ENV:?MINIO_DR_ENV is required}"
     [[ -r "$MINIO_DR_ENV" ]] || { echo "ERROR: unreadable $MINIO_DR_ENV" >&2; exit 66; }
     set -a
@@ -182,7 +190,7 @@ PY
     evidence="$run_dir/minio-versioned-sample.csv"
     set +e
     MINIO_HASH_SAMPLE_SIZE="$sample_size" \
-    MINIO_HASH_SAMPLE_SEED="$run_id" \
+    MINIO_HASH_SAMPLE_SEED="$sample_seed" \
     MINIO_HASH_EVIDENCE_FILE="$evidence" \
       bash "$REPO_ROOT/deploy/minio/dr/verify-500-hashes.sh" \
       >"$run_dir/minio-versioned-sample.txt" 2>&1
