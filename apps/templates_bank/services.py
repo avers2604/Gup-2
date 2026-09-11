@@ -12,6 +12,10 @@ from . import permissions
 from .models import Template, TemplateFamily
 
 
+class FilePromotionPending(ValidationError):
+    """Файл опубликован в БД, но ещё не закреплён в WORM-хранилище."""
+
+
 def publish_version(*, actor, family, form=None, **attrs):
     """Опубликовать новую версию бланка внутри семейства форм.
 
@@ -32,14 +36,7 @@ def publish_version(*, actor, family, form=None, **attrs):
         )
 
     with transaction.atomic():
-        # Блокировка семейства: без неё две одновременные публикации
-        # обе увидели бы одну и ту же «текущую активную» версию и обе
-        # объявили бы себя её преемником — предыдущая версия получила бы
-        # два superseded_by, а один из выпусков потерял бы связь с
-        # предшественником. UniqueConstraint(family, version) такую
-        # гонку не ловит: версии-то разные.
         TemplateFamily.objects.select_for_update().get(pk=family.pk)
-
         previous = (
             Template.objects.select_for_update()
             .filter(family=family, status=Template.Status.ACTIVE)
@@ -62,9 +59,6 @@ def publish_version(*, actor, family, form=None, **attrs):
             try:
                 previous.save(update_fields=["status", "superseded_by", "updated_at"])
             except Exception:
-                # The new version has not reached Object-Locked storage yet.
-                # Its staging files are mutable and can be safely discarded;
-                # the promotion/outbox rows roll back with this transaction.
                 from apps.core.staged_files import discard_staged_uploads
 
                 discard_staged_uploads(template)
@@ -74,17 +68,11 @@ def publish_version(*, actor, family, form=None, **attrs):
 
 
 def register_download(*, actor, template, field_name):
-    """Учесть скачивание файла бланка (ТЗ 4.3.1, `download_count`).
+    """Учесть только реально доступное скачивание файла бланка.
 
-    Счётчик увеличивается через `F()`, а не чтением-записью в Python:
-    два одновременных скачивания иначе записали бы одно и то же новое
-    значение, и одно из них потерялось бы.
-
-    Скачивание архивной (заменённой) версии дополнительно попадает в
-    WORM-журнал событием `ARCHIVE_DOWNLOAD`. Событие было заведено в
-    модели журнала с Этапа 1, но до этой партии его не писал никакой код
-    — учитывать обращения к устаревшим формам и было незачем, пока
-    выдавать их было неоткуда.
+    Пока final key ещё переносится из staging в Object-Locked `originals`,
+    скачивание не считается и архивное audit-событие не создаётся. Это не
+    ошибка MinIO, а ожидаемое короткое состояние публикации.
     """
     if not permissions.can_view_templates(actor):
         raise PermissionDenied("Требуется вход в систему.")
@@ -93,10 +81,20 @@ def register_download(*, actor, template, field_name):
     if field_name not in {"file_editable", "file_sample"} or not field_file:
         raise ValidationError("У бланка нет такого файла.")
 
-    with transaction.atomic():
-        Template.objects.filter(pk=template.pk).update(
-            download_count=F("download_count") + 1
+    from apps.core.staged_files import promotion_pending_for
+
+    if promotion_pending_for(
+        "templates_bank.template",
+        str(template.pk),
+        field_name,
+        field_file.name,
+    ):
+        raise FilePromotionPending(
+            "Файл ещё закрепляется в защищённом хранилище. Повторите скачивание позже."
         )
+
+    with transaction.atomic():
+        Template.objects.filter(pk=template.pk).update(download_count=F("download_count") + 1)
 
         if template.status == Template.Status.SUPERSEDED:
             from apps.audit.models import AuditLog
