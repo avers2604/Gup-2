@@ -16,6 +16,9 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 
+SAMPLE_ALGORITHM = "sorted-random-v1"
+
+
 @dataclass(frozen=True)
 class ObjectVersion:
     key: str
@@ -37,6 +40,28 @@ def _client(*, endpoint: str, access_key: str, secret_key: str, verify):
             s3={"addressing_style": "path"},
         ),
     )
+
+
+def validate_acceptance_bucket(client, bucket: str) -> None:
+    """Fail closed unless the sampled bucket is versioned and Object-Locked."""
+    versioning = client.get_bucket_versioning(Bucket=bucket).get("Status")
+    if versioning != "Enabled":
+        raise RuntimeError(
+            f"acceptance bucket {bucket!r} must have Versioning=Enabled, got {versioning!r}"
+        )
+    try:
+        lock = client.get_object_lock_configuration(Bucket=bucket).get(
+            "ObjectLockConfiguration", {}
+        )
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", "ClientError"))
+        raise RuntimeError(
+            f"acceptance bucket {bucket!r} has no usable Object Lock configuration: {code}"
+        ) from exc
+    if lock.get("ObjectLockEnabled") != "Enabled":
+        raise RuntimeError(
+            f"acceptance bucket {bucket!r} must have Object Lock enabled"
+        )
 
 
 def list_object_versions(client, bucket: str) -> list[ObjectVersion]:
@@ -141,9 +166,9 @@ def verify_one(source, target, bucket: str, item: ObjectVersion) -> dict[str, st
     if row["source_legal_hold"] != row["target_legal_hold"]:
         mismatches.append("legal_hold")
 
-    # originals is WORM: every sampled source version must have either dated
-    # retention or an active legal hold. Equality of two unprotected copies is
-    # not sufficient acceptance evidence.
+    # Permanent-retention records may be protected exclusively by legal hold and
+    # legitimately have no RetainUntilDate. A dated retention OR legal hold ON
+    # is sufficient on source, but target must match the same protection state.
     protected = bool(
         row["source_retention_mode"] and row["source_retain_until"]
     ) or row["source_legal_hold"] == "ON"
@@ -163,10 +188,17 @@ def run(source, target, *, bucket: str, sample_size: int, seed: str, evidence: s
         raise RuntimeError(
             f"need at least {sample_size} non-null object versions for acceptance sample; found {len(versions)}"
         )
-    sample = random.Random(seed).sample(versions, sample_size)
+    # API pagination/list order is not part of the evidence contract. Sort the
+    # population first, then seed a dedicated RNG so the same seed + population
+    # deterministically yields the same exact object-version sample.
+    population = sorted(versions, key=lambda item: (item.key, item.version_id))
+    sample = random.Random(seed).sample(population, sample_size)
     rows = [verify_one(source, target, bucket, item) for item in sample]
+    for row in rows:
+        row["sample_seed"] = seed
+        row["sample_algorithm"] = SAMPLE_ALGORITHM
     fieldnames = [
-        "key", "source_version_id", "target_version_id",
+        "sample_seed", "sample_algorithm", "key", "source_version_id", "target_version_id",
         "source_sha256", "target_sha256",
         "source_retention_mode", "target_retention_mode",
         "source_retain_until", "target_retain_until",
@@ -188,6 +220,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.sample_size <= 0:
         parser.error("--sample-size must be > 0")
+    if not args.seed:
+        parser.error("--seed must not be empty")
 
     required = [
         "MINIO_SOURCE_URL", "MINIO_TARGET_URL",
@@ -198,6 +232,15 @@ def main() -> int:
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise SystemExit("missing environment: " + ", ".join(missing))
+
+    originals = os.environ["MINIO_BUCKET_ORIGINALS"]
+    working = os.environ.get("MINIO_BUCKET_WORKING")
+    if working and originals == working:
+        raise SystemExit(
+            "MINIO_BUCKET_ORIGINALS must differ from MINIO_BUCKET_WORKING; "
+            "acceptance must sample the protected originals bucket"
+        )
+
     verify = os.environ.get("MINIO_CA_FILE") or True
     source = _client(
         endpoint=os.environ["MINIO_SOURCE_URL"],
@@ -212,10 +255,12 @@ def main() -> int:
         verify=verify,
     )
     try:
+        validate_acceptance_bucket(source, originals)
+        validate_acceptance_bucket(target, originals)
         checked, failures = run(
             source,
             target,
-            bucket=os.environ["MINIO_BUCKET_ORIGINALS"],
+            bucket=originals,
             sample_size=args.sample_size,
             seed=args.seed,
             evidence=args.evidence,
@@ -230,7 +275,8 @@ def main() -> int:
         )
         return 1
     print(
-        f"MinIO versioned sample PASS: checked={checked} failures=0 bucket={os.environ['MINIO_BUCKET_ORIGINALS']} evidence={args.evidence}"
+        f"MinIO versioned sample PASS: checked={checked} failures=0 bucket={originals} "
+        f"seed={args.seed} algorithm={SAMPLE_ALGORITHM} evidence={args.evidence}"
     )
     return 0
 
