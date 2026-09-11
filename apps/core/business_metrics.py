@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -33,7 +33,12 @@ def increment_counter(name: str, amount: int = 1) -> None:
     if updated:
         return
     try:
-        BusinessMetricCounter.objects.create(name=name, value=amount)
+        # The savepoint is required when a caller already owns an outer
+        # transaction (purge_login_failures does): a concurrent first INSERT
+        # may violate the unique name constraint, but must not poison the
+        # caller's whole transaction before the retry UPDATE.
+        with transaction.atomic():
+            BusinessMetricCounter.objects.create(name=name, value=amount)
     except IntegrityError:
         # Concurrent first writer won the INSERT. QuerySet.update() bypasses
         # auto_now, so updated_at must be advanced explicitly here as well.
