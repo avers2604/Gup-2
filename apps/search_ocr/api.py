@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.business_metrics import record_search
+from apps.core.business_metrics import build_search_metric_key, record_search
 
 from .forms import SearchForm
 from .indexed_search import search_documents_indexed
@@ -37,11 +37,13 @@ class DocumentSearchAPIView(APIView):
         if not query:
             return Response({"count": 0, "next": None, "previous": None, "results": []})
 
+        category = form.cleaned_data.get("category") or None
+        service = form.cleaned_data.get("service") or None
         queryset = search_documents_indexed(
             request.user,
             query,
-            category=form.cleaned_data.get("category") or None,
-            service=form.cleaned_data.get("service") or None,
+            category=category,
+            service=service,
         )
 
         paginator = self.pagination_class()
@@ -53,9 +55,19 @@ class DocumentSearchAPIView(APIView):
         else:
             count = paginator.page.paginator.count
             page_number = paginator.page.number
-        # Page 2..N is navigation through the same logical query and must not
-        # bias zero-result/search-request metrics toward large result sets.
-        record_search(count, page_number=page_number)
+
+        logical_key = build_search_metric_key(
+            user_id=request.user.pk,
+            query=query,
+            category=category,
+            service=service,
+            surface="api",
+        )
+        record_search(
+            count,
+            page_number=page_number,
+            logical_search_key=logical_key,
+        )
 
         results = [
             {
