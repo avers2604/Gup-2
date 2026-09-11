@@ -1,0 +1,24 @@
+groups:
+  - name: bz-get-application-delivery
+    rules:
+      - alert: WormPromotionStuck
+        expr: max(bz_get_worm_promotion_oldest_seconds) > 900
+        for: 2m
+        labels:
+          severity: critical
+          component: minio
+        annotations:
+          summary: "WORM promotion не завершён более 15 минут"
+          description: "Самое старое незавершённое намерение staging→originals старше 900 секунд. Проверить Celery/outbox, MinIO source/target, Object Lock и last_error в StagedFilePromotion."
+          runbook: "deploy/minio/WORM_PROMOTION.md"
+
+      - alert: WormPromotionBacklog
+        expr: max(bz_get_worm_promotions_pending) > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: minio
+        annotations:
+          summary: "Очередь WORM promotion не очищается"
+          description: "Есть незавершённые staging→originals операции непрерывно более 15 минут. Даже если oldest ещё не перешёл critical-порог, проверить очередь доставки."
+          runbook: "deploy/minio/WORM_PROMOTION.md"
