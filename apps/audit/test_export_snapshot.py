@@ -46,3 +46,19 @@ class AuditExportSnapshotTests(TestCase):
             event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED
         ).latest("created_at")
         self.assertEqual(event.details["matched_entries"], 1)
+
+    def test_invalid_filters_do_not_fall_back_to_full_export(self):
+        before = AuditLog.objects.filter(
+            event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED
+        ).count()
+
+        response = self.client.get(
+            reverse("audit:export"),
+            {"date_from": "2030-01-01", "date_to": "2020-01-01"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            AuditLog.objects.filter(event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED).count(),
+            before,
+        )
