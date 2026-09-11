@@ -106,6 +106,39 @@ class ConsolidatedListTests(TestCase):
 
         self.assertNotContains(response, "БАЗА-2")
 
+    def test_hidden_dsp_only_amendment_does_not_reveal_base_on_list(self):
+        """Сам факт ДСП-изменения не должен утекать через сводный список."""
+        base = make_document(
+            reg_number="БАЗА-СКРЫТАЯ",
+            status=NormativeDocument.Status.ACTIVE_AMENDED,
+        )
+        secret = make_document(
+            reg_number="ИЗМ-ДСП-СКРЫТОЕ",
+            status=NormativeDocument.Status.ACTIVE,
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+        amend(secret, base)
+
+        response = self.client_.get(reverse("documents:consolidated_list"))
+
+        self.assertNotContains(response, "БАЗА-СКРЫТАЯ")
+        self.assertNotIn(base, list(response.context["documents"]))
+        self.assertNotIn(base, list(response.context["stale"]))
+
+    def test_amendment_count_excludes_hidden_dsp_amendment(self):
+        """Счётчик не должен выдавать число недоступных ДСП-изменений."""
+        secret = make_document(
+            reg_number="ИЗМ-ДСП-СЧЕТЧИК",
+            status=NormativeDocument.Status.ACTIVE,
+            access_level=NormativeDocument.AccessLevel.RESTRICTED,
+        )
+        amend(secret, self.base)
+
+        response = self.client_.get(reverse("documents:consolidated_list"))
+
+        listed = next(document for document in response.context["documents"] if document.pk == self.base.pk)
+        self.assertEqual(listed.amendment_count, 1)
+
 
 class ConsolidatedDetailTests(TestCase):
     def setUp(self):

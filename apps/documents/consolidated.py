@@ -25,6 +25,14 @@
 забыли. Расхождение не прячется: `stale_amended_documents()` собирает
 такие карточки отдельным списком, чтобы Контролёр/Юрист видел, где статус
 пора вернуть.
+
+ДСП-ГРАНИЦА. Наличие недоступного пользователю изменения само является
+метаданными закрытого документа и не должно раскрываться через появление
+базовой карточки или счётчик изменений. Поэтому пользовательская сводка
+считается только по видимым изменениям. При этом проверка устаревшего
+статуса использует полный граф: иначе базовый документ с единственным
+ДСП-изменением попал бы без допуска в блок «статус разошёлся со связями»
+и тем самым всё равно раскрыл бы факт скрытой связи.
 """
 from __future__ import annotations
 
@@ -79,13 +87,33 @@ def amendment_notes(document):
     }
 
 
-def _amended_base_ids(user):
-    """id документов, на которые есть хотя бы одно действующее изменение.
+def _visible_in_force_document_ids(user):
+    """id действующих документов, которые пользователь вправе видеть."""
+    return permissions.visible_documents(user).filter(
+        status__in=IN_FORCE_STATUSES
+    ).values_list("pk", flat=True)
 
-    Видимость изменения не влияет на попадание базового документа в
-    перечень: скрывать сам факт наличия изменений было бы хуже, чем
-    показать сводку, в которой часть строк недоступна. А вот сами строки
-    фильтруются через `visible_documents` в `amendments_for`.
+
+def _amended_base_ids(user):
+    """id базовых документов с хотя бы одним ВИДИМЫМ действующим изменением.
+
+    Сам факт существования ДСП-документа закрыт тем же правилом, что его
+    номер и содержимое. Поэтому скрытое изменение не должно ни добавлять
+    базовую карточку в список, ни увеличивать счётчик изменений.
+    """
+    return DocumentRelation.objects.filter(
+        relation_type=DocumentRelation.RelationType.AMENDS,
+        from_document_id__in=_visible_in_force_document_ids(user),
+    ).values_list("to_document_id", flat=True)
+
+
+def _all_amended_base_ids():
+    """id базовых документов с любым действующим изменением, независимо от доступа.
+
+    Нужны только для внутренней проверки согласованности статуса с графом:
+    пользователь без ДСП-допуска не должен увидеть публичную карточку в блоке
+    «статус разошёлся со связями» лишь потому, что её единственное изменение
+    ему скрыто.
     """
     return DocumentRelation.objects.filter(
         relation_type=DocumentRelation.RelationType.AMENDS,
@@ -94,7 +122,8 @@ def _amended_base_ids(user):
 
 
 def consolidated_documents(user):
-    """Документы, у которых есть что сводить, — с числом изменений."""
+    """Документы, у которых есть что сводить, — с числом видимых изменений."""
+    visible_in_force_ids = _visible_in_force_document_ids(user)
     return (
         permissions.visible_documents(user)
         .filter(pk__in=_amended_base_ids(user), status__in=IN_FORCE_STATUSES)
@@ -103,7 +132,7 @@ def consolidated_documents(user):
                 "relations_to",
                 filter=Q(
                     relations_to__relation_type=DocumentRelation.RelationType.AMENDS,
-                    relations_to__from_document__status__in=IN_FORCE_STATUSES,
+                    relations_to__from_document_id__in=visible_in_force_ids,
                 ),
                 distinct=True,
             )
@@ -120,11 +149,15 @@ def stale_amended_documents(user):
     «Действует с изм.» -> «Действует» выполняется человеком (см.
     apps/documents/transitions.py), и до него статус расходится с графом.
     Список нужен, чтобы это расхождение было видно, а не копилось молча.
+
+    Здесь намеренно используется полный граф, а не только видимые изменения:
+    иначе наличие скрытого ДСП-изменения раскрылось бы через ложное попадание
+    базовой карточки в этот блок.
     """
     return (
         permissions.visible_documents(user)
         .filter(status=NormativeDocument.Status.ACTIVE_AMENDED)
-        .exclude(pk__in=_amended_base_ids(user))
+        .exclude(pk__in=_all_amended_base_ids())
         .select_related("issuer_dept")
         .order_by("reg_number")
     )
