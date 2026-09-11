@@ -22,6 +22,11 @@ class Command(BaseCommand):
             "--actor", type=str, default=None,
             help="Табельный номер оператора, запустившего импорт (для аудита повышения роли)",
         )
+        parser.add_argument(
+            "--async", dest="async_mode", action="store_true",
+            help="Положить импорт в Celery и сразу вернуть task id "
+                 "(состояние — командой personnel_import_status)",
+        )
 
     def handle(self, *args, **options):
         file_path = Path(options["file"])
@@ -35,6 +40,20 @@ class Command(BaseCommand):
             actor = User.objects.filter(personnel_number=options["actor"]).first()
             if actor is None:
                 raise CommandError(f"Оператор с табельным номером {options['actor']!r} не найден.")
+
+        if options["async_mode"]:
+            # Файл кладётся в рабочее хранилище, в Celery уходит только имя
+            # объекта и id оператора — .xlsx целиком через брокер не гоняем.
+            from apps.iam.async_import import enqueue_personnel_import
+
+            with file_path.open("rb") as stream:
+                task_id = enqueue_personnel_import(
+                    stream, actor=actor, original_name=file_path.name,
+                )
+            self.stdout.write(self.style.SUCCESS(
+                f"Импорт поставлен в очередь. Celery task id: {task_id}"
+            ))
+            return
 
         with file_path.open("rb") as f:
             report = import_personnel(f, actor=actor)
