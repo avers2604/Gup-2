@@ -423,40 +423,47 @@ class OcrReviewQueueView(LoginRequiredMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
+        from django.db.models import Subquery
+
         from apps.core.models import OcrReviewQueueEntry
 
-        # Два запроса, а не join: OcrReviewQueueEntry живёт в apps.core и
-        # хранит document_id обычным UUIDField без FK — core намеренно не
-        # знает про documents. Объём безопасен: в очереди лежат только
-        # документы с низкой уверенностью распознавания, и каждый уходит из
-        # неё сразу после вычитки.
-        queued = list(
-            OcrReviewQueueEntry.objects.order_by("required_at").values_list(
-                "document_id", "required_at",
-            )
+        # OcrReviewQueueEntry намеренно не имеет FK на documents, чтобы core
+        # не зависел от доменного приложения. Фильтр допуска поэтому
+        # переносим в SQL через подзапрос и пагинируем саму очередь ДО её
+        # материализации: память и второй SELECT зависят только от PAGE_SIZE,
+        # а count не раскрывает наличие скрытых ДСП-документов.
+        visible_document_ids = (
+            permissions.visible_documents(request.user)
+            .order_by()
+            .values("pk")
         )
+        queue = (
+            OcrReviewQueueEntry.objects.filter(
+                document_id__in=Subquery(visible_document_ids)
+            )
+            .order_by("required_at", "pk")
+            .values_list("document_id", "required_at")
+        )
+        paginator = Paginator(queue, PAGE_SIZE)
+        page_obj = paginator.get_page(request.GET.get("page"))
+        queued = list(page_obj.object_list)
+
         required_at = {document_id: moment for document_id, moment in queued}
-        # visible_documents — тот же фильтр ДСП, что и везде: очередь не
-        # должна показывать существование документа тому, кому не положено
-        # его видеть.
         documents = {
             document.pk: document
-            for document in permissions.visible_documents(request.user).filter(
-                pk__in=list(required_at)
-            ).select_related("issuer_dept")
+            for document in permissions.visible_documents(request.user)
+            .filter(pk__in=list(required_at))
+            .select_related("issuer_dept")
         }
-
         entries = [
             {"document": documents[document_id], "required_at": moment}
             for document_id, moment in queued
             if document_id in documents
         ]
 
-        paginator = Paginator(entries, PAGE_SIZE)
-        page_obj = paginator.get_page(request.GET.get("page"))
         return render(request, self.template_name, {
             "page_obj": page_obj,
-            "entries": page_obj.object_list,
+            "entries": entries,
         })
 
 
