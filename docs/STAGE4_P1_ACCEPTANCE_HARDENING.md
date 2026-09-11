@@ -4,11 +4,12 @@
 
 ## Цель
 
-P1 закрывает три класса риска в приёмочной процедуре:
+P1 закрывает четыре класса риска:
 
 1. «cold reindex» должен действительно начинаться с пустого read-model;
 2. оператор не должен иметь возможности молча ослабить критерии через локальный `acceptance.env`;
-3. MinIO DR должен проверяться на уровне конкретных object versions и WORM-параметров, а не только текущих байтов объекта.
+3. MinIO DR должен проверяться на уровне конкретных object versions и WORM-параметров, а не только текущих байтов объекта;
+4. бизнес-метрики поиска/ссылок должны отражать логические события и выбранный период, а не HTTP pagination и lifetime accumulation.
 
 ## Repository-controlled baseline
 
@@ -60,6 +61,27 @@ Evidence: `minio-versioned-sample.csv`.
 
 Равные байты двух незащищённых версий — FAIL. Отсутствующая версия, несовпадение SHA-256, retention или legal hold — FAIL.
 
+## Семантика business metrics
+
+### Zero-result search
+
+`bz_get_search_requests_total` и `bz_get_search_zero_results_total` считают **логические поиски**, а не каждый HTTP GET пагинации. Разрешённая страница 1 создаёт одно событие; переходы на страницы 2..N с тем же запросом новых событий не создают.
+
+Это важно для `zero-result ratio`: иначе длинные выдачи искусственно увеличивали бы denominator за счёт навигации, хотя нового поискового намерения пользователя не было.
+
+Prometheus endpoint по-прежнему отдаёт устойчивые lifetime counters из PostgreSQL. Grafana вычисляет показатель за выбранный пользователем период через `increase(...[$__range])`, а не показывает lifetime ratio как будто он относится к текущему time range.
+
+### Link-generation failures
+
+В `bz_get_link_generation_failures_total` входят только ошибки, возникшие при фактической попытке получить storage/link URL. Ожидаемые application states не загрязняют инфраструктурный индикатор:
+
+- неизвестный route/field — business 404;
+- невидимый или отсутствующий документ — business 404;
+- отсутствующий file field — business 404;
+- незавершённый WORM promotion — 409 + `Retry-After`.
+
+Grafana показывает **прирост 403/404/504 за выбранный период**, а не абсолютный lifetime counter.
+
 ## CI contracts
 
 CI должен доказать как минимум:
@@ -71,7 +93,9 @@ CI должен доказать как минимум:
 - неполный waiver -> FAIL;
 - acceptance search measurement имеет `mode=cold`;
 - MinIO verifier сравнивает VersionId/SHA/Object Lock и имеет отрицательные тесты;
-- фактическое невыполнение даже ослабленного критерия остаётся FAIL.
+- фактическое невыполнение даже ослабленного критерия остаётся FAIL;
+- pagination pages 2..N не увеличивают logical search counters;
+- business dashboard использует period-scoped `increase()` для search/link counters и не выдаёт lifetime значения за выбранный период.
 
 ## Что P1 не доказывает
 
