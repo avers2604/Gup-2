@@ -62,6 +62,21 @@ bootstrap:
         ssl_ca_file: /etc/bz-get/pki/ca.crt
         # pgBackRest must be installed/configured on every PostgreSQL node.
         archive_command: 'pgbackrest --stanza=bz-get archive-push %p'
+        # Every node — not only the one running create_replica_methods — must
+        # be able to fetch WAL from the archive during ordinary streaming
+        # replication, not only during initial replica creation. Without this,
+        # a replica that falls behind the primary's live pg_wal retention (a
+        # long disconnect, or exactly the state a pgBackRest-based rebuild
+        # leaves it in right after `patroni-pgbackrest-restore.sh` completes,
+        # since the restored base backup is normally older than the primary's
+        # current WAL) has no way to catch up: it can only ask the primary's
+        # live pg_wal, which no longer holds the needed segment, and retries
+        # the same failing request forever with state=starting. Reproduced on
+        # the lab rehearsal (docs/STAGE4_LAB_REHEARSAL.md, Ф-7): a guarded
+        # `rebuild-replica.sh` run against a real (if stale) pgBackRest backup
+        # left the rebuilt replica stuck indefinitely until restore_command
+        # was added and the node was restarted.
+        restore_command: 'pgbackrest --stanza=bz-get archive-get %f "%p"'
 
   initdb:
     - encoding: UTF8
