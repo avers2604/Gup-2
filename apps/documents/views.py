@@ -21,7 +21,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
 
-from . import permissions, services, transitions
+from . import consolidated, permissions, services, transitions
 from .forms import (
     DocumentFilterForm,
     DocumentForm,
@@ -499,3 +499,47 @@ class OcrReviewView(LoginRequiredMixin, View):
                 )
                 return HttpResponseRedirect(reverse("documents:ocr_review_queue"))
         return render(request, self.template_name, {"document": document, "form": form})
+
+
+class ConsolidatedListView(LoginRequiredMixin, View):
+    """Перечень документов, у которых есть действующие изменения.
+
+    Экран доступен всем, кто вообще допущен в систему, с обычной
+    ДСП-фильтрацией. Это отступление от ориентира в STACK.md («гейтить
+    ролью CONTROLLER_LAWYER»), и оно намеренное: экран ничего не меняет и
+    не показывает ничего, чего пользователь не увидел бы, открыв карточку
+    базового документа и обойдя её связи руками. Ограничить сводку
+    Контролёром означало бы закрыть чтение действующих требований именно
+    от тех, кто по ним работает. Если Заказчик решит иначе, это правка
+    одной проверки здесь, а не переделка экрана.
+    """
+
+    template_name = "documents/consolidated_list.html"
+
+    def get(self, request):
+        documents = consolidated.consolidated_documents(request.user)
+        paginator = Paginator(documents, PAGE_SIZE)
+        page_obj = paginator.get_page(request.GET.get("page"))
+        return render(request, self.template_name, {
+            "page_obj": page_obj,
+            "documents": page_obj.object_list,
+            "stale": consolidated.stale_amended_documents(request.user),
+        })
+
+
+class ConsolidatedDetailView(LoginRequiredMixin, View):
+    """Сводка по одному документу: он сам плюс действующие изменения."""
+
+    template_name = "documents/consolidated_detail.html"
+
+    def get(self, request, pk):
+        document = get_object_or_404(permissions.visible_documents(request.user), pk=pk)
+        amendments = list(consolidated.amendments_for(document, request.user))
+        notes = consolidated.amendment_notes(document)
+        return render(request, self.template_name, {
+            "document": document,
+            "rows": [
+                {"document": amendment, "note": notes.get(amendment.pk, "")}
+                for amendment in amendments
+            ],
+        })
