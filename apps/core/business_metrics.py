@@ -25,13 +25,30 @@ def increment_counter(name: str, amount: int = 1) -> None:
         BusinessMetricCounter.objects.filter(name=name).update(value=F("value") + amount)
 
 
-def record_search(result_count: int) -> None:
+def record_search(result_count: int, *, page_number: int = 1) -> None:
+    """Record one logical search, not every HTTP page fetch.
+
+    Web and API pagination repeat the same query while the user/client walks
+    pages 2..N. Counting every page as a fresh search makes the zero-result
+    ratio depend on result-set length and navigation behavior instead of search
+    quality. Only the resolved first page represents the logical search event.
+    """
+    if page_number < 1:
+        raise ValueError("page_number must be >= 1")
+    if page_number != 1:
+        return
     increment_counter(SEARCH_REQUESTS)
     if result_count == 0:
         increment_counter(SEARCH_ZERO_RESULTS)
 
 
 def record_link_generation_failure(status_code: int) -> None:
+    """Record only failures raised while storage/link generation is attempted.
+
+    Callers must not use this for business 404/409 states (unknown route,
+    invisible/missing document, absent field, pending WORM promotion). Those are
+    application semantics, not storage availability failures.
+    """
     if status_code not in LINK_FAILURE_STATUSES:
         raise ValueError(f"unsupported link failure status: {status_code}")
     increment_counter(f"{LINK_FAILURE_PREFIX}{status_code}")
@@ -95,16 +112,16 @@ def render_prometheus() -> str:
         "# HELP bz_get_templates_revision_overdue_total Active templates not reviewed for more than 3 years.",
         "# TYPE bz_get_templates_revision_overdue_total gauge",
         f"bz_get_templates_revision_overdue_total {overdue_templates}",
-        "# HELP bz_get_search_requests_total Valid search requests executed by Web/API.",
+        "# HELP bz_get_search_requests_total Logical Web/API search executions; pagination pages after the first are excluded.",
         "# TYPE bz_get_search_requests_total counter",
         f"bz_get_search_requests_total {search_total}",
-        "# HELP bz_get_search_zero_results_total Valid search requests that returned zero documents.",
+        "# HELP bz_get_search_zero_results_total Logical first-page searches that returned zero documents.",
         "# TYPE bz_get_search_zero_results_total counter",
         f"bz_get_search_zero_results_total {search_zero}",
-        "# HELP bz_get_search_zero_result_ratio Lifetime ratio of valid search requests with zero results.",
+        "# HELP bz_get_search_zero_result_ratio Lifetime ratio of logical searches with zero results; pagination is excluded.",
         "# TYPE bz_get_search_zero_result_ratio gauge",
         f"bz_get_search_zero_result_ratio {zero_ratio:.8f}",
-        "# HELP bz_get_link_generation_failures_total Failed document-link generation attempts by HTTP status.",
+        "# HELP bz_get_link_generation_failures_total Storage/link-generation failures by HTTP status; business 404/409 states are excluded.",
         "# TYPE bz_get_link_generation_failures_total counter",
     ]
     for status in LINK_FAILURE_STATUSES:
