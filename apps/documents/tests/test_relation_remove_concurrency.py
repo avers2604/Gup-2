@@ -6,7 +6,6 @@ from unittest.mock import patch
 from django.db import close_old_connections, connection
 from django.test import TransactionTestCase
 
-from apps.audit.models import AuditLog
 from apps.documents import services
 from apps.documents.models import DocumentRelation
 from apps.iam.models import User
@@ -28,20 +27,25 @@ class ConcurrentRelationRemovalTests(TransactionTestCase):
             relation_type=DocumentRelation.RelationType.REFERENCES,
         )
 
-        original_log = services._log_relation_event
         both_logged = threading.Barrier(2)
         start = threading.Barrier(2)
         outcomes = []
-        outcome_lock = threading.Lock()
+        logged_events = []
+        state_lock = threading.Lock()
 
         def synchronized_log(*, actor, relation, event_name):
-            original_log(actor=actor, relation=relation, event_name=event_name)
+            # Не пишем реальный AuditLog: таблица WORM намеренно запрещает
+            # TRUNCATE, а TransactionTestCase очищает БД между тестами именно
+            # через flush. Для этой регрессии важен факт вызова единственного
+            # доменного WORM-producer; его аргументы фиксируем в памяти.
+            with state_lock:
+                logged_events.append((event_name, relation.pk))
             if event_name == "DOCUMENT_RELATION_REMOVED":
                 try:
-                    # На старом коде обе транзакции успевают зафиксировать
-                    # неизменяемое событие ДО того, как одна из них реально
-                    # удалит строку. После исправления вторая транзакция
-                    # блокируется на select_for_update и сюда уже не доходит.
+                    # На старом коде обе транзакции успевают вызвать producer
+                    # ДО того, как одна из них реально удалит строку. После
+                    # исправления вторая транзакция блокируется на строке и
+                    # producer для отсутствующей связи уже не вызывает.
                     both_logged.wait(timeout=0.5)
                 except threading.BrokenBarrierError:
                     pass
@@ -60,7 +64,7 @@ class ConcurrentRelationRemovalTests(TransactionTestCase):
                 outcome = type(exc).__name__
             finally:
                 connection.close()
-            with outcome_lock:
+            with state_lock:
                 outcomes.append(outcome)
 
         with patch("apps.documents.services._log_relation_event", side_effect=synchronized_log):
@@ -73,10 +77,7 @@ class ConcurrentRelationRemovalTests(TransactionTestCase):
         self.assertTrue(all(not thread.is_alive() for thread in threads))
         self.assertFalse(DocumentRelation.objects.filter(pk=relation.pk).exists())
         self.assertEqual(
-            AuditLog.objects.filter(
-                event_type=AuditLog.EventType.DOCUMENT_RELATION_REMOVED,
-                object_id=str(source.pk),
-            ).count(),
+            [event for event, _relation_pk in logged_events].count("DOCUMENT_RELATION_REMOVED"),
             1,
         )
         self.assertEqual(sorted(outcomes), ["already_absent", "removed"])
