@@ -15,7 +15,7 @@ import json
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.http import Http404, StreamingHttpResponse
+from django.http import Http404, HttpResponseBadRequest, StreamingHttpResponse
 from django.shortcuts import render
 from django.utils import timezone
 from django.views import View
@@ -113,6 +113,11 @@ class AuditLogExportView(LoginRequiredMixin, View):
     фильтры: кто, когда и какой срез журнала вынес наружу. Запись до отдачи, а
     не после, намеренно — иначе оборванная на середине выгрузка не оставила бы
     следа вообще, а это ровно тот случай, который интересен проверяющему.
+
+    Сам экспорт фиксируется верхней границей времени до записи собственного
+    события. Иначе ленивый queryset сначала посчитает N строк, затем журнал
+    получит `AUDIT_LOG_EXPORTED`, а поток CSV уже прочитает N+1 — evidence в
+    WORM не совпадёт с фактически выданным файлом.
     """
 
     def dispatch(self, request, *args, **kwargs):
@@ -121,16 +126,26 @@ class AuditLogExportView(LoginRequiredMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        form = AuditFilterForm(request.GET or None)
-        queryset = filtered_entries(form)
+        # Пустой QueryDict — валидный запрос «выгрузить всё». Передаём его
+        # форме как bound-форму, чтобы отличать отсутствие фильтров от
+        # действительно некорректных значений.
+        form = AuditFilterForm(request.GET)
+        if not form.is_valid():
+            # Для выгрузки нельзя применять поведение экранного списка
+            # «показать всё при ошибке формы»: ошибочный узкий фильтр иначе
+            # превращается в выгрузку всего WORM-журнала.
+            return HttpResponseBadRequest("Некорректные фильтры выгрузки.\n")
+
+        snapshot_at = timezone.now()
+        queryset = filtered_entries(form).filter(created_at__lte=snapshot_at)
 
         applied = {}
-        if form.is_valid():
-            for key, value in form.cleaned_data.items():
-                if value in (None, "", []):
-                    continue
-                applied[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
+        for key, value in form.cleaned_data.items():
+            if value in (None, "", []):
+                continue
+            applied[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
 
+        matched_entries = queryset.count()
         AuditLog.objects.create(
             event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED,
             actor=request.user,
@@ -139,8 +154,9 @@ class AuditLogExportView(LoginRequiredMixin, View):
             object_id="export",
             details={
                 "filters": applied,
-                "matched_entries": queryset.count(),
+                "matched_entries": matched_entries,
                 "format": "csv",
+                "snapshot_at": snapshot_at.isoformat(),
             },
         )
 
