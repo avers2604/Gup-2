@@ -110,12 +110,26 @@ class HandlerRegistrationTests(TestCase):
         )
 
     def test_audit_handlers_are_registered(self):
-        from apps.audit.handlers import audit_user_role_changed, audit_user_role_elevated
-
-        self.assertIn(audit_user_role_changed, domain_events._HANDLERS.get("user.role.changed", []))
-        self.assertIn(
-            audit_user_role_elevated, domain_events._HANDLERS.get("user.role.elevated", [])
+        from apps.audit.handlers import (
+            audit_login_failed,
+            audit_session_login,
+            audit_session_logout,
+            audit_totp_reset,
+            audit_user_role_changed,
+            audit_user_role_elevated,
         )
+
+        expected = {
+            "user.role.changed": audit_user_role_changed,
+            "user.role.elevated": audit_user_role_elevated,
+            "auth.login.failed": audit_login_failed,
+            "auth.session.login": audit_session_login,
+            "auth.session.logout": audit_session_logout,
+            "auth.totp.reset": audit_totp_reset,
+        }
+        for event_name, handler in expected.items():
+            with self.subTest(event=event_name):
+                self.assertIn(handler, domain_events._HANDLERS.get(event_name, []))
 
     def test_every_published_event_has_at_least_one_handler(self):
         for event_name in (
@@ -123,6 +137,10 @@ class HandlerRegistrationTests(TestCase):
             "user.role.changed",
             "user.role.elevated",
             "user.password.changed",
+            "auth.login.failed",
+            "auth.session.login",
+            "auth.session.logout",
+            "auth.totp.reset",
         ):
             with self.subTest(event=event_name):
                 self.assertTrue(
