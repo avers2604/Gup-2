@@ -10,8 +10,13 @@ global
     group haproxy
     daemon
 
-    # Admin socket is local/root-only by filesystem permissions.
-    stats socket /run/haproxy/admin.sock mode 660 level admin
+    # Administrative Runtime API is Unix-only and root-only. The PgBouncer
+    # primary guard must never receive level-admin access just to read topology.
+    stats socket /run/haproxy/admin.sock mode 600 level admin
+    # Dedicated read-only Runtime API for pgbouncer_primary_guard.py. Access is
+    # authenticated/authorized by Unix ownership and group membership; there is
+    # no TCP management endpoint to expose to user/application networks.
+    stats socket /run/haproxy/guard.sock user haproxy group pgbouncer mode 660 level user
 
  defaults
     log global
