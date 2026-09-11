@@ -178,6 +178,26 @@ if env \
   exit 1
 fi
 
+# A failing tool must tell the operator WHY. Before this was fixed, `set -e`
+# aborted preflight on the first non-zero command and the diagnostic below it
+# never ran: the operator got a bare exit code and nothing else
+# (docs/STAGE4_LAB_REHEARSAL.md, Ф-1).
+mkdir -p "$tmp/badbin"
+cp "$tmp/bin/patronictl" "$tmp/bin/pgbackrest" "$tmp/bin/curl" "$tmp/badbin/"
+cat >"$tmp/badbin/etcdctl" <<'EOF'
+#!/usr/bin/env bash
+echo 'Error: open /etc/bz-get/pki/ca.crt: no such file or directory' >&2
+exit 1
+EOF
+chmod +x "$tmp/badbin/etcdctl"
+etcd_err="$tmp/etcd-failure.txt"
+if PATH="$tmp/badbin:$PATH" bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-etcd-down preflight     >"$tmp/etcd-failure.out" 2>"$etcd_err"; then
+  echo 'ERROR: preflight succeeded with a failing etcdctl' >&2
+  exit 1
+fi
+grep -q 'etcdctl endpoint health failed' "$etcd_err"
+grep -q 'no such file or directory' "$etcd_err"
+
 # An unhealthy application must fail preflight: the shipped regex is anchored,
 # so 'unhealthy' must not satisfy an expectation of 'healthy'.
 if CI_HEALTH_BODY=unhealthy bash "$SCRIPT_DIR/acceptance-cycle.sh" ci-stage4-sick preflight >/dev/null 2>&1; then

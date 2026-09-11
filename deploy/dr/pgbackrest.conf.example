@@ -2,8 +2,33 @@
 # Copy to /etc/pgbackrest/pgbackrest.conf. Do not commit production secrets.
 # The repository host must be a separate failure domain from the DB nodes.
 
+# --- Вариант A: этот файл на УЗЛЕ БД (db1/db2/db3) ---
+# Локальный кластер объявляется без pgN-host.
 [bz-get]
 pg1-path=/var/lib/postgresql/18/bz-get
+
+# --- Вариант B: этот файл на ОПЕРАЦИОННОМ/BASTION хосте ---
+# Именно оттуда deploy/acceptance/acceptance-cycle.sh запускает `pgbackrest
+# check` и `pgbackrest info`. Такая конфигурация ОБЯЗАНА перечислять ВСЕ узлы
+# кластера: после switchover/failover primary оказывается на другом узле, и
+# объявление единственного pg1 роняет проверку с
+# "ERROR: [027]: primary database not found".
+#
+# Воспроизведено на стенде-репетиции (docs/STAGE4_LAB_REHEARSAL.md, Ф-5): после
+# переключения лидера preflight приёмки перестал проходить, пока не были
+# объявлены pg2/pg3. До исправления harness сообщал об этом ТОЛЬКО кодом
+# возврата 27, без единой строки причины.
+#
+# [bz-get]
+# pg1-path=/var/lib/postgresql/18/bz-get
+# pg1-host=CHANGE_ME_DB1_HOST
+# pg1-port=5432
+# pg2-path=/var/lib/postgresql/18/bz-get
+# pg2-host=CHANGE_ME_DB2_HOST
+# pg2-port=5432
+# pg3-path=/var/lib/postgresql/18/bz-get
+# pg3-host=CHANGE_ME_DB3_HOST
+# pg3-port=5432
 
 [global]
 # Dedicated backup host. Replace with the real backup repository endpoint.

@@ -59,6 +59,22 @@ extended_results="$run_dir/extended-results.env"
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# Запустить внешний инструмент, сохранив его вывод в evidence. Без этой обёртки
+# `set -e` обрывает preflight на первой же неуспешной команде, а диагностика
+# остаётся только в файле: оператор видит голый код возврата и ни строчки
+# причины. Проверено на реальном стенде-репетиции (etcdctl и pgbackrest).
+run_tool() {
+  local label="$1" out="$2"
+  shift 2
+  local rc=0
+  "$@" >"$out" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    echo "ERROR: $label failed (exit $rc). Tool output follows; full evidence: $out" >&2
+    sed 's/^/    /' "$out" >&2
+    exit "$rc"
+  fi
+}
+
 record_checkpoint() {
   local name="$1"
   [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || {
@@ -100,7 +116,8 @@ require_commands() {
 
 check_patroni() {
   local output="$run_dir/patroni-preflight.json"
-  patronictl -c "$PATRONI_CONFIG" list "$PATRONI_SCOPE" --format=json >"$output"
+  run_tool "patronictl list" "$output" \
+    patronictl -c "$PATRONI_CONFIG" list "$PATRONI_SCOPE" --format=json
   python3 - "$output" "$EXPECTED_DB_MEMBERS" "$MAX_REPLICA_LAG_BYTES" <<'PY'
 import json
 import sys
@@ -146,7 +163,9 @@ PY
 
 check_etcd() {
   local out="$run_dir/etcd-health.txt"
-  ETCDCTL_API=3 etcdctl --endpoints="$ETCD_ENDPOINTS" --cacert="$ETCD_CACERT" --cert="$ETCD_CERT" --key="$ETCD_KEY" endpoint health --cluster >"$out" 2>&1
+  run_tool "etcdctl endpoint health" "$out" \
+    env ETCDCTL_API=3 etcdctl --endpoints="$ETCD_ENDPOINTS" --cacert="$ETCD_CACERT" \
+      --cert="$ETCD_CERT" --key="$ETCD_KEY" endpoint health --cluster
   local expected_count healthy_count
   expected_count="$(awk -F, '{print NF}' <<<"$ETCD_ENDPOINTS")"
   healthy_count="$(grep -c 'is healthy' "$out" || true)"
@@ -160,8 +179,17 @@ check_etcd() {
 
 check_pgbackrest() {
   local out="$run_dir/pgbackrest-preflight.json"
-  "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" check >"$run_dir/pgbackrest-check.txt" 2>&1
-  "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" info --output=json >"$out"
+  # Инвентарь экспортируется целиком через `set -a`, а pgBackRest трактует
+  # PGBACKREST_<OPTION> как собственную опцию: PGBACKREST_BIN даёт
+  # "WARN: environment contains invalid option 'bin'", а имя вроде
+  # PGBACKREST_REPO1_PATH молча переопределило бы репозиторий бэкапов.
+  # Поэтому вызываем инструмент с вычищенным префиксом.
+  run_tool "pgbackrest check" "$run_dir/pgbackrest-check.txt" \
+    env -u PGBACKREST_BIN -u PGBACKREST_STANZA \
+      "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" check
+  run_tool "pgbackrest info" "$out" \
+    env -u PGBACKREST_BIN -u PGBACKREST_STANZA \
+      "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" info --output=json
   python3 - "$out" "$MAX_BACKUP_AGE_SECONDS" <<'PY'
 import json
 import sys
@@ -200,7 +228,9 @@ check_minio() {
   # shellcheck disable=SC1090
   . "$MINIO_DR_ENV"
   set +a
-  bash "$MINIO_CHECK_SCRIPT" >"$run_dir/minio-preflight.txt" 2>&1
+  run_tool "MinIO DR check script" "$run_dir/minio-preflight.txt" \
+    bash "$MINIO_CHECK_SCRIPT"
+  sed 's/^/    /' "$run_dir/minio-preflight.txt"
   echo "MinIO DR OK"
 }
 
