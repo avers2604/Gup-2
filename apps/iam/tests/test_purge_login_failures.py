@@ -3,6 +3,7 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.utils import timezone
 
@@ -34,5 +35,5 @@ class PurgeLoginFailuresTests(TestCase):
         self.assertIn("Удалено operational LoginFailure: 1", out.getvalue())
 
     def test_rejects_nonpositive_retention(self):
-        with self.assertRaisesMessage(Exception, "--older-than-hours должен быть >= 1"):
+        with self.assertRaisesMessage(CommandError, "--older-than-hours должен быть >= 1"):
             call_command("purge_login_failures", older_than_hours=0)
