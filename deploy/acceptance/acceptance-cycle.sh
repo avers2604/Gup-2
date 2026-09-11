@@ -56,6 +56,7 @@ mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
 checkpoints="$run_dir/checkpoints.csv"
 extended_results="$run_dir/extended-results.env"
+policy_evidence="$run_dir/acceptance-policy.json"
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -94,6 +95,7 @@ search_reindex_required_documents=${SEARCH_REINDEX_DOCUMENTS:-10000}
 search_reindex_documents=0
 search_reindex_seconds=0
 search_reindex_limit_seconds=${SEARCH_REINDEX_MAX_SECONDS:-3600}
+search_reindex_mode=NOT_RUN
 search_reindex_result=NOT_RUN
 queue_worker_kill_result=NOT_RUN
 queue_redis_kill_result=NOT_RUN
@@ -102,6 +104,39 @@ minio_hash_sample_count=0
 minio_hash_mismatches=0
 minio_hash_result=NOT_RUN
 EOF
+}
+
+check_acceptance_policy() {
+  local search_documents="${1:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
+  local search_seconds="${2:-${SEARCH_REINDEX_MAX_SECONDS:-3600}}"
+  local minio_sample="${3:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
+  local output="$run_dir/acceptance-policy-output.txt"
+  local rc=0
+  python3 "$SCRIPT_DIR/acceptance_policy.py" \
+    --search-documents "$search_documents" \
+    --search-seconds-max "$search_seconds" \
+    --minio-sample "$minio_sample" \
+    --evidence "$policy_evidence" >"$output" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    echo "ERROR: acceptance criteria violate repository baseline and no complete waiver is present." >&2
+    cat "$output" >&2
+  fi
+  return "$rc"
+}
+
+policy_field() {
+  local field="$1"
+  python3 - "$policy_evidence" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+value = payload.get(sys.argv[2], "")
+if isinstance(value, list):
+    print(",".join(str(item) for item in value))
+else:
+    print(value)
+PY
 }
 
 require_commands() {
@@ -310,22 +345,36 @@ PY
   # shellcheck disable=SC1090
   . "$extended_results"
 
-  # Acceptance volumes come from the inventory and are recorded by
-  # extended-checks.sh, so the criterion here is the volume the run was actually
-  # required to prove — never a number hardcoded in this script.
+  local search_reindex_mode="${search_reindex_mode:-NOT_RUN}"
   local search_required="${search_reindex_required_documents:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
   local minio_required="${minio_hash_required_count:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
+  local policy_rc=0
+  check_acceptance_policy "$search_required" "$search_reindex_limit_seconds" "$minio_required" || policy_rc=$?
+  local policy_status="$(policy_field status)"
+  local policy_waiver_id="$(policy_field waiver_id)"
+  local policy_waiver_approver="$(policy_field waiver_approver)"
+  local policy_weakened="$(policy_field weakened_criteria)"
 
   local -a discrepancies=()
 
+  local policy_effective=PASS
+  if (( policy_rc != 0 )) || [[ "$policy_status" == FAIL ]]; then
+    policy_effective=FAIL
+    discrepancies+=("acceptance criteria are weaker than the repository baseline without a complete approved waiver. See acceptance-policy.json evidence.")
+  fi
+
   local search_effective=PASS
+  if [[ "$search_reindex_mode" != cold ]]; then
+    search_effective=FAIL
+    discrepancies+=("search acceptance measurement is not a cold rebuild (mode=$search_reindex_mode). The read model must be emptied before the timed rebuild.")
+  fi
   if [[ "$search_reindex_result" != PASS ]]; then
     search_effective=FAIL
     discrepancies+=("cold reindex measurement is not PASS (result=$search_reindex_result). Run extended-checks.sh RUN_ID cold-reindex and attach the measurement before acceptance.")
   fi
   if [[ "$search_reindex_documents" != "$search_required" ]]; then
     search_effective=FAIL
-    discrepancies+=("cold reindex covered $search_reindex_documents documents instead of the required $search_required. Load the agreed acceptance corpus (SEARCH_REINDEX_DOCUMENTS) and repeat the run.")
+    discrepancies+=("cold reindex covered $search_reindex_documents documents instead of the required $search_required. Load the agreed acceptance corpus and repeat the run.")
   fi
   local timing_rc=0
   python3 - "$search_reindex_seconds" "$search_reindex_limit_seconds" <<'PY' || timing_rc=$?
@@ -341,7 +390,7 @@ PY
     discrepancies+=("cold reindex timing is not numeric (elapsed=${search_reindex_seconds:-unset}, criterion=${search_reindex_limit_seconds:-unset}). The measurement file is unusable as evidence.")
   elif (( timing_rc != 0 )); then
     search_effective=FAIL
-    discrepancies+=("cold reindex took ${search_reindex_seconds}s against the ${search_reindex_limit_seconds}s criterion. Optimize batching/workers/read-model or obtain a customer-approved threshold change before acceptance.")
+    discrepancies+=("cold reindex took ${search_reindex_seconds}s against the ${search_reindex_limit_seconds}s criterion. Optimize the rebuild or obtain an explicit approved waiver before acceptance.")
   fi
 
   local queue_effective=PASS
@@ -353,15 +402,15 @@ PY
   local minio_hash_effective=PASS
   if [[ "$minio_hash_result" != PASS ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash verification is not PASS (result=$minio_hash_result). Run extended-checks.sh RUN_ID minio-hash and attach the sample evidence.")
+    discrepancies+=("MinIO versioned WORM verification is not PASS (result=$minio_hash_result). Run extended-checks.sh RUN_ID minio-hash and attach the sample evidence.")
   fi
   if [[ "$minio_hash_sample_count" != "$minio_required" ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash sample covered $minio_hash_sample_count objects instead of the required $minio_required. Either replicate enough objects to the DR site or agree a different MINIO_HASH_SAMPLE_SIZE with the customer.")
+    discrepancies+=("MinIO versioned sample covered $minio_hash_sample_count versions instead of the required $minio_required. Replicate enough versions or use an explicit approved waiver.")
   fi
   if [[ "$minio_hash_mismatches" != "0" ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash sample found $minio_hash_mismatches checksum mismatches. Replication integrity is not proven; investigate before acceptance.")
+    discrepancies+=("MinIO versioned sample found $minio_hash_mismatches mismatches. VersionId/SHA-256/Object Lock consistency is not proven; investigate before acceptance.")
   fi
 
   local legacy_effective=PASS
@@ -375,11 +424,19 @@ PY
   [[ "$search_effective" == PASS ]] || overall=FAIL
   [[ "$queue_effective" == PASS ]] || overall=FAIL
   [[ "$minio_hash_effective" == PASS ]] || overall=FAIL
+  [[ "$policy_effective" == PASS ]] || overall=FAIL
+  if [[ "$overall" == PASS && "$policy_status" == PASS_WITH_WAIVER ]]; then
+    overall=PASS_WITH_WAIVER
+  fi
 
   {
     echo "# Stage 4 acceptance result — $run_id"
     echo
     echo "- Overall: **$overall**"
+    echo "- Acceptance policy: **$policy_status**"
+    echo "- Waiver ID: ${policy_waiver_id:-—}"
+    echo "- Waiver approver: ${policy_waiver_approver:-—}"
+    echo "- Weakened criteria: ${policy_weakened:-—}"
     echo "- Site: ${ACCEPTANCE_SITE:-TBD}"
     echo "- Change: ${ACCEPTANCE_CHANGE_ID:-TBD}"
     echo "- Operator: ${ACCEPTANCE_OPERATOR:-TBD}"
@@ -395,6 +452,7 @@ PY
     echo
     echo "## Additional acceptance measurements"
     echo
+    echo "- Search rebuild mode: $search_reindex_mode"
     echo "- Cold search reindex documents: $search_reindex_documents"
     echo "- Cold search reindex required documents: $search_required"
     echo "- Cold search reindex seconds: $search_reindex_seconds"
@@ -402,10 +460,10 @@ PY
     echo "- Cold search reindex: **$search_effective**"
     echo "- Celery worker kill -9 / redelivery: **$queue_worker_kill_result**"
     echo "- Redis kill -9 / recovery: **$queue_redis_kill_result**"
-    echo "- MinIO SHA-256 sample files: $minio_hash_sample_count"
-    echo "- MinIO SHA-256 required sample files: $minio_required"
-    echo "- MinIO SHA-256 mismatches: $minio_hash_mismatches"
-    echo "- MinIO sample hash verification: **$minio_hash_effective**"
+    echo "- MinIO versioned WORM sample versions: $minio_hash_sample_count"
+    echo "- MinIO versioned WORM required versions: $minio_required"
+    echo "- MinIO version/SHA/Object-Lock mismatches: $minio_hash_mismatches"
+    echo "- MinIO versioned WORM verification: **$minio_hash_effective**"
     echo
     if (( ${#discrepancies[@]} > 0 )); then
       local item
@@ -417,22 +475,28 @@ PY
     echo "## Evidence"
     echo
     echo "Evidence directory: $run_dir"
+    echo "Acceptance policy evidence: $policy_evidence"
     echo
-    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object/version/checksum checks, queue kill/recovery commands, synthetic alert delivery confirmation and application smoke-test results."
+    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object-version/checksum/Object-Lock checks, queue kill/recovery commands, synthetic alert delivery confirmation and application smoke-test results."
     echo
     echo "## Decision"
     echo
+    if [[ "$overall" == PASS_WITH_WAIVER ]]; then
+      echo "This run met the effective criteria only under the approved waiver identified above. It must never be represented as an unqualified PASS."
+      echo
+    fi
     echo "This generated result is technical evidence only. Production RPO/RTO/SLA acceptance requires the designated customer/operations approver."
   } >"$run_dir/RESULT.md"
   record_checkpoint finalized
   echo "Acceptance result: $overall; report=$run_dir/RESULT.md"
-  [[ "$overall" == PASS ]]
+  [[ "$overall" == PASS || "$overall" == PASS_WITH_WAIVER ]]
 }
 
 case "$action" in
   preflight)
     require_commands
     init_extended_results
+    check_acceptance_policy
     record_checkpoint preflight-start
     {
       echo "run_id=$run_id"
