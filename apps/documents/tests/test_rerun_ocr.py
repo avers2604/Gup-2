@@ -8,6 +8,7 @@ from unittest.mock import patch
 from django.core.management import call_command
 from django.test import TestCase
 
+from apps.core.models import TaskOutbox
 from apps.documents.models import NormativeDocument
 
 from .factories import make_document
@@ -77,3 +78,25 @@ class RerunOcrCommandTests(TestCase):
             call_command("rerun_ocr", stdout=out)
 
         self.assertIn("Поставлено в очередь: 1", out.getvalue())
+
+    def test_rerun_persists_durable_outbox_intent_before_delivery(self):
+        """Ручной rerun не должен теряться при недоступном брокере Redis."""
+        document = make_document(
+            reg_number="RQ-DURABLE",
+            ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+        )
+        # Добавляем имя оригинала в обход model.save(): иначе сама модель
+        # штатно создаст OCR outbox при первой загрузке файла и тест не сможет
+        # доказать, что durable intent создала именно management-команда.
+        NormativeDocument.objects.filter(pk=document.pk).update(
+            files_original="documents/originals/2026/01/rq-durable.pdf",
+        )
+
+        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay"):
+            call_command("rerun_ocr")
+
+        entry = TaskOutbox.objects.get(
+            task_name="apps.documents.tasks.run_ocr_for_document",
+            args=[str(document.pk)],
+        )
+        self.assertIsNone(entry.delivered_at)
