@@ -141,10 +141,12 @@ class TemplateVersionCreateView(LoginRequiredMixin, View):
 
 
 class TemplateDownloadView(LoginRequiredMixin, View):
-    """Выдача файла бланка с учётом только состоявшегося скачивания.
+    """Выдача файла бланка с учётом только доступного объекта storage.
 
     Пока WORM promotion не завершён, staging наружу не выдаётся: пользователь
     получает 409 + Retry-After, а download_count/audit остаются неизменными.
+    Счётчик и `ARCHIVE_DOWNLOAD` пишутся только после успешного `open()` файла:
+    немедленный отказ MinIO/S3 не считается состоявшейся выдачей.
     """
 
     def get(self, request, pk, field_name):
@@ -152,9 +154,22 @@ class TemplateDownloadView(LoginRequiredMixin, View):
             Template.objects.select_related("family"), pk=pk
         )
         try:
-            field_file = services.register_download(
+            field_file = services.prepare_download(
                 actor=request.user, template=template, field_name=field_name
             )
+            # Открываем storage ДО счётчика/WORM. Если MinIO/S3 недоступен
+            # или object key отсутствует, исключение выйдет отсюда и никакой
+            # выдачи в БД зафиксировано не будет.
+            field_file.open("rb")
+            try:
+                services.register_download(
+                    actor=request.user, template=template, field_name=field_name
+                )
+            except Exception:
+                # FileResponse ещё не владеет дескриптором; при ошибке
+                # учёта закрываем его здесь.
+                field_file.close()
+                raise
         except services.FilePromotionPending as error:
             response = HttpResponse(str(error) + "\n", status=409, content_type="text/plain")
             response["Retry-After"] = "5"
@@ -165,4 +180,4 @@ class TemplateDownloadView(LoginRequiredMixin, View):
             messages.error(request, str(error))
             return HttpResponseRedirect(reverse("templates_bank:family_list"))
 
-        return FileResponse(field_file.open("rb"), as_attachment=True)
+        return FileResponse(field_file, as_attachment=True)
