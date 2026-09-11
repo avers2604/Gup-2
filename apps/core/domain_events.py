@@ -45,6 +45,15 @@ def register(event_name: str) -> Callable[[Handler], Handler]:
     return decorator
 
 
+def require_handlers(*event_names: str) -> None:
+    """Fail application startup if declared critical subscriptions are missing."""
+    missing = [name for name in event_names if not _HANDLERS.get(name)]
+    if missing:
+        raise MissingDomainEventHandler(
+            "Critical domain events have no registered handlers: " + ", ".join(missing)
+        )
+
+
 def _dispatch(event: DomainEvent, *, require_handler: bool) -> None:
     handlers = tuple(_HANDLERS.get(event.name, ()))
     if require_handler and not handlers:
