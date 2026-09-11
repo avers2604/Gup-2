@@ -15,9 +15,21 @@ from django.apps import apps
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import connection, transaction
 
+from apps.core.write_retry import retry_on_read_only_primary
+
 from . import permissions, transitions
 
 logger = logging.getLogger(__name__)
+
+# Почему ретрай стоит не на всех операциях записи.
+#
+# `retry_on_read_only_primary` повторяет вызов целиком. Это безопасно для
+# операций, которые при откате не оставляют следов вне БД. Для `create_document`
+# и `update_document` это не так: они принимают уже прочитанный upload и пишут
+# файл в staging ДО INSERT, поэтому повтор потребовал бы заново перемотать и
+# перезалить файл. Их повторяет пользователь (форма остаётся заполненной), а не
+# сервис молча. Смена статуса и правка графа связей файлов не трогают — там
+# ретрай честен.
 
 
 def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
@@ -191,6 +203,7 @@ def update_document(*, actor, document, form=None, **attrs):
     return locked
 
 
+@retry_on_read_only_primary
 def change_document_status(*, actor, document, new_status, comment=""):
     """Сменить статус карточки с ведением SCD-2 (ТЗ 4.2.3).
 
@@ -287,6 +300,7 @@ def find_cycle_through_document(document_id):
     return row[0] if row else None
 
 
+@retry_on_read_only_primary
 def add_relation(*, actor, from_document, to_document, relation_type, note=""):
     """Завести ребро графа версионности (ТЗ 4.2.2).
 
@@ -316,6 +330,7 @@ def add_relation(*, actor, from_document, to_document, relation_type, note=""):
     return relation
 
 
+@retry_on_read_only_primary
 def remove_relation(*, actor, relation):
     """Снять ребро графа. Таблица связей не WORM — ошибочно заведённую
     связь надо уметь убрать, — но само снятие меняет граф, по которому

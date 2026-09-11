@@ -8,6 +8,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.db.models import F
 
+from apps.core.write_retry import retry_on_read_only_primary
+
 from . import permissions
 from .models import Template, TemplateFamily
 
@@ -67,6 +69,7 @@ def publish_version(*, actor, family, form=None, **attrs):
     return template
 
 
+@retry_on_read_only_primary
 def register_download(*, actor, template, field_name):
     """Учесть только реально доступное скачивание файла бланка.
 
