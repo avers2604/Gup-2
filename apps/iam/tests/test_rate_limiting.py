@@ -6,7 +6,7 @@ import datetime
 from unittest.mock import patch
 
 import pyotp
-from django.test import Client, RequestFactory, TestCase
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -161,6 +161,13 @@ class IpLockoutTests(TestCase):
         for i in range(services.IP_LOCKOUT_MAX_ATTEMPTS):
             services.check_credentials(request, personnel_number=f"999{i:04d}", password="wrong")
         self.assertTrue(services.is_ip_locked_out("203.0.113.5"))
+
+    @override_settings(IAM_IP_LOCKOUT_MAX_ATTEMPTS=3)
+    def test_ip_lockout_threshold_is_runtime_configurable(self):
+        request = _request("192.0.2.44")
+        for i in range(3):
+            services.check_credentials(request, personnel_number=f"cfg{i:04d}", password="wrong")
+        self.assertTrue(services.is_ip_locked_out("192.0.2.44"))
 
     def test_ip_lockout_blocks_unrelated_account_from_same_source(self):
         user = _make_user()
