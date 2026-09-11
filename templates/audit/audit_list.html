@@ -24,6 +24,11 @@
         {% endfor %}
         <button class="btn btn--primary" type="submit">Применить</button>
         <a class="btn btn--ghost" href="{% url 'audit:list' %}">Сбросить</a>
+        {# Выгружается тот же срез, что показан на экране, — те же параметры фильтра. #}
+        <a class="btn btn--secondary"
+           href="{% url 'audit:export' %}{% if query_string %}?{{ query_string }}{% endif %}">
+          Выгрузить CSV
+        </a>
       </div>
     </form>
   </div>

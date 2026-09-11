@@ -31,6 +31,7 @@ from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.core.csv_safety import csv_safe
 from apps.core.domain_events import publish
 
 from .models import Department, LoginFailure, User
@@ -274,21 +275,6 @@ def import_personnel(file_obj, *, actor: User | None = None) -> ImportReport:
     return report
 
 
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _csv_safe(value) -> str:
-    """Защита от CSV/formula injection (Excel/LibreOffice выполняют ячейку,
-    начинающуюся с =, +, -, @ как формулу). tab_number и detail приходят из
-    ячеек загружаемого .xlsx — потенциально не от HR, а от кого угодно,
-    приславшего файл дальше по цепочке — и уходят прямиком в CSV,
-    рассчитанный на открытие в Excel (BOM utf-8-sig ниже)."""
-    text = str(value)
-    if text.startswith(_CSV_FORMULA_PREFIXES):
-        return "'" + text
-    return text
-
-
 def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
     """Три отдельных CSV — success/updated/errors (точки-в-разрезе результата
     импорта, а не листы одного файла: у CSV нет листов). ; как разделитель
@@ -305,11 +291,11 @@ def write_report_csv(report: ImportReport, out_dir: Path) -> dict[str, Path]:
             if name == "errors":
                 writer.writerow(["Строка", "Табельный номер", "Ошибка"])
                 for r in rows:
-                    writer.writerow([r.row_number, _csv_safe(r.tab_number), _csv_safe(r.detail)])
+                    writer.writerow([r.row_number, csv_safe(r.tab_number), csv_safe(r.detail)])
             else:
                 writer.writerow(["Строка", "Табельный номер"])
                 for r in rows:
-                    writer.writerow([r.row_number, _csv_safe(r.tab_number)])
+                    writer.writerow([r.row_number, csv_safe(r.tab_number)])
         paths[name] = path
     return paths
 
