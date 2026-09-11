@@ -363,23 +363,35 @@ def add_relation(*, actor, from_document, to_document, relation_type, note=""):
 
 @retry_on_read_only_primary
 def remove_relation(*, actor, relation):
-    """Снять ребро графа. Таблица связей не WORM — ошибочно заведённую
-    связь надо уметь убрать, — но само снятие меняет граф, по которому
-    документ считается отменённым или изменённым, поэтому пишется в
-    журнал так же, как и добавление."""
-    if not permissions.can_manage_relations(actor, relation.from_document):
-        raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
-    if not permissions.can_view_document(actor, relation.to_document):
-        # Связь на скрытый документ пользователь и не видел в карточке —
-        # значит и снять её «случайно» не мог: это прямой запрос.
-        raise PermissionDenied("Указанный документ недоступен.")
+    """Снять ребро графа ровно один раз даже при конкурентных запросах.
+
+    WORM-событие должно означать состоявшееся удаление, а не попытку удалить
+    уже исчезнувшую строку. Поэтому relation перечитывается под row lock внутри
+    той же транзакции, где пишется audit и выполняется DELETE. Второй конкурент
+    после ожидания видит отсутствие строки и становится идемпотентным no-op.
+    """
+    model = type(relation)
 
     with transaction.atomic():
+        locked = model.objects.select_for_update().filter(pk=relation.pk).first()
+        if locked is None:
+            return False
+
+        # Права проверяем на актуальной строке, а не на stale-экземпляре,
+        # переданном вызывающим кодом до ожидания row lock.
+        if not permissions.can_manage_relations(actor, locked.from_document):
+            raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
+        if not permissions.can_view_document(actor, locked.to_document):
+            # Связь на скрытый документ пользователь и не видел в карточке —
+            # значит и снять её «случайно» не мог: это прямой запрос.
+            raise PermissionDenied("Указанный документ недоступен.")
+
         _log_relation_event(
-            actor=actor, relation=relation,
+            actor=actor, relation=locked,
             event_name="DOCUMENT_RELATION_REMOVED",
         )
-        relation.delete()
+        locked.delete()
+        return True
 
 
 def _log_relation_event(*, actor, relation, event_name):
