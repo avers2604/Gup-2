@@ -335,23 +335,37 @@ def find_cycle_through_document(document_id):
 def add_relation(*, actor, from_document, to_document, relation_type, note=""):
     """Завести ребро графа версионности (ТЗ 4.2.2).
 
-    Ацикличность проверяет сам `DocumentRelation.clean()` (вызывается из
-    его `save()`), самоссылку и точный дубль — ограничения БД. Здесь —
-    права и, отдельно, видимость ЦЕЛИ: ссылку на документ, которого
-    пользователь не видит, заводить нельзя, иначе гриф «ДСП» утекает уже
-    через сам факт успешного создания связи.
+    Права и видимость проверяются по актуальным строкам документов уже после
+    `select_for_update()`: переданные экземпляры могут устареть между чтением
+    формы и записью, в том числе получить гриф ДСП. Блокировки берутся в
+    стабильном порядке `pk`, совпадающем с `DocumentRelation.save()`, чтобы не
+    вводить новый порядок блокировок и не создавать взаимных дедлоков.
     """
-    model = apps.get_model("documents", "DocumentRelation")
-
-    if not permissions.can_manage_relations(actor, from_document):
-        raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
-    if not permissions.can_view_document(actor, to_document):
-        raise PermissionDenied("Указанный документ недоступен.")
+    relation_model = apps.get_model("documents", "DocumentRelation")
+    document_model = type(from_document)
 
     with transaction.atomic():
-        relation = model(
-            from_document=from_document, to_document=to_document,
-            relation_type=relation_type, note=note,
+        current_documents = {
+            item.pk: item
+            for item in (
+                document_model.objects.select_for_update()
+                .filter(pk__in={from_document.pk, to_document.pk})
+                .order_by("pk")
+            )
+        }
+        current_from = current_documents[from_document.pk]
+        current_to = current_documents[to_document.pk]
+
+        if not permissions.can_manage_relations(actor, current_from):
+            raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
+        if not permissions.can_view_document(actor, current_to):
+            raise PermissionDenied("Указанный документ недоступен.")
+
+        relation = relation_model(
+            from_document=current_from,
+            to_document=current_to,
+            relation_type=relation_type,
+            note=note,
         )
         relation.save()
         _log_relation_event(
