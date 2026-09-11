@@ -113,6 +113,12 @@ class AuditLogExportView(LoginRequiredMixin, View):
     фильтры: кто, когда и какой срез журнала вынес наружу. Запись до отдачи, а
     не после, намеренно — иначе оборванная на середине выгрузка не оставила бы
     следа вообще, а это ровно тот случай, который интересен проверяющему.
+
+    Сам CSV — снимок на момент начала запроса. Это важно для потоковой отдачи:
+    QuerySet ленивый и фактически читается уже после создания события
+    `AUDIT_LOG_EXPORTED`; без верхней границы по `created_at` текущая выгрузка
+    могла бы попасть в собственный файл, а `matched_entries` при этом оставался
+    бы посчитанным до её записи.
     """
 
     def dispatch(self, request, *args, **kwargs):
@@ -122,7 +128,9 @@ class AuditLogExportView(LoginRequiredMixin, View):
 
     def get(self, request):
         form = AuditFilterForm(request.GET or None)
-        queryset = filtered_entries(form)
+        snapshot_at = timezone.now()
+        queryset = filtered_entries(form).filter(created_at__lte=snapshot_at)
+        matched_entries = queryset.count()
 
         applied = {}
         if form.is_valid():
@@ -139,7 +147,7 @@ class AuditLogExportView(LoginRequiredMixin, View):
             object_id="export",
             details={
                 "filters": applied,
-                "matched_entries": queryset.count(),
+                "matched_entries": matched_entries,
                 "format": "csv",
             },
         )
