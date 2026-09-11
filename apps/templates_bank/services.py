@@ -69,13 +69,13 @@ def publish_version(*, actor, family, form=None, **attrs):
     return template
 
 
-@retry_on_read_only_primary
-def register_download(*, actor, template, field_name):
-    """Учесть только реально доступное скачивание файла бланка.
+def prepare_download(*, actor, template, field_name):
+    """Проверить право/готовность файла к выдаче, ничего не учитывая в БД.
 
-    Пока final key ещё переносится из staging в Object-Locked `originals`,
-    скачивание не считается и архивное audit-событие не создаётся. Это не
-    ошибка MinIO, а ожидаемое короткое состояние публикации.
+    Этот шаг намеренно отделён от `register_download()`: HTTP-контур сначала
+    должен убедиться, что объект storage действительно открывается, и только
+    после этого увеличивать счётчик и писать выдачу архивной формы в WORM.
+    Иначе немедленный отказ MinIO/S3 превращается в ложное «скачивание».
     """
     if not permissions.can_view_templates(actor):
         raise PermissionDenied("Требуется вход в систему.")
@@ -95,6 +95,19 @@ def register_download(*, actor, template, field_name):
         raise FilePromotionPending(
             "Файл ещё закрепляется в защищённом хранилище. Повторите скачивание позже."
         )
+
+    return field_file
+
+
+@retry_on_read_only_primary
+def register_download(*, actor, template, field_name):
+    """Учесть скачивание после подтверждения доступности файла.
+
+    Сервис оставляет собственную проверку прав/готовности, чтобы прямой вызов
+    не мог обойти бизнес-границу. HTTP-view вызывает `prepare_download()`,
+    реально открывает object storage и только затем приходит сюда.
+    """
+    field_file = prepare_download(actor=actor, template=template, field_name=field_name)
 
     with transaction.atomic():
         Template.objects.filter(pk=template.pk).update(download_count=F("download_count") + 1)
