@@ -24,15 +24,23 @@ for command in patroni haproxy python3; do
   fi
 done
 
-# Patroni 4.1+ validates schema/GUCs. Ignore bound ports because this script is
-# intended to be safe to run on an already provisioned node.
 patroni --validate-config --ignore-listen-port "$PATRONI_CONFIG"
-
-# HAProxy performs a full syntax/configuration validation without starting.
 haproxy -c -f "$HAPROXY_CONFIG"
 
-# PgBouncer has no equally useful no-start validator, so parse the INI and
-# assert the contract this project relies on.
+# Runtime API contract: admin is root-only; the guard receives a separate
+# read-only Unix socket. A TCP stats/runtime listener would violate the local
+# least-privilege design.
+grep -Eq 'stats socket /run/haproxy/admin\.sock mode 600 level admin' "$HAPROXY_CONFIG" || {
+  echo "ERROR: HAProxy admin Runtime API must be mode 600 level admin" >&2; exit 2;
+}
+grep -Eq 'stats socket /run/haproxy/guard\.sock .*group pgbouncer .*mode 660 level user' "$HAPROXY_CONFIG" || {
+  echo "ERROR: HAProxy guard Runtime API must be /run/haproxy/guard.sock group pgbouncer mode 660 level user" >&2; exit 2;
+}
+if grep -Eq 'stats socket (tcp|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|0\.0\.0\.0|\*):' "$HAPROXY_CONFIG"; then
+  echo "ERROR: network-exposed HAProxy Runtime API is forbidden" >&2
+  exit 2
+fi
+
 python3 - "$PGBOUNCER_CONFIG" <<'PY'
 import configparser
 import sys
@@ -56,15 +64,11 @@ required = {
 for key, expected in required.items():
     actual = pool.get(key)
     if actual != expected:
-        raise SystemExit(
-            f"ERROR: {path}: {key}={actual!r}, expected {expected!r}"
-        )
+        raise SystemExit(f"ERROR: {path}: {key}={actual!r}, expected {expected!r}")
 
 entry = config["databases"].get("bz_get", "")
 if "host=127.0.0.1" not in entry or "port=6433" not in entry:
-    raise SystemExit(
-        "ERROR: bz_get must route PgBouncer to local HAProxy 127.0.0.1:6433"
-    )
+    raise SystemExit("ERROR: bz_get must route PgBouncer to local HAProxy 127.0.0.1:6433")
 
 socket_dir = pool.get("unix_socket_dir", "")
 if socket_dir != "/var/run/postgresql":
@@ -75,12 +79,10 @@ if socket_dir != "/var/run/postgresql":
 print("PgBouncer project contract: OK")
 PY
 
-# Planned-switchover safety: HAProxy changing its downstream target does not
-# invalidate already-open PgBouncer server connections. The local guard must
-# detect the selected HAProxy backend and issue PgBouncer RECONNECT + WAIT_CLOSE.
 python3 -m py_compile "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 python3 "$SCRIPT_DIR/test_pgbouncer_primary_guard.py"
 grep -q 'RECONNECT' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 grep -q 'WAIT_CLOSE' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
+grep -q '/run/haproxy/guard.sock' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 
 echo "HA configuration validation: OK"
