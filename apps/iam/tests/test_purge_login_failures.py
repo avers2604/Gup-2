@@ -43,12 +43,21 @@ class PurgeLoginFailuresTests(TestCase):
         self.assertGreaterEqual(heartbeat.updated_at, before)
         self.assertLessEqual(heartbeat.updated_at, after)
 
-    def test_each_successful_run_advances_purge_counter(self):
-        call_command("purge_login_failures", older_than_hours=24, stdout=StringIO())
-        call_command("purge_login_failures", older_than_hours=24, stdout=StringIO())
+    def test_each_successful_run_advances_purge_counter_and_timestamp(self):
+        first_success = timezone.now() - timedelta(hours=1)
+        second_success = timezone.now()
 
+        with patch("django.utils.timezone.now", return_value=first_success):
+            call_command("purge_login_failures", older_than_hours=24, stdout=StringIO())
         heartbeat = BusinessMetricCounter.objects.get(name="login_failure_purge_successes")
+        self.assertEqual(heartbeat.value, 1)
+        self.assertEqual(heartbeat.updated_at, first_success)
+
+        with patch("django.utils.timezone.now", return_value=second_success):
+            call_command("purge_login_failures", older_than_hours=24, stdout=StringIO())
+        heartbeat.refresh_from_db()
         self.assertEqual(heartbeat.value, 2)
+        self.assertEqual(heartbeat.updated_at, second_success)
 
     def test_rejects_nonpositive_retention_without_marking_success(self):
         with self.assertRaisesMessage(CommandError, "--older-than-hours должен быть >= 1"):
