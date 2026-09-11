@@ -6,6 +6,7 @@ import datetime
 from unittest.mock import patch
 
 import pyotp
+from django.apps import apps as django_apps
 from django.core.exceptions import ImproperlyConfigured
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
@@ -179,6 +180,12 @@ class IpLockoutTests(TestCase):
     def test_ip_lockout_threshold_rejects_non_numeric_value(self):
         with self.assertRaises(ImproperlyConfigured):
             services.is_ip_locked_out("192.0.2.46")
+
+    @override_settings(IAM_IP_LOCKOUT_MAX_ATTEMPTS=0)
+    def test_iam_app_ready_rejects_invalid_threshold(self):
+        config = django_apps.get_app_config("iam")
+        with self.assertRaises(ImproperlyConfigured):
+            config.ready()
 
     def test_ip_lockout_blocks_unrelated_account_from_same_source(self):
         user = _make_user()
