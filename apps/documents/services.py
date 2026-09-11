@@ -31,12 +31,40 @@ logger = logging.getLogger(__name__)
 # сервис молча. Смена статуса и правка графа связей файлов не трогают — там
 # ретрай честен.
 
+# Один transaction-scoped advisory lock на весь граф версионности. Пара
+# int32 выбрана как стабильная ASCII-подпись "BZGETDAG" и не зависит от
+# Python hash randomization. Лок нужен не для производительности, а для
+# корректности check-then-insert: две транзакции с непересекающимися концами
+# рёбер иначе могут обе проверить старый DAG и вместе закоммитить цикл.
+_VERSION_GRAPH_LOCK_KEY = (0x425A4745, 0x54444147)
+
+
+def _lock_version_graph() -> None:
+    """Сериализовать проверки/изменения, от которых зависит ацикличность.
+
+    `pg_advisory_xact_lock` живёт до commit/rollback текущей транзакции.
+    `DocumentRelation.save()` вызывает проверку цикла внутри atomic(), поэтому
+    после возврата из `relation_would_create_cycle()` lock остаётся удержанным
+    и защищает последующий INSERT. Публикационная перепроверка использует тот
+    же lock, чтобы не принять решение на снимке, который тут же изменит другая
+    транзакция добавления связи.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT pg_advisory_xact_lock(%s, %s)",
+            list(_VERSION_GRAPH_LOCK_KEY),
+        )
+
 
 def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
     """True, если ребро from_document -> to_document создаст цикл — то
     есть to_document уже может достичь from_document по существующим связям."""
     if from_document_id == to_document_id:
         return True
+
+    # Блокировка должна браться ДО чтения графа. В штатном save() она остаётся
+    # до INSERT/commit благодаря внешнему transaction.atomic().
+    _lock_version_graph()
 
     # Модель через apps.get_model(), а не прямой импорт — models.py вызывает
     # эту функцию из DocumentRelation.clean(), прямой импорт дал бы цикл.
@@ -247,7 +275,9 @@ def change_document_status(*, actor, document, new_status, comment=""):
         # может — но это проверка на входе, а требование ТЗ относится
         # к публикации. Пути в обход clean() существуют (сырой SQL,
         # миграции данных), и цена перепроверки — один рекурсивный
-        # запрос на юридически значимое действие.
+        # запрос на юридически значимое действие. find_cycle... берёт тот же
+        # transaction advisory lock, что и добавление ребра, поэтому решение
+        # о публикации нельзя принять на устаревшем снимке графа.
         if new_status in transitions.PUBLISHING_TRANSITIONS:
             cycle = find_cycle_through_document(locked.pk)
             if cycle is not None:
@@ -274,6 +304,7 @@ def find_cycle_through_document(document_id):
     уже сохранённом графе», и её ответ нужен человеку в сообщении об
     ошибке, а не булевым флагом.
     """
+    _lock_version_graph()
     table = apps.get_model("documents", "DocumentRelation")._meta.db_table
     document_table = apps.get_model("documents", "NormativeDocument")._meta.db_table
     with connection.cursor() as cursor:
