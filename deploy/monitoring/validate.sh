@@ -22,9 +22,14 @@ done
 grep -q 'job_name: bz_get_business' "$ROOT_DIR/deploy/prometheus/prometheus.stage4.yml.example"
 grep -q 'metrics_path: /metrics/business/' "$ROOT_DIR/deploy/prometheus/prometheus.stage4.yml.example"
 
+grep -q 'alert: WormPromotionStuck' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+grep -q 'bz_get_worm_promotion_oldest_seconds.*> 900' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+grep -q 'alert: WormPromotionBacklog' "$ROOT_DIR/deploy/prometheus/rules/application.yml"
+
 if command -v promtool >/dev/null 2>&1; then
   promtool check config "$ROOT_DIR/deploy/prometheus/prometheus.stage4.yml.example"
   promtool check rules "$ROOT_DIR/deploy/prometheus/rules/ha-dr.yml"
+  promtool check rules "$ROOT_DIR/deploy/prometheus/rules/application.yml"
 else
   echo "WARN: promtool not installed; Prometheus semantic validation skipped" >&2
 fi
