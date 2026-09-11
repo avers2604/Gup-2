@@ -388,6 +388,24 @@ python manage.py personnel_import_status <task-id>
 - Patroni rebuild/combined DR validation;
 - acceptance harness validation.
 
+Второй workflow `.github/workflows/quality.yml` — статический анализ и
+аудит зависимостей:
+
+- `ruff` — ошибки корректности (не стилевые правила, конфиг в `pyproject.toml`);
+- `mypy` — типизированный baseline из трёх модулей;
+- `bandit` — находки уровня medium/high;
+- `pip-audit` — известные CVE в `requirements.txt`;
+- `docker compose config` — синтаксис compose-файла.
+
+Локально то же самое:
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt -c constraints.txt
+.venv/bin/ruff check apps config
+.venv/bin/bandit -r apps config -q -ll -s B101,B105
+.venv/bin/pip-audit -r requirements.txt
+```
+
 Правило проекта: изменение Django models должно сопровождаться миграцией в том же PR.
 
 ## Документация

@@ -30,6 +30,11 @@ def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
     # эту функцию из DocumentRelation.clean(), прямой импорт дал бы цикл.
     table = apps.get_model("documents", "DocumentRelation")._meta.db_table
     with connection.cursor() as cursor:
+        # Подавление B608 ниже: в f-строку подставляется ТОЛЬКО имя таблицы
+        # из _meta.db_table (его знает сам Django, пользовательский ввод
+        # туда не попадает), оба значения переданы параметрами через %s.
+        # Имя таблицы нельзя передать параметром — это идентификатор, а не
+        # значение, и подстановка здесь неизбежна.
         cursor.execute(
             f"""
             WITH RECURSIVE reachable(id) AS (
@@ -40,7 +45,7 @@ def relation_would_create_cycle(from_document_id, to_document_id) -> bool:
                 JOIN reachable ON r.from_document_id = reachable.id
             )
             SELECT 1 FROM reachable WHERE id = %s LIMIT 1
-            """,
+            """,  # nosec B608
             [to_document_id, from_document_id],
         )
         return cursor.fetchone() is not None
@@ -260,6 +265,8 @@ def find_cycle_through_document(document_id):
     table = apps.get_model("documents", "DocumentRelation")._meta.db_table
     document_table = apps.get_model("documents", "NormativeDocument")._meta.db_table
     with connection.cursor() as cursor:
+        # Подавление B608 ниже: подставляются только имена таблиц из
+        # _meta.db_table, см. пояснение в relation_would_create_cycle() выше.
         cursor.execute(
             f"""
             WITH RECURSIVE reachable(id) AS (
@@ -274,7 +281,7 @@ def find_cycle_through_document(document_id):
             JOIN {document_table} d ON d.id = reachable.id
             WHERE reachable.id = %s
             LIMIT 1
-            """,
+            """,  # nosec B608
             [document_id, document_id],
         )
         row = cursor.fetchone()

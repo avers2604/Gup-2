@@ -1,0 +1,42 @@
+name: Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      POSTGRES_DB: bz_get
+      POSTGRES_USER: bz_get
+      POSTGRES_PASSWORD: ci-postgres-password
+      MINIO_ACCESS_KEY: ci-minio-access-key
+      MINIO_SECRET_KEY: ci-minio-secret-key
+      MINIO_BUCKET_ORIGINALS: originals
+      MINIO_BUCKET_WORKING: working
+      GRAFANA_ADMIN_PASSWORD: ci-grafana-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: requirements-dev.txt
+      - name: Install development dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Ruff
+        run: ruff check apps config
+      - name: mypy — typed baseline
+        run: >-
+          mypy --follow-imports=skip
+          apps/core/domain_events.py
+          apps/iam/totp.py
+          apps/search_ocr/normalization.py
+      - name: Bandit — medium/high findings
+        run: bandit -r apps config -q -ll -s B101,B105
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt --progress-spinner off
+      - name: Docker Compose config
+        run: docker compose config --quiet

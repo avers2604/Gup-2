@@ -161,8 +161,12 @@ class PublicationChecksGraphTests(TestCase):
 
         table = DocumentRelation._meta.db_table
         with connection.cursor() as cursor:
+            # Подавление B608 ниже: тест намеренно обходит ORM, чтобы
+            # проверить последний рубеж (ограничение БД) там, куда
+            # прикладная валидация не дошла. Подставляется только имя
+            # таблицы из _meta.db_table, значения переданы через %s.
             cursor.execute(
-                f"INSERT INTO {table} (from_document_id, to_document_id, relation_type, note, created_at) "
+                f"INSERT INTO {table} (from_document_id, to_document_id, relation_type, note, created_at) "  # nosec B608
                 "VALUES (%s, %s, %s, '', NOW())",
                 [str(second.pk), str(first.pk), DocumentRelation.RelationType.REFERENCES],
             )
@@ -187,8 +191,9 @@ class PublicationChecksGraphTests(TestCase):
 
         table = DocumentRelation._meta.db_table
         with connection.cursor() as cursor:
+            # Подавление B608 ниже: тот же намеренный обход ORM, что и выше.
             cursor.execute(
-                f"INSERT INTO {table} (from_document_id, to_document_id, relation_type, note, created_at) "
+                f"INSERT INTO {table} (from_document_id, to_document_id, relation_type, note, created_at) "  # nosec B608
                 "VALUES (%s, %s, %s, '', NOW())",
                 [str(other.pk), str(document.pk), DocumentRelation.RelationType.REFERENCES],
             )
