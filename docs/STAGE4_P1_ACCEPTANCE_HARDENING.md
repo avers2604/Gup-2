@@ -80,7 +80,7 @@ Prometheus endpoint по-прежнему отдаёт устойчивые life
 - отсутствующий file field — business 404;
 - незавершённый WORM promotion — 409 + `Retry-After`.
 
-Grafana показывает **прирост 403/404/504 за выбранный период**, а не абсолютный lifetime counter.
+Grafana показывает **прирост 403/404/504 за выбранный период** через `increase(...[$__range])`, а не абсолютный lifetime counter. Monitoring validator отдельно запрещает возвращение dashboard к lifetime gauge/counter semantics.
 
 ## CI contracts
 
@@ -95,6 +95,7 @@ CI должен доказать как минимум:
 - MinIO verifier сравнивает VersionId/SHA/Object Lock и имеет отрицательные тесты;
 - фактическое невыполнение даже ослабленного критерия остаётся FAIL;
 - pagination pages 2..N не увеличивают logical search counters;
+- business 404/409 states не увеличивают storage link failure counters;
 - business dashboard использует period-scoped `increase()` для search/link counters и не выдаёт lifetime значения за выбранный период.
 
 ## Что P1 не доказывает
