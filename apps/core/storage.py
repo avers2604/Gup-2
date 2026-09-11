@@ -2,21 +2,24 @@
 Разделение файлового хранилища по типам объектов (STACK.md → «Разделение
 политик хранения MinIO»).
 
-Оригиналы НРД (`files_original`) и бланки (`Template.file_editable`,
-`Template.file_sample`) хранятся в защищённом от изменения бакете
-`originals` (Object Locking, WORM) — по ТЗ 4.3.1 версия бланка
-инкрементируется даже для минорной корректировки, то есть каждая строка
-Template с самого начала является опубликованным, неизменяемым
-артефактом (двухступенчатая модель, см. docstring apps.templates_bank.models.Template).
-Редактируемая копия карточки НРД (`files_editable`) — рабочий,
-неопубликованный файл, который правомерно заменяется без версионирования
-и потому лежит в незаблокированном бакете `working`. Держать оба типа в
-одном бакете с одной retention-политикой нельзя: строгий Object Lock на
-общем бакете сломает замену рабочего файла.
+`originals` — финальный WORM-бакет. В нём находятся сканы НРД
+(`files_original`) и опубликованные версии бланков
+(`Template.file_editable`, `Template.file_sample`). Эти FileField указывают
+на `originals_storage`, но новые байты НЕ пишутся туда напрямую из
+`FileField.pre_save`: `apps.core.staged_files` перехватывает uncommitted upload,
+кладёт его в mutable `working/staging/worm/`, коммитит final key + durable
+promotion intent в PostgreSQL и только после commit копирует объект в
+`originals` с Object Lock headers. Поэтому rollback никогда не требует DELETE
+из WORM.
 
-Storage передаётся в FileField как callable (а не готовый инстанс) —
-так путь до функции сохраняется в миграциях как стабильная ссылка вместо
-попытки сериализовать сам объект хранилища (см. документацию Django по
+`working` — mutable + Versioning. Помимо обычной редактируемой копии карточки
+НРД (`files_editable`) он содержит короткоживущий staging-префикс для будущих
+immutable объектов. Успешный promote удаляет staging сразу; MinIO lifecycle
+страховочно очищает забытые/rollback staging-версии.
+
+Storage передаётся в FileField как callable (а не готовый инстанс) — так путь
+до функции сохраняется в миграциях как стабильная ссылка вместо попытки
+сериализовать сам объект хранилища (см. документацию Django по
 `FileField.storage`).
 """
 from django.core.files.storage import storages
