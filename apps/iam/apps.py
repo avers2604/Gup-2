@@ -7,4 +7,11 @@ class IamConfig(AppConfig):
     verbose_name = "Учётные записи и оргструктура"
 
     def ready(self):
+        from apps.core.domain_events import require_handlers
+
         from . import handlers, schema  # noqa: F401
+
+        require_handlers(
+            "user.blocked",
+            "user.password.changed",
+        )
