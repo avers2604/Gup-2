@@ -173,6 +173,13 @@ def create_document(*, actor, form=None, **attrs):
         else:
             document = apps.get_model("documents", "NormativeDocument")(**attrs)
         document.status = document.Status.DRAFT
+        # Проверяем не только роль, но и доступ к РЕЗУЛЬТИРУЮЩЕЙ карточке:
+        # иначе редактор без dsp_access может сразу создать скрытый от себя
+        # документ с грифом ДСП.
+        if not permissions.can_edit_document(actor, document):
+            raise PermissionDenied(
+                "Создание документа ДСП доступно только пользователю с соответствующим допуском."
+            )
         # Транзитный атрибут, не поле модели — NormativeDocument.save()
         # читает его для аудита (та же конвенция, что в admin.save_model).
         document._audit_actor = actor
@@ -217,6 +224,12 @@ def update_document(*, actor, document, form=None, **attrs):
                 if name not in fields or locked._meta.get_field(name).many_to_many:
                     raise ValidationError(f"Поле {name} нельзя изменять через этот сервис.")
                 setattr(locked, name, value)
+        # Поля уже применены к locked, поэтому повторная проверка ловит
+        # GENERAL -> RESTRICTED до любого model save / staging side effect.
+        if not permissions.can_edit_document(actor, locked):
+            raise PermissionDenied(
+                "Недостаточно прав для сохранения выбранного уровня доступа документа."
+            )
         locked._audit_actor = actor
         locked.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
         locked.save()
