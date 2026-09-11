@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily cleanup of expired IAM login failure projection
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+Unit=get-login-failure-purge.service
+
+[Install]
+WantedBy=timers.target
