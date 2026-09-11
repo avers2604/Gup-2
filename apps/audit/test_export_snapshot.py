@@ -37,7 +37,7 @@ class AuditExportSnapshotTests(TestCase):
 
         self.assertIn("SNAPSHOT-1", body)
         self.assertNotIn(
-            "Выгрузка журнала аудита",
+            "Экспорт журнала аудита",
             body,
             "событие текущей выгрузки создано после снимка и не должно попасть в тот же CSV",
         )
