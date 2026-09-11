@@ -206,11 +206,24 @@ PGPASSWORD=... bash deploy/acceptance/write-path-probe.sh \
 на реальном стенде после установки PgBouncer primary guard; репозиторий не
 подменяет это измерение расчётным значением.
 
-## 6. Alertmanager и application smoke
+## 6. Alertmanager, application smoke и business indicators
 
 Проверить synthetic warning/critical/resolved, потерю одного Alertmanager peer и
 работу Web/API после DB/MinIO переключений. Evidence и checkpoints сохраняются
 в каталоге запуска.
+
+Business dashboard также используется как sanity-check наблюдаемости:
+
+- search counters считают только логический поиск (resolved page 1), а не
+  переходы по страницам 2..N;
+- zero-result ratio в Grafana рассчитывается через `increase()` за текущий
+  `$__range`, а не из lifetime ratio;
+- 403/404/504 link failures показываются как прирост за `$__range`;
+- business 404/409 (неизвестный field/document, pending WORM promotion) не
+  считаются инфраструктурным сбоем хранилища.
+
+Эти показатели помогают интерпретировать стендовый прогон, но сами по себе не
+заменяют HA/DR acceptance gates.
 
 ## 7. Финализация
 
@@ -259,6 +272,8 @@ criterion; он не превращает фактический провал и
 
 MinIO validator отдельно запускает unit tests version-aware verifier и проверяет,
 что production wrapper больше не использует current-object-only hash comparison.
+Monitoring validator проверяет period-scoped PromQL для search/link business
+indicators, чтобы Grafana не подменяла выбранный период lifetime-значениями.
 
 CI подтверждает корректность tooling, но не заменяет реальный стендовый запуск,
 повторное измерение write-path RTO и подпись Заказчика/эксплуатации.
