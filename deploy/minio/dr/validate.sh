@@ -5,6 +5,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 bash -n configure-replication.sh
 bash -n check-replication.sh
 bash -n verify-500-hashes.sh
+python3 -m py_compile verify_versioned_sample.py test_verify_versioned_sample.py
+python3 test_verify_versioned_sample.py
 python3 -m json.tool replication-admin-policy.json >/dev/null
 python3 -m json.tool replication-target-policy.json >/dev/null
 
@@ -54,43 +56,12 @@ PY
 grep -q 'CHANGE_ME_REPLICATION_ADMIN_ACCESS_KEY' dr.env.example
 grep -q 'CHANGE_ME_REPLICATION_TARGET_ACCESS_KEY' dr.env.example
 
-# Functional smoke-test of the hash comparer with a fake mc. The real
-# acceptance wrapper passes MINIO_HASH_SAMPLE_SIZE (default 500); using 7 keeps CI
-# fast while still exercising random selection, download and SHA comparison.
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-cat >"$tmp/mc" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-case "${1:-}" in
-  alias|ready) exit 0 ;;
-  ls)
-    for i in $(seq 1 10); do
-      printf '{"type":"file","key":"file-%04d.bin"}\n' "$i"
-    done
-    ;;
-  cat)
-    path="${2:-}"
-    printf 'payload-%s\n' "${path##*/}"
-    ;;
-  *) echo "fake mc: unsupported: $*" >&2; exit 2 ;;
-esac
-EOF
-chmod +x "$tmp/mc"
-
-MINIO_SOURCE_URL=http://source \
-MINIO_TARGET_URL=http://target \
-MINIO_SOURCE_ACCESS_KEY=source \
-MINIO_SOURCE_SECRET_KEY=source-secret \
-MINIO_TARGET_ACCESS_KEY=target \
-MINIO_TARGET_SECRET_KEY=target-secret \
-MINIO_BUCKET_ORIGINALS=originals \
-MC_BIN="$tmp/mc" \
-MINIO_HASH_SAMPLE_SIZE=7 \
-MINIO_HASH_EVIDENCE_FILE="$tmp/hashes.csv" \
-  bash verify-500-hashes.sh >/dev/null
-
-[[ "$(( $(wc -l <"$tmp/hashes.csv") - 1 ))" -eq 7 ]]
+# Acceptance wrapper must delegate to the version-aware verifier; a legacy
+# current-object-only `mc cat` comparison would miss VersionId/retention/hold drift.
+grep -q 'verify_versioned_sample.py' verify-500-hashes.sh
 grep -q 'MINIO_HASH_SAMPLE_SIZE:-500' verify-500-hashes.sh
+grep -q 'list_object_versions' verify_versioned_sample.py
+grep -q 'get_object_retention' verify_versioned_sample.py
+grep -q 'get_object_legal_hold' verify_versioned_sample.py
 
 echo "MinIO DR static validation passed."

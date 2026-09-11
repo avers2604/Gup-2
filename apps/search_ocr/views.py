@@ -9,7 +9,7 @@ from django.core.paginator import Paginator
 from django.shortcuts import render
 from django.views import View
 
-from apps.core.business_metrics import record_search
+from apps.core.business_metrics import build_search_metric_key, record_search
 
 from .forms import SearchForm
 from .indexed_search import search_documents_indexed
@@ -31,15 +31,29 @@ class SearchView(LoginRequiredMixin, View):
         query_string = ""
 
         if form.is_valid() and form.cleaned_data.get("q"):
+            query = form.cleaned_data["q"]
+            category = form.cleaned_data.get("category") or None
+            service = form.cleaned_data.get("service") or None
             queryset = search_documents_indexed(
                 request.user,
-                form.cleaned_data["q"],
-                category=form.cleaned_data.get("category") or None,
-                service=form.cleaned_data.get("service") or None,
+                query,
+                category=category,
+                service=service,
             )
             paginator = Paginator(queryset, PAGE_SIZE)
-            record_search(paginator.count)
             page_obj = paginator.get_page(request.GET.get("page"))
+            logical_key = build_search_metric_key(
+                user_id=request.user.pk,
+                query=query,
+                category=category,
+                service=service,
+                surface="web",
+            )
+            record_search(
+                paginator.count,
+                page_number=page_obj.number,
+                logical_search_key=logical_key,
+            )
             results = page_obj.object_list
             query_params = request.GET.copy()
             query_params.pop("page", None)
