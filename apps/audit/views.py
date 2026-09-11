@@ -15,7 +15,7 @@ import json
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.paginator import Paginator
 from django.db.models import Q
-from django.http import Http404, StreamingHttpResponse
+from django.http import Http404, HttpResponseBadRequest, StreamingHttpResponse
 from django.shortcuts import render
 from django.utils import timezone
 from django.views import View
@@ -127,17 +127,22 @@ class AuditLogExportView(LoginRequiredMixin, View):
         return super().dispatch(request, *args, **kwargs)
 
     def get(self, request):
-        form = AuditFilterForm(request.GET or None)
+        # Для выгрузки форма всегда bound: пустой QueryDict означает валидный
+        # запрос «выгрузить всё», а невалидные значения должны fail-closed,
+        # а не превращаться в полный экспорт журнала.
+        form = AuditFilterForm(request.GET)
+        if not form.is_valid():
+            return HttpResponseBadRequest("Некорректные фильтры выгрузки.\n")
+
         snapshot_at = timezone.now()
         queryset = filtered_entries(form).filter(created_at__lte=snapshot_at)
         matched_entries = queryset.count()
 
         applied = {}
-        if form.is_valid():
-            for key, value in form.cleaned_data.items():
-                if value in (None, "", []):
-                    continue
-                applied[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
+        for key, value in form.cleaned_data.items():
+            if value in (None, "", []):
+                continue
+            applied[key] = value.isoformat() if hasattr(value, "isoformat") else str(value)
 
         AuditLog.objects.create(
             event_type=AuditLog.EventType.AUDIT_LOG_EXPORTED,
@@ -149,6 +154,7 @@ class AuditLogExportView(LoginRequiredMixin, View):
                 "filters": applied,
                 "matched_entries": matched_entries,
                 "format": "csv",
+                "snapshot_at": snapshot_at.isoformat(),
             },
         )
 
