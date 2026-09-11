@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATRONI_CONFIG="${PATRONI_CONFIG:-/etc/patroni/patroni.yml}"
 HAPROXY_CONFIG="${HAPROXY_CONFIG:-/etc/haproxy/haproxy.cfg}"
 PGBOUNCER_CONFIG="${PGBOUNCER_CONFIG:-/etc/pgbouncer/pgbouncer.ini}"
@@ -65,7 +66,21 @@ if "host=127.0.0.1" not in entry or "port=6433" not in entry:
         "ERROR: bz_get must route PgBouncer to local HAProxy 127.0.0.1:6433"
     )
 
+socket_dir = pool.get("unix_socket_dir", "")
+if socket_dir != "/var/run/postgresql":
+    raise SystemExit(
+        f"ERROR: {path}: unix_socket_dir={socket_dir!r}; primary guard expects /var/run/postgresql"
+    )
+
 print("PgBouncer project contract: OK")
 PY
+
+# Planned-switchover safety: HAProxy changing its downstream target does not
+# invalidate already-open PgBouncer server connections. The local guard must
+# detect the selected HAProxy backend and issue PgBouncer RECONNECT + WAIT_CLOSE.
+python3 -m py_compile "$SCRIPT_DIR/pgbouncer_primary_guard.py"
+python3 "$SCRIPT_DIR/test_pgbouncer_primary_guard.py"
+grep -q 'RECONNECT' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
+grep -q 'WAIT_CLOSE' "$SCRIPT_DIR/pgbouncer_primary_guard.py"
 
 echo "HA configuration validation: OK"
