@@ -56,13 +56,11 @@ mkdir -p "$run_dir"
 chmod 0700 "$run_dir"
 checkpoints="$run_dir/checkpoints.csv"
 extended_results="$run_dir/extended-results.env"
+policy_evidence="$run_dir/acceptance-policy.json"
+checkpoint_evidence="$run_dir/acceptance-checkpoints.json"
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Запустить внешний инструмент, сохранив его вывод в evidence. Без этой обёртки
-# `set -e` обрывает preflight на первой же неуспешной команде, а диагностика
-# остаётся только в файле: оператор видит голый код возврата и ни строчки
-# причины. Проверено на реальном стенде-репетиции (etcdctl и pgbackrest).
 run_tool() {
   local label="$1" out="$2"
   shift 2
@@ -94,14 +92,62 @@ search_reindex_required_documents=${SEARCH_REINDEX_DOCUMENTS:-10000}
 search_reindex_documents=0
 search_reindex_seconds=0
 search_reindex_limit_seconds=${SEARCH_REINDEX_MAX_SECONDS:-3600}
+search_reindex_mode=NOT_RUN
 search_reindex_result=NOT_RUN
 queue_worker_kill_result=NOT_RUN
 queue_redis_kill_result=NOT_RUN
 minio_hash_required_count=${MINIO_HASH_SAMPLE_SIZE:-500}
 minio_hash_sample_count=0
 minio_hash_mismatches=0
+minio_hash_seed=
+minio_hash_algorithm=sorted-random-v1
 minio_hash_result=NOT_RUN
 EOF
+}
+
+check_acceptance_policy() {
+  local search_documents="${1:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
+  local search_seconds="${2:-${SEARCH_REINDEX_MAX_SECONDS:-3600}}"
+  local minio_sample="${3:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
+  local output="$run_dir/acceptance-policy-output.txt"
+  local rc=0
+  python3 "$SCRIPT_DIR/acceptance_policy.py" \
+    --search-documents "$search_documents" \
+    --search-seconds-max "$search_seconds" \
+    --minio-sample "$minio_sample" \
+    --evidence "$policy_evidence" >"$output" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    echo "ERROR: acceptance criteria violate repository baseline and no complete waiver is present." >&2
+    cat "$output" >&2
+  fi
+  return "$rc"
+}
+
+json_field() {
+  local path="$1" field="$2"
+  python3 - "$path" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text())
+value = payload.get(sys.argv[2], "")
+if isinstance(value, list):
+    print(",".join(str(item) for item in value))
+else:
+    print(value)
+PY
+}
+
+verify_required_checkpoints() {
+  local output="$run_dir/acceptance-checkpoints-output.txt"
+  local rc=0
+  python3 "$SCRIPT_DIR/acceptance_checkpoints.py" "$checkpoints" \
+    --evidence "$checkpoint_evidence" >"$output" 2>&1 || rc=$?
+  if (( rc != 0 )); then
+    echo "ERROR: required real-stand acceptance checkpoints are incomplete." >&2
+    cat "$output" >&2
+  fi
+  return "$rc"
 }
 
 require_commands() {
@@ -122,25 +168,20 @@ check_patroni() {
 import json
 import sys
 from pathlib import Path
-
 path, expected_raw, max_lag_raw = sys.argv[1:]
 rows = json.loads(Path(path).read_text())
 if not isinstance(rows, list) or not rows:
     raise SystemExit("Patroni topology is empty")
-
 def norm(row):
     return {str(k).strip().lower(): v for k, v in row.items()}
-
 rows = [norm(r) for r in rows]
 expected = {x.strip() for x in expected_raw.split(",") if x.strip()}
 actual = {str(r.get("member", "")).strip() for r in rows}
 if actual != expected:
     raise SystemExit(f"Patroni members mismatch: expected={sorted(expected)} actual={sorted(actual)}")
-
 leaders = [r for r in rows if str(r.get("role", "")).strip().lower() in {"leader", "primary"}]
 if len(leaders) != 1:
     raise SystemExit(f"expected exactly one leader/primary, found {len(leaders)}")
-
 max_lag = int(max_lag_raw)
 for row in rows:
     role = str(row.get("role", "")).strip().lower()
@@ -179,11 +220,6 @@ check_etcd() {
 
 check_pgbackrest() {
   local out="$run_dir/pgbackrest-preflight.json"
-  # Инвентарь экспортируется целиком через `set -a`, а pgBackRest трактует
-  # PGBACKREST_<OPTION> как собственную опцию: PGBACKREST_BIN даёт
-  # "WARN: environment contains invalid option 'bin'", а имя вроде
-  # PGBACKREST_REPO1_PATH молча переопределило бы репозиторий бэкапов.
-  # Поэтому вызываем инструмент с вычищенным префиксом.
   run_tool "pgbackrest check" "$run_dir/pgbackrest-check.txt" \
     env -u PGBACKREST_BIN -u PGBACKREST_STANZA \
       "$PGBACKREST_BIN" --stanza="$PGBACKREST_STANZA" check
@@ -195,7 +231,6 @@ import json
 import sys
 import time
 from pathlib import Path
-
 path, max_age_raw = sys.argv[1:]
 payload = json.loads(Path(path).read_text())
 if not isinstance(payload, list) or not payload:
@@ -228,8 +263,7 @@ check_minio() {
   # shellcheck disable=SC1090
   . "$MINIO_DR_ENV"
   set +a
-  run_tool "MinIO DR check script" "$run_dir/minio-preflight.txt" \
-    bash "$MINIO_CHECK_SCRIPT"
+  run_tool "MinIO DR check script" "$run_dir/minio-preflight.txt" bash "$MINIO_CHECK_SCRIPT"
   sed 's/^/    /' "$run_dir/minio-preflight.txt"
   echo "MinIO DR OK"
 }
@@ -289,12 +323,10 @@ finalize_report() {
   python3 - "$incident" "$durable" "$restored" >"$run_dir/metrics.env" <<'PY'
 from datetime import datetime
 import sys
-
 def parse(value, name):
     if not value or not value.endswith("Z"):
         raise SystemExit(f"{name} must be explicit UTC and end with Z")
     return datetime.fromisoformat(value[:-1] + "+00:00")
-
 incident = parse(sys.argv[1], "ACCEPTANCE_INCIDENT_UTC")
 durable = parse(sys.argv[2], "ACCEPTANCE_LAST_DURABLE_UTC")
 restored = parse(sys.argv[3], "ACCEPTANCE_SERVICE_RESTORED_UTC")
@@ -310,22 +342,50 @@ PY
   # shellcheck disable=SC1090
   . "$extended_results"
 
-  # Acceptance volumes come from the inventory and are recorded by
-  # extended-checks.sh, so the criterion here is the volume the run was actually
-  # required to prove — never a number hardcoded in this script.
+  local search_reindex_mode="${search_reindex_mode:-NOT_RUN}"
   local search_required="${search_reindex_required_documents:-${SEARCH_REINDEX_DOCUMENTS:-10000}}"
   local minio_required="${minio_hash_required_count:-${MINIO_HASH_SAMPLE_SIZE:-500}}"
+  local minio_seed="${minio_hash_seed:-${MINIO_HASH_SAMPLE_SEED:-$run_id}}"
+  local minio_algorithm="${minio_hash_algorithm:-sorted-random-v1}"
+
+  local policy_rc=0 checkpoint_rc=0
+  check_acceptance_policy "$search_required" "$search_reindex_limit_seconds" "$minio_required" || policy_rc=$?
+  verify_required_checkpoints || checkpoint_rc=$?
+
+  local policy_status="$(json_field "$policy_evidence" status)"
+  local policy_waiver_id="$(json_field "$policy_evidence" waiver_id)"
+  local policy_waiver_approver="$(json_field "$policy_evidence" waiver_approver)"
+  local policy_waiver_reason="$(json_field "$policy_evidence" waiver_reason)"
+  local policy_weakened="$(json_field "$policy_evidence" weakened_criteria)"
+  local checkpoint_status="$(json_field "$checkpoint_evidence" status)"
+  local checkpoint_missing="$(json_field "$checkpoint_evidence" missing)"
 
   local -a discrepancies=()
 
+  local policy_effective=PASS
+  if (( policy_rc != 0 )) || [[ "$policy_status" == FAIL ]]; then
+    policy_effective=FAIL
+    discrepancies+=("acceptance criteria are weaker than the repository baseline without a complete approved waiver. See acceptance-policy.json evidence.")
+  fi
+
+  local checkpoint_effective=PASS
+  if (( checkpoint_rc != 0 )) || [[ "$checkpoint_status" != PASS ]]; then
+    checkpoint_effective=FAIL
+    discrepancies+=("required real-stand checkpoints are incomplete: ${checkpoint_missing:-unknown}. Record every required HA/DR validation checkpoint before finalize.")
+  fi
+
   local search_effective=PASS
+  if [[ "$search_reindex_mode" != cold ]]; then
+    search_effective=FAIL
+    discrepancies+=("search acceptance measurement is not a cold rebuild (mode=$search_reindex_mode). The read model must be emptied before the timed rebuild.")
+  fi
   if [[ "$search_reindex_result" != PASS ]]; then
     search_effective=FAIL
     discrepancies+=("cold reindex measurement is not PASS (result=$search_reindex_result). Run extended-checks.sh RUN_ID cold-reindex and attach the measurement before acceptance.")
   fi
   if [[ "$search_reindex_documents" != "$search_required" ]]; then
     search_effective=FAIL
-    discrepancies+=("cold reindex covered $search_reindex_documents documents instead of the required $search_required. Load the agreed acceptance corpus (SEARCH_REINDEX_DOCUMENTS) and repeat the run.")
+    discrepancies+=("cold reindex covered $search_reindex_documents documents instead of the required $search_required. Load the agreed acceptance corpus and repeat the run.")
   fi
   local timing_rc=0
   python3 - "$search_reindex_seconds" "$search_reindex_limit_seconds" <<'PY' || timing_rc=$?
@@ -341,7 +401,7 @@ PY
     discrepancies+=("cold reindex timing is not numeric (elapsed=${search_reindex_seconds:-unset}, criterion=${search_reindex_limit_seconds:-unset}). The measurement file is unusable as evidence.")
   elif (( timing_rc != 0 )); then
     search_effective=FAIL
-    discrepancies+=("cold reindex took ${search_reindex_seconds}s against the ${search_reindex_limit_seconds}s criterion. Optimize batching/workers/read-model or obtain a customer-approved threshold change before acceptance.")
+    discrepancies+=("cold reindex took ${search_reindex_seconds}s against the ${search_reindex_limit_seconds}s criterion. Optimize the rebuild or obtain an explicit approved waiver before acceptance.")
   fi
 
   local queue_effective=PASS
@@ -353,15 +413,19 @@ PY
   local minio_hash_effective=PASS
   if [[ "$minio_hash_result" != PASS ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash verification is not PASS (result=$minio_hash_result). Run extended-checks.sh RUN_ID minio-hash and attach the sample evidence.")
+    discrepancies+=("MinIO versioned WORM verification is not PASS (result=$minio_hash_result). Run extended-checks.sh RUN_ID minio-hash and attach the sample evidence.")
   fi
   if [[ "$minio_hash_sample_count" != "$minio_required" ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash sample covered $minio_hash_sample_count objects instead of the required $minio_required. Either replicate enough objects to the DR site or agree a different MINIO_HASH_SAMPLE_SIZE with the customer.")
+    discrepancies+=("MinIO versioned sample covered $minio_hash_sample_count versions instead of the required $minio_required. Replicate enough versions or use an explicit approved waiver.")
   fi
   if [[ "$minio_hash_mismatches" != "0" ]]; then
     minio_hash_effective=FAIL
-    discrepancies+=("MinIO hash sample found $minio_hash_mismatches checksum mismatches. Replication integrity is not proven; investigate before acceptance.")
+    discrepancies+=("MinIO versioned sample found $minio_hash_mismatches mismatches. VersionId/SHA-256/Object Lock consistency is not proven; investigate before acceptance.")
+  fi
+  if [[ -z "$minio_seed" ]]; then
+    minio_hash_effective=FAIL
+    discrepancies+=("MinIO sample seed is empty, so the sampled version set cannot be reproduced.")
   fi
 
   local legacy_effective=PASS
@@ -375,11 +439,23 @@ PY
   [[ "$search_effective" == PASS ]] || overall=FAIL
   [[ "$queue_effective" == PASS ]] || overall=FAIL
   [[ "$minio_hash_effective" == PASS ]] || overall=FAIL
+  [[ "$policy_effective" == PASS ]] || overall=FAIL
+  [[ "$checkpoint_effective" == PASS ]] || overall=FAIL
+  if [[ "$overall" == PASS && "$policy_status" == PASS_WITH_WAIVER ]]; then
+    overall=PASS_WITH_WAIVER
+  fi
 
   {
     echo "# Stage 4 acceptance result — $run_id"
     echo
     echo "- Overall: **$overall**"
+    echo "- Acceptance policy: **$policy_status**"
+    echo "- Waiver ID: ${policy_waiver_id:-—}"
+    echo "- Waiver approver: ${policy_waiver_approver:-—}"
+    echo "- Waiver reason: ${policy_waiver_reason:-—}"
+    echo "- Weakened criteria: ${policy_weakened:-—}"
+    echo "- Required checkpoints: **$checkpoint_status**"
+    echo "- Missing required checkpoints: ${checkpoint_missing:-—}"
     echo "- Site: ${ACCEPTANCE_SITE:-TBD}"
     echo "- Change: ${ACCEPTANCE_CHANGE_ID:-TBD}"
     echo "- Operator: ${ACCEPTANCE_OPERATOR:-TBD}"
@@ -395,6 +471,7 @@ PY
     echo
     echo "## Additional acceptance measurements"
     echo
+    echo "- Search rebuild mode: $search_reindex_mode"
     echo "- Cold search reindex documents: $search_reindex_documents"
     echo "- Cold search reindex required documents: $search_required"
     echo "- Cold search reindex seconds: $search_reindex_seconds"
@@ -402,10 +479,12 @@ PY
     echo "- Cold search reindex: **$search_effective**"
     echo "- Celery worker kill -9 / redelivery: **$queue_worker_kill_result**"
     echo "- Redis kill -9 / recovery: **$queue_redis_kill_result**"
-    echo "- MinIO SHA-256 sample files: $minio_hash_sample_count"
-    echo "- MinIO SHA-256 required sample files: $minio_required"
-    echo "- MinIO SHA-256 mismatches: $minio_hash_mismatches"
-    echo "- MinIO sample hash verification: **$minio_hash_effective**"
+    echo "- MinIO versioned WORM sample versions: $minio_hash_sample_count"
+    echo "- MinIO versioned WORM required versions: $minio_required"
+    echo "- MinIO sample seed: ${minio_seed:-—}"
+    echo "- MinIO sample algorithm: $minio_algorithm"
+    echo "- MinIO version/SHA/Object-Lock mismatches: $minio_hash_mismatches"
+    echo "- MinIO versioned WORM verification: **$minio_hash_effective**"
     echo
     if (( ${#discrepancies[@]} > 0 )); then
       local item
@@ -417,22 +496,29 @@ PY
     echo "## Evidence"
     echo
     echo "Evidence directory: $run_dir"
+    echo "Acceptance policy evidence: $policy_evidence"
+    echo "Checkpoint evidence: $checkpoint_evidence"
     echo
-    echo "Required manual evidence: failover/switchover commands, PITR target and validation, MinIO object/version/checksum checks, queue kill/recovery commands, synthetic alert delivery confirmation and application smoke-test results."
+    echo "Required manual evidence: failover/switchover commands, PITR target and validation, replica rebuild, MinIO failover/failback version checks, Alertmanager peer loss, application smoke test and write-path switchover measurement."
     echo
     echo "## Decision"
     echo
+    if [[ "$overall" == PASS_WITH_WAIVER ]]; then
+      echo "This run met the effective criteria only under waiver ${policy_waiver_id:-UNKNOWN}, approved by ${policy_waiver_approver:-UNKNOWN}: ${policy_waiver_reason:-NO_REASON}. Weakened criteria: ${policy_weakened:-UNKNOWN}. It must never be represented as an unqualified PASS."
+      echo
+    fi
     echo "This generated result is technical evidence only. Production RPO/RTO/SLA acceptance requires the designated customer/operations approver."
   } >"$run_dir/RESULT.md"
   record_checkpoint finalized
   echo "Acceptance result: $overall; report=$run_dir/RESULT.md"
-  [[ "$overall" == PASS ]]
+  [[ "$overall" == PASS || "$overall" == PASS_WITH_WAIVER ]]
 }
 
 case "$action" in
   preflight)
     require_commands
     init_extended_results
+    check_acceptance_policy
     record_checkpoint preflight-start
     {
       echo "run_id=$run_id"

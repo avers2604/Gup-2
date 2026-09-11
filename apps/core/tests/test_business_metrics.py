@@ -35,8 +35,8 @@ class BusinessMetricsTests(TestCase):
             last_reviewed_at=(now - datetime.timedelta(days=365 * 4)).date(),
         )
 
-        record_search(0)
-        record_search(3)
+        record_search(0, logical_search_key="metrics-zero")
+        record_search(3, logical_search_key="metrics-hit")
         record_link_generation_failure(403)
         record_link_generation_failure(404)
         record_link_generation_failure(504)
@@ -52,6 +52,8 @@ class BusinessMetricsTests(TestCase):
         self.assertIn('bz_get_link_generation_failures_total{status="403"} 1', body)
         self.assertIn('bz_get_link_generation_failures_total{status="404"} 1', body)
         self.assertIn('bz_get_link_generation_failures_total{status="504"} 1', body)
+        self.assertIn("pagination and short-window repeats are excluded", body)
+        self.assertIn("business 404/409 states are excluded", body)
 
     def test_ocr_overdue_metric_requires_current_needs_review_status(self):
         now = timezone.now()

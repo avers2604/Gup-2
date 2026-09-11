@@ -83,17 +83,49 @@ def refresh_document_index(document_id) -> bool:
         return _upsert_ids([document_id]) == 1
 
 
-def rebuild_document_search_index(*, batch_size: int = 1000, require_count: int | None = None) -> dict:
-    """Refresh in bounded transactions while readers retain the existing index."""
+def _truncate_read_model() -> None:
+    """Start an acceptance rebuild from a physically empty read-model table.
+
+    This intentionally uses TRUNCATE rather than row-by-row DELETE: the Stage 4
+    criterion measures rebuilding the index from zero, not normal online
+    maintenance. Callers must run cold mode outside a surrounding transaction.
+    """
+    index_table, _ = _table_names()
+    with connection.cursor() as cursor:
+        cursor.execute(f"TRUNCATE TABLE {index_table}")
+
+
+def rebuild_document_search_index(
+    *,
+    batch_size: int = 1000,
+    require_count: int | None = None,
+    cold: bool = False,
+) -> dict:
+    """Rebuild the persisted Smart Search read model.
+
+    `cold=False` is the production-safe online refresh: existing rows remain
+    queryable while batches are UPSERTed. `cold=True` is destructive acceptance
+    mode: require an exact corpus size, empty the read model first, then rebuild
+    every vector from source-of-truth documents. The elapsed measurement includes
+    the truncate operation.
+    """
     from apps.documents.models import NormativeDocument
 
     if batch_size < 1 or batch_size > 5000:
         raise ValueError("batch_size must be in 1..5000")
+    if cold and require_count is None:
+        raise ValueError("cold rebuild requires --require-count to guard destructive execution")
+    if cold and connection.in_atomic_block:
+        raise ValueError("cold rebuild must run outside an existing database transaction")
 
     total = NormativeDocument.objects.count()
     if require_count is not None and total != require_count:
         raise ValueError(f"document corpus must contain exactly {require_count}, actual={total}")
+
     started = time.monotonic()
+    if cold:
+        _truncate_read_model()
+
     rebuilt = 0
     last_pk = None
     while True:
@@ -104,9 +136,17 @@ def rebuild_document_search_index(*, batch_size: int = 1000, require_count: int 
         if not ids:
             break
         with transaction.atomic():
-            # Serialize refresh with source writes to avoid stale upserts.
-            locked_ids = list(NormativeDocument.objects.select_for_update().filter(
-                pk__in=ids).order_by("pk").values_list("pk", flat=True))
+            locked_ids = list(
+                NormativeDocument.objects.select_for_update()
+                .filter(pk__in=ids)
+                .order_by("pk")
+                .values_list("pk", flat=True)
+            )
             rebuilt += _upsert_ids(locked_ids)
         last_pk = ids[-1]
-    return {"documents": rebuilt, "elapsed_seconds": time.monotonic() - started}
+
+    return {
+        "documents": rebuilt,
+        "elapsed_seconds": time.monotonic() - started,
+        "mode": "cold" if cold else "online",
+    }
