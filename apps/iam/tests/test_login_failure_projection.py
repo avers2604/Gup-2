@@ -3,6 +3,7 @@ import inspect
 from django.test import RequestFactory, TestCase
 
 from apps.audit.models import AuditLog
+from apps.core import domain_events
 
 from .. import services
 from ..models import LoginFailure
@@ -34,6 +35,21 @@ class LoginFailureProjectionTests(TestCase):
         self.assertEqual(audit.details["ip_address"], "203.0.113.17")
         self.assertEqual(audit.details["stage"], "credentials")
         self.assertEqual(audit.details["reason"], "wrong_credentials")
+
+    def test_projection_rolls_back_if_critical_audit_handler_is_missing(self):
+        handlers = domain_events._HANDLERS.pop("auth.login.failed")
+        try:
+            with self.assertRaises(domain_events.MissingDomainEventHandler):
+                services.check_credentials(
+                    RequestFactory().post("/", REMOTE_ADDR="203.0.113.19"),
+                    personnel_number="missing-handler",
+                    password="wrong",
+                )
+            self.assertFalse(
+                LoginFailure.objects.filter(personnel_number="missing-handler").exists()
+            )
+        finally:
+            domain_events._HANDLERS["auth.login.failed"] = handlers
 
     def test_lockout_reads_projection_not_worm_audit(self):
         for _ in range(services.LOCKOUT_MAX_ATTEMPTS):
