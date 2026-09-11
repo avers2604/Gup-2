@@ -19,12 +19,13 @@
 
 СОСТАВ СВОДКИ СЧИТАЕТСЯ ПО ГРАФУ, А НЕ ПО СТАТУСУ. Документ попадает в
 перечень не потому, что у него статус «Действует с изм.», а потому, что
-на него есть хотя бы одна действующая связь «Вносит изменения в». Статус
-ставится человеком и может отстать от графа — например, когда
-единственное изменение отменили, а базовый документ в «Действует» вернуть
-забыли. Расхождение не прячется: `stale_amended_documents()` собирает
-такие карточки отдельным списком, чтобы Контролёр/Юрист видел, где статус
-пора вернуть.
+на него есть хотя бы одна действующая связь «Вносит изменения в», видимая
+текущему пользователю. Это та же граница доступа, что и на карточке НРД:
+ДСП-связь не должна раскрывать даже факт существования недоступного
+документа через счётчик или сам факт наличия изменений. Статус ставится
+человеком и может отстать от видимого графа — например, когда единственное
+видимое изменение отменили. `stale_amended_documents()` использует тот же
+пользовательский срез, чтобы список и детальная сводка не расходились.
 """
 from __future__ import annotations
 
@@ -44,6 +45,11 @@ IN_FORCE_STATUSES = (
 )
 
 
+def _visible_in_force_documents(user):
+    """Действующие документы, видимые текущему пользователю."""
+    return permissions.visible_documents(user).filter(status__in=IN_FORCE_STATUSES)
+
+
 def amendments_for(document, user):
     """Действующие изменения к документу, видимые пользователю.
 
@@ -57,7 +63,7 @@ def amendments_for(document, user):
     ).values_list("from_document_id", flat=True)
 
     return (
-        permissions.visible_documents(user)
+        _visible_in_force_documents(user)
         .filter(pk__in=amending_ids)
         .select_related("issuer_dept")
         .order_by("effective_date", "reg_date", "reg_number")
@@ -80,21 +86,17 @@ def amendment_notes(document):
 
 
 def _amended_base_ids(user):
-    """id документов, на которые есть хотя бы одно действующее изменение.
-
-    Видимость изменения не влияет на попадание базового документа в
-    перечень: скрывать сам факт наличия изменений было бы хуже, чем
-    показать сводку, в которой часть строк недоступна. А вот сами строки
-    фильтруются через `visible_documents` в `amendments_for`.
-    """
+    """id документов с хотя бы одним видимым действующим изменением."""
+    visible_amending_ids = _visible_in_force_documents(user).values("pk")
     return DocumentRelation.objects.filter(
         relation_type=DocumentRelation.RelationType.AMENDS,
-        from_document__status__in=IN_FORCE_STATUSES,
+        from_document_id__in=visible_amending_ids,
     ).values_list("to_document_id", flat=True)
 
 
 def consolidated_documents(user):
-    """Документы, у которых есть что сводить, — с числом изменений."""
+    """Документы, у которых есть что сводить, — с числом видимых изменений."""
+    visible_amending_ids = _visible_in_force_documents(user).values("pk")
     return (
         permissions.visible_documents(user)
         .filter(pk__in=_amended_base_ids(user), status__in=IN_FORCE_STATUSES)
@@ -103,7 +105,7 @@ def consolidated_documents(user):
                 "relations_to",
                 filter=Q(
                     relations_to__relation_type=DocumentRelation.RelationType.AMENDS,
-                    relations_to__from_document__status__in=IN_FORCE_STATUSES,
+                    relations_to__from_document_id__in=visible_amending_ids,
                 ),
                 distinct=True,
             )
@@ -114,12 +116,12 @@ def consolidated_documents(user):
 
 
 def stale_amended_documents(user):
-    """«Действует с изм.», у которых ни одного действующего изменения нет.
+    """«Действует с изм.» без видимого действующего изменения.
 
-    Не ошибка данных, а нормальное следствие отмены изменения: переход
-    «Действует с изм.» -> «Действует» выполняется человеком (см.
-    apps/documents/transitions.py), и до него статус расходится с графом.
-    Список нужен, чтобы это расхождение было видно, а не копилось молча.
+    Переход «Действует с изм.» -> «Действует» выполняется человеком (см.
+    apps/documents/transitions.py). Срез строится по тем же доступным
+    пользователю связям, что и основной список, чтобы ДСП-метаданные не
+    утекали через различия между двумя блоками экрана.
     """
     return (
         permissions.visible_documents(user)
