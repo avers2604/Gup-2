@@ -47,21 +47,26 @@ def run_personnel_import_task(self, storage_name: str, actor_id: str | None = No
         return {"duplicate": True, "storage_name": storage_name}
 
     actor = User.objects.filter(pk=actor_id).first() if actor_id else None
-    cleanup_source = True
+    # Источник — единственная воспроизводимая запись входа для разбора
+    # частично применённого импорта. Поэтому удаляем его только после полного
+    # успешного возврата import_personnel; любое исключение оставляет XLSX для
+    # повторной попытки или ручного разбора.
+    cleanup_source = False
     try:
         with storage.open(storage_name, "rb") as stream:
             report = import_personnel(stream, actor=actor)
-        return {
+        result = {
             "total": report.total,
             "created": len(report.successes),
             "updated": len(report.updates),
             "errors": len(report.errors),
             "error_rows": [_row_to_dict(row) for row in report.errors],
         }
+        cleanup_source = True
+        return result
     except OSError as exc:
         # Временный сбой хранилища повторяем. Staged-источник при этом НЕ
         # удаляем, чтобы следующая попытка прочитала ровно тот же файл.
-        cleanup_source = False
         raise self.retry(exc=exc, countdown=min(2 ** self.request.retries, 30))
     finally:
         if cleanup_source and storage.exists(storage_name):
