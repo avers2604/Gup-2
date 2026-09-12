@@ -1,5 +1,7 @@
 import io
+import os
 import zipfile
+from pathlib import Path
 from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -210,3 +212,46 @@ class OOXMLValidationTests(SimpleTestCase):
         with self.assertRaises(upload_validation.InvalidOOXML):
             upload_validation.validate_ooxml(invalid, "docx")
         self.assertEqual(invalid.tell(), 0)
+
+
+class RecordingBytesIO(io.BytesIO):
+    def __init__(self, payload):
+        super().__init__(payload)
+        self.read_sizes = []
+
+    def read(self, size=-1):
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
+class TemporaryUploadTests(SimpleTestCase):
+    def test_copy_is_bounded_position_is_restored_and_file_is_removed(self):
+        source = RecordingBytesIO(b"x" * (2 * 1024 * 1024 + 10))
+        field = mock.Mock(spec=["file"])
+        field.file = source
+        path_value = None
+
+        with upload_validation._temporary_upload_path(field) as path:
+            path_value = path
+            self.assertTrue(Path(path).exists())
+            self.assertEqual(Path(path).stat().st_size, len(source.getvalue()))
+
+        self.assertEqual(source.tell(), 0)
+        self.assertFalse(Path(path_value).exists())
+        self.assertTrue(source.read_sizes)
+        self.assertNotIn(-1, source.read_sizes)
+        self.assertLessEqual(max(source.read_sizes), 1024 * 1024)
+
+    def test_temp_file_is_removed_when_consumer_raises(self):
+        source = io.BytesIO(b"payload")
+        field = mock.Mock(spec=["file"])
+        field.file = source
+        path_value = None
+
+        with self.assertRaises(RuntimeError):
+            with upload_validation._temporary_upload_path(field) as path:
+                path_value = path
+                raise RuntimeError("consumer failed")
+
+        self.assertEqual(source.tell(), 0)
+        self.assertFalse(os.path.exists(path_value))
