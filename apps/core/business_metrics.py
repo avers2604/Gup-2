@@ -98,17 +98,23 @@ def record_search(
         getattr(settings, "SEARCH_METRIC_DEDUP_SECONDS", DEFAULT_SEARCH_METRIC_DEDUP_SECONDS)
     )
     if timeout <= 0:
-        raise ValueError("SEARCH_METRIC_DEDUP_SECONDS must be > 0")
-
-    dedupe_key = f"bz-get:business-metric:search:{logical_search_key}"
-    try:
-        is_new = cache.add(dedupe_key, "1", timeout=timeout)
-    except Exception:
-        # Search availability must not depend on observability cache health.
-        # Count the event rather than fail the user request; monitoring should
-        # separately surface Redis/cache availability.
-        logger.exception("Search metric dedupe cache is unavailable")
+        # Ошибка observability-конфига не должна превращать пользовательский
+        # поиск в 500. Fail-open: считаем запрос без дедупликации и явно
+        # сигнализируем конфигурационную проблему в журнале.
+        logger.error(
+            "SEARCH_METRIC_DEDUP_SECONDS must be > 0; counting search without dedupe"
+        )
         is_new = True
+    else:
+        dedupe_key = f"bz-get:business-metric:search:{logical_search_key}"
+        try:
+            is_new = cache.add(dedupe_key, "1", timeout=timeout)
+        except Exception:
+            # Search availability must not depend on observability cache health.
+            # Count the event rather than fail the user request; monitoring should
+            # separately surface Redis/cache availability.
+            logger.exception("Search metric dedupe cache is unavailable")
+            is_new = True
     if not is_new:
         return
 
