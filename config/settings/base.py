@@ -277,7 +277,8 @@ STORAGES = {
 # The edge proxy must overwrite forwarded headers. Trust only explicit networks.
 TRUSTED_PROXIES = [p.strip() for p in os.environ.get("TRUSTED_PROXIES", "").split(",") if p.strip()]
 OCR_MAX_PAGES = int(os.environ.get("OCR_MAX_PAGES", "1000"))
-OCR_MAX_BYTES = 150 * 1024 * 1024
+UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", str(150 * 1024 * 1024)))
+OCR_MAX_BYTES = UPLOAD_MAX_BYTES
 OCR_PROCESS_TIMEOUT = int(os.environ.get("OCR_PROCESS_TIMEOUT", "60"))
 OCR_MAX_DIMENSION = int(os.environ.get("OCR_MAX_DIMENSION", "3000"))
 

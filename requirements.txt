@@ -19,3 +19,4 @@ numpy>=1.26,<3
 opencv-python-headless>=4.9,<5
 clamd>=1.0,<2
 cryptography>=50,<51
+defusedxml>=0.7,<0.8
