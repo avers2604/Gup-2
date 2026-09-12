@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import os
 import zipfile
-from xml.etree import ElementTree
+from xml.etree.ElementTree import ParseError
 
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
@@ -98,7 +100,8 @@ def validate_ooxml(field_file, expected_kind: str) -> None:
                 ElementTree.fromstring(archive.read("_rels/.rels"))
                 archive.read(main_part)
             except (
-                ElementTree.ParseError,
+                ParseError,
+                DefusedXmlException,
                 KeyError,
                 RuntimeError,
                 zipfile.BadZipFile,

@@ -170,6 +170,23 @@ class OOXMLValidationTests(SimpleTestCase):
                 SimpleUploadedFile("x.docx", payload), "docx"
             )
 
+    def test_entity_expansion_in_package_xml_rejects(self):
+        dangerous_content_types = (
+            '<!DOCTYPE Types [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+            f'<Types xmlns="{CONTENT_TYPES_NS}">'
+            f'<Override PartName="/{DOCX_MAIN}" ContentType="&xxe;"/>'
+            "</Types>"
+        )
+        payload = _custom_zip([
+            ("[Content_Types].xml", dangerous_content_types),
+            ("_rels/.rels", _rels()),
+            (DOCX_MAIN, "<document/>"),
+        ])
+        with self.assertRaises(upload_validation.InvalidOOXML):
+            upload_validation.validate_ooxml(
+                SimpleUploadedFile("x.docx", payload), "docx"
+            )
+
     def test_valid_docx_and_xlsx_pass(self):
         upload_validation.validate_ooxml(
             SimpleUploadedFile("x.docx", docx_bytes()), "docx"
