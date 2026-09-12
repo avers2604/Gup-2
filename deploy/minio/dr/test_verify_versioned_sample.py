@@ -124,6 +124,7 @@ class VersionedSampleTests(unittest.TestCase):
         row = verifier.verify_one(FakeS3(), FakeS3(missing=True), "originals", item)
         self.assertEqual(row["result"], "FAIL")
         self.assertIn("NoSuchVersion", row["reason"])
+        self.assertEqual(row["target_version_id"], "")
 
     def test_acceptance_bucket_must_have_versioning_and_object_lock(self):
         with self.assertRaisesRegex(RuntimeError, "Versioning"):
