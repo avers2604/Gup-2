@@ -141,14 +141,21 @@ def _cleanup_failed_file_writes(document, previous_mutable_names):
     rollback очищает staging, а не вызывает DELETE в WORM-бакете.
 
     `files_editable` остаётся обычным mutable FileField и пишется синхронно;
-    его новую версию при последующем rollback безопасно удалить.
+    его новую версию при последующем rollback безопасно удалить. Удаляем
+    только `_committed=True`: если save упал до FileField.pre_save(), имя уже
+    могло быть назначено, но физического объекта ещё нет — удалять такое имя
+    опасно, оно теоретически может совпасть с чужим существующим объектом.
     """
     from apps.core.staged_files import discard_staged_uploads
 
     discard_staged_uploads(document)
     for field_name, previous_name in previous_mutable_names.items():
         field_file = getattr(document, field_name)
-        if not field_file or field_file.name == previous_name:
+        if (
+            not field_file
+            or field_file.name == previous_name
+            or not getattr(field_file, "_committed", True)
+        ):
             continue
         try:
             field_file.delete(save=False)
@@ -184,12 +191,17 @@ def create_document(*, actor, form=None, **attrs):
         # читает его для аудита (та же конвенция, что в admin.save_model).
         document._audit_actor = actor
         document.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
-        document.save()
+        previous_file_names = {"files_editable": ""}
+        try:
+            document.save()
+        except Exception:
+            _cleanup_failed_file_writes(document, previous_file_names)
+            raise
         if form is not None:
             try:
                 form.save_m2m()
             except Exception:
-                _cleanup_failed_file_writes(document, {"files_editable": ""})
+                _cleanup_failed_file_writes(document, previous_file_names)
                 raise
     return document
 
@@ -232,7 +244,11 @@ def update_document(*, actor, document, form=None, **attrs):
             )
         locked._audit_actor = actor
         locked.full_clean(exclude=_CLEAN_EXCLUDED_FIELDS)
-        locked.save()
+        try:
+            locked.save()
+        except Exception:
+            _cleanup_failed_file_writes(locked, previous_file_names)
+            raise
         if form is not None:
             form.instance = locked
             try:
@@ -356,18 +372,28 @@ def add_relation(*, actor, from_document, to_document, relation_type, note=""):
     """
     relation_model = apps.get_model("documents", "DocumentRelation")
     document_model = type(from_document)
+    from_pk = from_document.pk
+    to_pk = to_document.pk
+    if from_pk is None or to_pk is None:
+        raise ValidationError(
+            "Один из документов был удалён до сохранения связи. Обновите страницу и повторите."
+        )
 
     with transaction.atomic():
         current_documents = {
             item.pk: item
             for item in (
                 document_model.objects.select_for_update()
-                .filter(pk__in={from_document.pk, to_document.pk})
+                .filter(pk__in={from_pk, to_pk})
                 .order_by("pk")
             )
         }
-        current_from = current_documents[from_document.pk]
-        current_to = current_documents[to_document.pk]
+        if from_pk not in current_documents or to_pk not in current_documents:
+            raise ValidationError(
+                "Один из документов был удалён до сохранения связи. Обновите страницу и повторите."
+            )
+        current_from = current_documents[from_pk]
+        current_to = current_documents[to_pk]
 
         if not permissions.can_manage_relations(actor, current_from):
             raise PermissionDenied("Недостаточно прав для изменения графа связей версионности.")
