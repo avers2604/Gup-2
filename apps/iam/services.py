@@ -377,13 +377,14 @@ def _lockout_advisory_key(namespace: str, value: str) -> int:
 
 
 def _lock_login_identities(*, personnel_number: str = "", ip_address: str = "") -> None:
-    """Сериализовать check→authenticate/TOTP→failure по account/IP.
+    """Сериализовать финальный lockout check и запись failure по account/IP.
 
     Счётчик должен поддерживать и несуществующие табельные номера, поэтому
     строковый `select_for_update()` здесь принципиально не подходит. Advisory
-    lock живёт до commit/rollback и позволяет держать один и тот же барьер для
-    password и TOTP путей. Ключи сортируются глобально, чтобы запросы,
-    пересекающиеся по account и IP, не образовывали взаимную блокировку.
+    lock живёт до commit/rollback и сериализует проверку последнего слота и
+    фиксацию failure после проверки пароля/TOTP. Ключи сортируются глобально,
+    чтобы запросы, пересекающиеся по account и IP, не образовывали взаимную
+    блокировку.
     """
     if not connection.in_atomic_block:
         raise RuntimeError("login lockout advisory locks require transaction.atomic()")
@@ -543,18 +544,24 @@ def login_retry_after_seconds(personnel_number: str, ip_address: str) -> int:
 def check_credentials(request, *, personnel_number: str, password: str) -> CredentialCheckResult | None:
     """Шаг 1: проверить lockout и пароль, не раскрывая существование учётки.
 
-    Заблокированная попытка не создаёт новую LoginFailure — иначе sliding
-    window самопродлевался бы от самого факта повторных запросов. Реальная
-    неудача аутентификации создаёт и operational projection, и WORM event.
-    Check, password verification и запись failure выполняются под общими
-    account/IP advisory locks, поэтому параллельные запросы не перескакивают
-    через последний доступный слот окна.
+    Уже заблокированную попытку отсекаем до дорогой проверки пароля и без
+    ожидания advisory lock. Для незаблокированной попытки password verification
+    выполняется раньше advisory lock: Django может обновить устаревший password
+    hash и тем самым кратко заблокировать строку User, поэтому единый порядок
+    row state -> advisory lock совпадает с TOTP-путём. После взятия account/IP
+    locks окно проверяется повторно: это сохраняет строгую сериализацию
+    последнего доступного failure-slot при конкурентных запросах.
     """
     ip_address = _client_ip(request)
+    if is_locked_out(personnel_number) or is_ip_locked_out(ip_address):
+        raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
+
+    user = authenticate(request, username=personnel_number, password=password)
+
     _lock_login_identities(personnel_number=personnel_number, ip_address=ip_address)
     if is_locked_out(personnel_number) or is_ip_locked_out(ip_address):
         raise LoginBlocked(login_retry_after_seconds(personnel_number, ip_address))
-    user = authenticate(request, username=personnel_number, password=password)
+
     if user is None:
         _record_login_failure(
             actor=None,
@@ -599,10 +606,11 @@ def verify_totp_login(*, ticket: str, code: str, request=None) -> User | None:
         )
         return None
 
-    # Row lock по-прежнему нужен для защиты TOTP replay state (`totp_last_step`).
-    # После того как account identity известна из актуальной строки, берём те же
-    # account/IP advisory locks, что и password path. Password-проверка не берёт
-    # row lock User, поэтому этот порядок не создаёт циклической зависимости.
+    # Row lock нужен для защиты TOTP replay state (`totp_last_step`). Сначала
+    # фиксируем/читаем User row, затем берём account/IP advisory locks. Password
+    # path придерживается того же порядка: authenticate() может обновить
+    # устаревший password hash и завершает любую работу со строкой User до
+    # advisory lock.
     user = User.objects.select_for_update().filter(pk=data.get("user_id")).first()
     personnel_number = user.personnel_number if user else ""
     _lock_login_identities(personnel_number=personnel_number, ip_address=ip_address)
