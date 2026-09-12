@@ -1,13 +1,11 @@
 """Hardened WORM audit export endpoint.
 
 The primary Web UI path is POST and therefore receives Django's normal CSRF
-protection.  A guarded GET path is kept temporarily for backwards-compatible
+protection. A guarded GET path is kept temporarily for backwards-compatible
 internal clients/tests, but cross-site browser fetches are rejected using Fetch
 Metadata plus Origin/Referer validation.
 """
 
-import datetime
-import json
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -118,7 +116,7 @@ class AuditLogExportView(LoginRequiredMixin, View):
             int(getattr(settings, "AUDIT_EXPORT_MAX_ROWS", DEFAULT_EXPORT_MAX_ROWS)),
             1,
         )
-        # COUNT over a sliced subquery stops at max_rows + 1.  We only need to
+        # COUNT over a sliced subquery stops at max_rows + 1. We only need to
         # know whether the export is too large; a full-table count would itself
         # preserve the resource-amplification problem this guard is meant to fix.
         matched_entries = queryset[: max_rows + 1].count()
