@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 TASK_TIME_LIMIT = 600
 TASK_SOFT_TIME_LIMIT = 540
+PROMOTION_MAX_RETRIES = 120
 
 
 def _already_finalized(task_id: str) -> bool:
@@ -38,7 +39,7 @@ def _already_finalized(task_id: str) -> bool:
     reject_on_worker_lost=True,
     track_started=True,
 )
-def run_ocr_for_document(self, document_id):
+def run_ocr_for_document(self, document_id, _promotion_waits=0):
     from .models import NormativeDocument
 
     task_id = self.request.id or ""
@@ -68,7 +69,20 @@ def run_ocr_for_document(self, document_id):
         "files_original",
         source_name,
     ):
-        raise self.retry(countdown=5, max_retries=120)
+        # Celery exposes only one cumulative request.retries counter. Keep the
+        # WORM-wait count in task kwargs as well, so later OCR failures can
+        # subtract those waits instead of treating them as spent OCR retries.
+        # The dynamic total ceiling preserves a full promotion wait budget even
+        # if another retry reason has already consumed cumulative attempts.
+        remaining_promotion_retries = max(
+            PROMOTION_MAX_RETRIES - _promotion_waits,
+            0,
+        )
+        raise self.retry(
+            countdown=5,
+            max_retries=self.request.retries + remaining_promotion_retries,
+            kwargs={"_promotion_waits": _promotion_waits + 1},
+        )
 
     try:
         with document.files_original.open("rb") as fh:
@@ -76,8 +90,16 @@ def run_ocr_for_document(self, document_id):
             pdf_bytes = fh.read(settings.OCR_MAX_BYTES + 1)
         text, confidence = extract_text_and_confidence(pdf_bytes)
     except Exception as exc:
-        if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
+        # request.retries contains both promotion waits and OCR attempts.
+        # Only the latter spend the task's normal transient-failure budget.
+        ocr_retries = max(self.request.retries - _promotion_waits, 0)
+        if ocr_retries < self.max_retries:
+            remaining_ocr_retries = self.max_retries - ocr_retries
+            raise self.retry(
+                exc=exc,
+                max_retries=self.request.retries + remaining_ocr_retries,
+                kwargs={"_promotion_waits": _promotion_waits},
+            )
 
         with transaction.atomic():
             document = NormativeDocument.objects.select_for_update().get(pk=document_id)
@@ -94,7 +116,8 @@ def run_ocr_for_document(self, document_id):
                 object_id=str(document.pk),
                 details={
                     "error": str(exc),
-                    "retries": self.request.retries,
+                    "retries": ocr_retries,
+                    "promotion_waits": _promotion_waits,
                     "task_id": task_id,
                 },
             )

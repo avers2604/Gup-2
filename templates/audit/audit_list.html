@@ -24,12 +24,18 @@
         {% endfor %}
         <button class="btn btn--primary" type="submit">Применить</button>
         <a class="btn btn--ghost" href="{% url 'audit:list' %}">Сбросить</a>
-        {# Выгружается тот же срез, что показан на экране, — те же параметры фильтра. #}
-        <a class="btn btn--secondary"
-           href="{% url 'audit:export' %}{% if query_string %}?{{ query_string }}{% endif %}">
-          Выгрузить CSV
-        </a>
       </div>
+    </form>
+
+    {# Выгружается тот же срез, что показан на экране, но как защищённый POST. #}
+    <form method="post" action="{% url 'audit:export' %}" style="margin-top: var(--space-4);">
+      {% csrf_token %}
+      <input type="hidden" name="event_type" value="{{ form.event_type.value|default_if_none:'' }}">
+      <input type="hidden" name="actor_personnel_number" value="{{ form.actor_personnel_number.value|default_if_none:'' }}">
+      <input type="hidden" name="object_id" value="{{ form.object_id.value|default_if_none:'' }}">
+      <input type="hidden" name="date_from" value="{{ form.date_from.value|default_if_none:'' }}">
+      <input type="hidden" name="date_to" value="{{ form.date_to.value|default_if_none:'' }}">
+      <button class="btn btn--secondary" type="submit">Выгрузить CSV</button>
     </form>
   </div>
 
