@@ -18,6 +18,13 @@ class FilePromotionPending(ValidationError):
     """Файл опубликован в БД, но ещё не закреплён в WORM-хранилище."""
 
 
+def _discard_failed_template_uploads(template):
+    """Компенсировать staging, созданный неуспешной публикацией версии."""
+    from apps.core.staged_files import discard_staged_uploads
+
+    discard_staged_uploads(template)
+
+
 def publish_version(*, actor, family, form=None, **attrs):
     """Опубликовать новую версию бланка внутри семейства форм.
 
@@ -52,7 +59,11 @@ def publish_version(*, actor, family, form=None, **attrs):
         template.previous_template = previous
         template._audit_actor = actor
         template.full_clean(exclude=["previous_template", "superseded_by", "family"])
-        template.save()
+        try:
+            template.save()
+        except Exception:
+            _discard_failed_template_uploads(template)
+            raise
 
         if previous is not None:
             previous.status = Template.Status.SUPERSEDED
@@ -61,9 +72,7 @@ def publish_version(*, actor, family, form=None, **attrs):
             try:
                 previous.save(update_fields=["status", "superseded_by", "updated_at"])
             except Exception:
-                from apps.core.staged_files import discard_staged_uploads
-
-                discard_staged_uploads(template)
+                _discard_failed_template_uploads(template)
                 raise
 
     return template
