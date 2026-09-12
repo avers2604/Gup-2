@@ -35,6 +35,7 @@ class DocumentSaveFailureCleanupTests(TestCase):
             "title": "Проверка компенсации файла",
             "issuer_dept": self.department,
             "retention_category": RetentionCategory.ORDERS_CORE,
+            "files_original": "documents/originals/2026/09/source.pdf",
             "files_editable": SimpleUploadedFile("failed.docx", b"docx bytes"),
         }
 
@@ -58,6 +59,7 @@ class DocumentSaveFailureCleanupTests(TestCase):
     def test_update_cleans_replacement_mutable_file_when_save_fails(self):
         document = make_document(
             reg_number="SAVE-FAIL-2",
+            files_original="documents/originals/2026/09/source.pdf",
             files_editable="documents/editable/2026/old.docx",
         )
         replacement = SimpleUploadedFile("replacement.docx", b"new docx bytes")
