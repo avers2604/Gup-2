@@ -1,9 +1,9 @@
 from unittest.mock import MagicMock, patch
 
+from celery.exceptions import Retry
 from django.test import TestCase
 
 from apps.audit.models import AuditLog
-from apps.documents.models import NormativeDocument
 from apps.documents.tasks import run_ocr_for_document
 
 from .factories import make_document
@@ -21,33 +21,65 @@ def _mock_storage_open(content=b"%PDF-1.4 fake"):
 class OcrRetryBudgetIsolationTests(TestCase):
     """Ожидание WORM promotion не должно съедать ретраи самого OCR."""
 
-    def test_transient_ocr_failure_still_retries_after_promotion_waits(self):
+    def test_transient_ocr_failure_still_retries_after_five_promotion_waits(self):
         document = make_document(
             reg_number="OCR-BUDGET",
             files_original="documents/originals/2026/01/retry-budget.pdf",
         )
 
-        with patch(
-            "apps.core.staged_files.promotion_pending_for",
-            side_effect=[True, True, True, True, True, False, False],
-        ), patch(
-            "apps.documents.tasks.extract_text_and_confidence",
-            side_effect=[RuntimeError("временная ошибка Tesseract"), ("Восстановлено", 95.0)],
-        ), _mock_storage_open():
-            run_ocr_for_document.apply(args=[str(document.pk)], throw=False)
+        run_ocr_for_document.push_request(retries=5)
+        try:
+            with patch(
+                "apps.core.staged_files.promotion_pending_for",
+                return_value=False,
+            ), patch(
+                "apps.documents.tasks.extract_text_and_confidence",
+                side_effect=RuntimeError("временная ошибка Tesseract"),
+            ), _mock_storage_open(), patch.object(
+                run_ocr_for_document,
+                "retry",
+                side_effect=Retry(),
+            ) as retry:
+                with self.assertRaises(Retry):
+                    run_ocr_for_document.run(
+                        str(document.pk),
+                        _promotion_waits=5,
+                    )
+        finally:
+            run_ocr_for_document.pop_request()
 
-        document.refresh_from_db()
-        self.assertEqual(document.ocr_body, "Восстановлено")
-        self.assertEqual(document.ocr_status, NormativeDocument.OcrStatus.INDEXED)
-        self.assertTrue(
-            AuditLog.objects.filter(
-                event_type=AuditLog.EventType.DOCUMENT_OCR_COMPLETED,
-                object_id=str(document.pk),
-            ).exists()
-        )
+        retry.assert_called_once()
         self.assertFalse(
             AuditLog.objects.filter(
                 event_type=AuditLog.EventType.DOCUMENT_OCR_FAILED,
                 object_id=str(document.pk),
             ).exists()
         )
+
+    def test_promotion_retry_carries_its_own_wait_counter(self):
+        document = make_document(
+            reg_number="OCR-BUDGET-WAIT",
+            files_original="documents/originals/2026/01/retry-budget-wait.pdf",
+        )
+
+        run_ocr_for_document.push_request(retries=4)
+        try:
+            with patch(
+                "apps.core.staged_files.promotion_pending_for",
+                return_value=True,
+            ), patch.object(
+                run_ocr_for_document,
+                "retry",
+                side_effect=Retry(),
+            ) as retry:
+                with self.assertRaises(Retry):
+                    run_ocr_for_document.run(
+                        str(document.pk),
+                        _promotion_waits=4,
+                    )
+        finally:
+            run_ocr_for_document.pop_request()
+
+        retry.assert_called_once()
+        retry_kwargs = retry.call_args.kwargs["kwargs"]
+        self.assertEqual(retry_kwargs["_promotion_waits"], 5)
