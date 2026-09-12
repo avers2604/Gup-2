@@ -35,7 +35,7 @@ class RelationDeleteStaleViewTests(TestCase):
         )
 
         with patch(
-            "apps.documents.views.services.remove_relation",
+            "apps.documents.relation_views.services.remove_relation",
             return_value=False,
         ):
             response = self.client_.post(url, follow=True)
