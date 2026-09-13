@@ -281,6 +281,8 @@ UPLOAD_MAX_BYTES = int(os.environ.get("UPLOAD_MAX_BYTES", str(150 * 1024 * 1024)
 OCR_MAX_BYTES = UPLOAD_MAX_BYTES
 OCR_PROCESS_TIMEOUT = int(os.environ.get("OCR_PROCESS_TIMEOUT", "60"))
 OCR_MAX_DIMENSION = int(os.environ.get("OCR_MAX_DIMENSION", "3000"))
+VERAPDF_EXECUTABLE = os.environ.get("VERAPDF_EXECUTABLE", "verapdf")
+VERAPDF_TIMEOUT_SECONDS = int(os.environ.get("VERAPDF_TIMEOUT_SECONDS", "60"))
 
 CELERY_BEAT_SCHEDULE["dispatch-task-outbox"] = {
     "task": "apps.core.tasks.dispatch_task_outbox", "schedule": 10.0,

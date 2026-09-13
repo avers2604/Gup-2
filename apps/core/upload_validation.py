@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import logging
 import os
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from xml.etree.ElementTree import ParseError
@@ -135,6 +136,58 @@ def validate_pdf(field_file) -> None:
     """Validate an uploaded ordinary PDF structurally through Poppler."""
     with _temporary_upload_path(field_file) as path:
         _validate_pdf_path(path)
+
+
+def validate_pdfa_2b(field_file) -> None:
+    """Validate an uploaded PDF structurally and for PDF/A-2b conformance."""
+    with _temporary_upload_path(field_file) as path:
+        _validate_pdf_path(path)
+        command = [
+            settings.VERAPDF_EXECUTABLE,
+            "--format",
+            "text",
+            "--maxfailures",
+            "1",
+            "--maxfailuresdisplayed",
+            "1",
+            "--loglevel",
+            "1",
+            "-f",
+            "2b",
+            path,
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=settings.VERAPDF_TIMEOUT_SECONDS,
+                shell=False,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            logger.exception("PDF/A validator unavailable")
+            raise FormatValidatorUnavailable(
+                "Проверка PDF/A временно недоступна; файл не сохранён."
+            ) from exc
+
+        if completed.returncode == 0:
+            return
+        if completed.returncode == 1:
+            raise PDFAValidationFailed(
+                "PDF не соответствует обязательному профилю PDF/A-2b."
+            )
+
+        logger.error(
+            "veraPDF failed unexpectedly: returncode=%s stdout=%r stderr=%r",
+            completed.returncode,
+            completed.stdout,
+            completed.stderr,
+        )
+        raise FormatValidatorUnavailable(
+            "Проверка PDF/A временно недоступна; файл не сохранён."
+        )
 
 
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
