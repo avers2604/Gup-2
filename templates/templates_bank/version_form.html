@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Новая версия {{ family.name }} · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">
+ <div class="stack">
+  <p class="eyebrow">
     <a href="{% url 'templates_bank:family_list' %}">Банк бланков</a> ·
     <a href="{% url 'templates_bank:family_detail' family.pk %}">{{ family.name }}</a>
   </p>
@@ -15,7 +16,7 @@
     <p class="caption">Это первая версия семейства форм.</p>
   {% endif %}
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <form method="post" enctype="multipart/form-data" novalidate>
       {% csrf_token %}
       {% if form.non_field_errors %}
@@ -27,11 +28,12 @@
         Оба файла уходят в WORM-хранилище с Governance-блокировкой и
         проверяются антивирусом и на встроенные макросы до записи.
       </p>
-      {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
-      <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4);">
+      {% for field in form %}{% include "ui/field.html" %}{% endfor %}
+      <div class="row row--tight">
         <button class="btn btn--primary" type="submit">Выпустить версию</button>
         <a class="btn btn--ghost" href="{% url 'templates_bank:family_detail' family.pk %}">Отмена</a>
       </div>
     </form>
   </div>
+ </div>
 {% endblock %}

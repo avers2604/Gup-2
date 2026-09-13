@@ -10,7 +10,8 @@
   </nav>
 {% endblock %}
 {% block content %}
-  <p class="label">
+ <div class="stack">
+  <p class="eyebrow">
     <a href="{% url 'documents:list' %}">Реестр НРД</a> ·
     <a href="{% url 'documents:detail' document.pk %}">{{ document.reg_number }}</a>
   </p>
@@ -22,7 +23,7 @@
     принята не будет.
   </p>
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <form method="post" novalidate>
       {% csrf_token %}
       {% if form.non_field_errors %}
@@ -30,11 +31,12 @@
           {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
         </div>
       {% endif %}
-      {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
-      <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4);">
+      {% for field in form %}{% include "ui/field.html" %}{% endfor %}
+      <div class="row row--tight">
         <button class="btn btn--primary" type="submit">Добавить связь</button>
         <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Отмена</a>
       </div>
     </form>
   </div>
+ </div>
 {% endblock %}

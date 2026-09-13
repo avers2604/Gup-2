@@ -8,13 +8,32 @@
   {% load navigation %}
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/layout.css' %}">
   <link rel="stylesheet" href="{% static 'css/components.css' %}">
   {# Web GUI — Django Templates + HTMX + Alpine.js (решение Заказчика): #}
   {# HTMX — частичные обновления без полной перезагрузки (2FA enroll и #}
   {# похожие формы), Alpine.js — мелкая клиентская интерактивность без #}
   {# отдельного SPA-фронтенда. #}
+  <script>
+    // Выполняется до первой отрисовки и до загрузки остальных скриптов:
+    // тема должна быть применена ДО того, как браузер нарисует страницу,
+    // иначе при тёмной теме видна светлая вспышка. Поэтому код встроен
+    // сюда, а не лежит в theme.js — внешний файл грузится асинхронно от
+    // отрисовки, и гарантии порядка нет.
+    (function () {
+      try {
+        var theme = window.localStorage.getItem("bz-get-theme");
+        if (theme === "light" || theme === "dark") {
+          document.documentElement.setAttribute("data-theme", theme);
+        }
+      } catch (error) {
+        // Хранилище недоступно — остаётся системная настройка.
+      }
+    })();
+  </script>
   <script src="{% static 'vendor/htmx-1.9.12.min.js' %}"></script>
   <script src="{% static 'vendor/alpine-3.14.1.min.js' %}" defer></script>
+  <script src="{% static 'js/theme.js' %}" defer></script>
   <script>
     // hx-post/hx-get элементы вне <form> (например, кнопка "Начать
     // подключение" на странице 2FA) не несут csrf-токен сами по
@@ -55,6 +74,14 @@
           <a href="{% url 'audit:list' %}"{% nav_active 'audit:*' %}>Журнал аудита</a>
         {% endif %}
         <a href="/admin/">Администрирование</a>
+        {% comment %}
+          Кнопка, а не ссылка: переключение темы ничего не открывает и
+          никуда не ведёт. Подпись живёт в aria-label, потому что видимый
+          текст здесь — пиктограмма: она короче и не ломает перенос
+          навигации, но сама по себе для скринридера ничего не значит.
+        {% endcomment %}
+        <button id="theme-toggle" class="theme-toggle" type="button"
+                aria-label="Тема оформления">◐</button>
         {% if user.is_authenticated %}
           {% comment %}
             п.8.2 решения Заказчика: имя и роль в шапке ведут в личный
@@ -63,7 +90,7 @@
             не потребуется.
           {% endcomment %}
           <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
-          <form method="post" action="{% url 'iam:logout' %}" style="display:inline;">
+          <form method="post" action="{% url 'iam:logout' %}">
             {% csrf_token %}
             <button class="btn btn--ghost" type="submit">Выйти</button>
           </form>
@@ -73,7 +100,7 @@
       </nav>
     </div>
   </header>
-  <main id="content" class="container" style="padding-top: var(--space-8); padding-bottom: var(--space-10);">
+  <main id="content" class="container page-main">
     {% block breadcrumbs %}{% endblock %}
     {% if messages %}
       {% for message in messages %}
