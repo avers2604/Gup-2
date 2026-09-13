@@ -316,7 +316,7 @@ class PDFAValidationTests(SimpleTestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[0], settings.VERAPDF_EXECUTABLE)
         self.assertEqual(
-            command[1:10],
+            command[1:11],
             [
                 "--format",
                 "text",
