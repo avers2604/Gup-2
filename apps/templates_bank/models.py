@@ -1,9 +1,10 @@
 import uuid
+from pathlib import Path
 
 from django.core.validators import FileExtensionValidator
 from django.db import models, transaction
 
-from apps.core import antivirus, macro_check
+from apps.core import antivirus, macro_check, upload_validation
 from apps.core.models import TimeStampedModel
 from apps.core.storage import originals_storage
 from apps.documents.models import NormativeDocument
@@ -118,13 +119,19 @@ class Template(TimeStampedModel):
         return f"{self.family.name} {self.version}"
 
     def save(self, *args, **kwargs):
-        # Антивирус + структурная проверка на макросы (ТЗ 4.7,
-        # apps/core/antivirus.py, macro_check.py) — до super().save(), тот
-        # же принцип, что и у NormativeDocument.save(): заражённый файл
-        # или файл с макросами не должен попасть в WORM-бакет originals.
+        # Новые файлы проверяются полностью до super().save(): ни неверный
+        # формат, ни заражённый/макросный файл не должны попасть в staging
+        # или WORM originals. Existing stored names needs_scan() пропускает.
         for field_name in ("file_editable", "file_sample"):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
+                upload_validation.validate_upload_size(field_file)
+                if field_name == "file_editable":
+                    expected_kind = Path(field_file.name).suffix.lower().lstrip(".")
+                    upload_validation.validate_ooxml(field_file, expected_kind)
+                else:
+                    upload_validation.validate_pdf(field_file)
+
                 # Ярлык для журнала: object_id теперь UUID, а
                 # отклонённая загрузка может вообще не оставить строки.
                 # family может быть ещё не проставлен, если объект
@@ -135,10 +142,11 @@ class Template(TimeStampedModel):
                     field_file, object_type="Template",
                     object_id=str(self.pk), object_label=label,
                 )
-                macro_check.reject_if_has_macros(
-                    field_file, object_type="Template",
-                    object_id=str(self.pk), object_label=label,
-                )
+                if field_name == "file_editable":
+                    macro_check.reject_if_has_macros(
+                        field_file, object_type="Template",
+                        object_id=str(self.pk), object_label=label,
+                    )
 
         with transaction.atomic():
             # Усиление аудита (решение Заказчика: «фиксировать все

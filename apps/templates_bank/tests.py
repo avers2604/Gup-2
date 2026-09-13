@@ -1,5 +1,4 @@
-import io
-import zipfile
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -9,6 +8,7 @@ from apps.core.antivirus import MalwareDetected
 from apps.core.macro_check import MacrosDetected
 from apps.core.storage import originals_storage
 from apps.core.tests.clamd_fixture import EICAR_BYTES, ClamdTestCase
+from apps.core.tests.upload_fixtures import docx_bytes
 from apps.documents.retention import RetentionMode
 from apps.documents.tests.factories import make_document
 
@@ -16,13 +16,8 @@ from .models import Template, TemplateFamily
 
 
 def _docx_bytes(with_macro: bool) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("[Content_Types].xml", "<Types/>")
-        zf.writestr("word/document.xml", "<document/>")
-        if with_macro:
-            zf.writestr("word/vbaProject.bin", b"fake vba bytecode")
-    return buf.getvalue()
+    extra = (("word/vbaProject.bin", b"fake vba bytecode"),) if with_macro else ()
+    return docx_bytes(extra=extra)
 
 
 def _make_template(status=Template.Status.ACTIVE, version="v1.0", **kwargs):
@@ -112,20 +107,26 @@ class TemplateAntivirusTests(ClamdTestCase):
     def test_clean_files_upload_succeeds(self):
         editable = SimpleUploadedFile("form.docx", b"clean editable content")
         sample = SimpleUploadedFile("form.pdf", b"%PDF-1.4 clean sample")
-        template = _make_template(file_editable=editable, file_sample=sample)
+        with (
+            patch("apps.templates_bank.models.upload_validation.validate_ooxml"),
+            patch("apps.templates_bank.models.upload_validation.validate_pdf"),
+        ):
+            template = _make_template(file_editable=editable, file_sample=sample)
         template.refresh_from_db()
         self.assertTrue(template.file_editable.name)
 
     def test_eicar_in_file_editable_blocks_save(self):
         infected = SimpleUploadedFile("form.docx", EICAR_BYTES)
-        with self.assertRaises(MalwareDetected):
-            _make_template(version="v-av-1", file_editable=infected)
+        with patch("apps.templates_bank.models.upload_validation.validate_ooxml"):
+            with self.assertRaises(MalwareDetected):
+                _make_template(version="v-av-1", file_editable=infected)
         self.assertFalse(Template.objects.filter(version="v-av-1").exists())
 
     def test_eicar_in_file_sample_writes_audit_entry(self):
         infected = SimpleUploadedFile("form.pdf", EICAR_BYTES)
-        with self.assertRaises(MalwareDetected):
-            _make_template(version="v-av-2", file_sample=infected)
+        with patch("apps.templates_bank.models.upload_validation.validate_pdf"):
+            with self.assertRaises(MalwareDetected):
+                _make_template(version="v-av-2", file_sample=infected)
         entries = AuditLog.objects.filter(event_type=AuditLog.EventType.UPLOAD_MALWARE_DETECTED)
         self.assertEqual(entries.count(), 1)
         self.assertEqual(entries.first().details["field"], "file_sample")

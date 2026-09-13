@@ -31,3 +31,9 @@ class ProductionSettingsTests(SimpleTestCase):
                                         capture_output=True, text=True, timeout=30)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("TOTP", result.stderr)
+
+    def test_upload_and_ocr_limits_match(self):
+        from django.conf import settings
+
+        self.assertEqual(settings.UPLOAD_MAX_BYTES, 150 * 1024 * 1024)
+        self.assertEqual(settings.OCR_MAX_BYTES, settings.UPLOAD_MAX_BYTES)
