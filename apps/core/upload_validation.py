@@ -86,7 +86,7 @@ def validate_upload_size(field_file) -> None:
 
 
 @contextmanager
-def _temporary_upload_path(field_file):
+def _temporary_upload_path(field_file, *, suffix=".bin"):
     """Materialize an upload in bounded chunks and always remove the temp file."""
     source = _source_file(field_file)
     path = None
@@ -94,7 +94,7 @@ def _temporary_upload_path(field_file):
     try:
         source.seek(0)
         with tempfile.NamedTemporaryFile(
-            prefix="bz-get-upload-", suffix=".bin", delete=False
+            prefix="bz-get-upload-", suffix=suffix, delete=False
         ) as temporary:
             path = temporary.name
             shutil.copyfileobj(source, temporary, length=1024 * 1024)
@@ -134,13 +134,13 @@ def _validate_pdf_path(path: str) -> None:
 
 def validate_pdf(field_file) -> None:
     """Validate an uploaded ordinary PDF structurally through Poppler."""
-    with _temporary_upload_path(field_file) as path:
+    with _temporary_upload_path(field_file, suffix=".pdf") as path:
         _validate_pdf_path(path)
 
 
 def validate_pdfa_2b(field_file) -> None:
     """Validate an uploaded PDF structurally and for PDF/A-2b conformance."""
-    with _temporary_upload_path(field_file) as path:
+    with _temporary_upload_path(field_file, suffix=".pdf") as path:
         _validate_pdf_path(path)
         command = [
             settings.VERAPDF_EXECUTABLE,
