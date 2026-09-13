@@ -16,7 +16,7 @@
   </div>
 
   <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
-    <a class="btn btn--secondary" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
+    <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
     {% if document.files_original %}
       <a class="btn btn--ghost" href="{% url 'documents:file-link' document.pk 'original' %}"
          target="_blank" rel="noopener">Скан базового документа</a>

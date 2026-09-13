@@ -44,6 +44,13 @@
   color: var(--text-on-red);
 }
 
+/* Вторичные действия и пагинация используют .btn--ghost. Шестого варианта
+   кнопки в системе нет: DESIGN.md задаёт ровно пять ролей (accent, primary,
+   ghost, danger — плюс отсутствие модификатора), и «secondary» среди них
+   нет. Шаблоны какое-то время ссылались на несуществующий .btn--secondary,
+   из-за чего вся пагинация рисовалась без фона и рамки; регрессия закрыта
+   тестом apps/core/tests/test_template_styles.py. */
+
 /* ---------- Поля ввода ---------- */
 .field-label {
   display: block;
@@ -128,6 +135,29 @@
 .status-pill--amended { background: var(--color-yellow); color: var(--text-on-yellow); }
 .status-pill--revoked { background: var(--color-red); color: var(--text-on-red); }
 .status-pill--draft, .status-pill--archived { background: var(--color-mint); color: var(--text-on-mint); }
+/* «Аннулирован» — НЕ синоним «Утратил силу» (решение Заказчика, см.
+   apps/documents/transitions.py): утративший силу документ действовал и
+   перестал, аннулированный не считается действовавшим вовсе. Пока обе
+   плашки были красными, юридически разные состояния выглядели одинаково.
+   Серый — «нейтраль» из таблицы DESIGN.md: публикация не состоялась. */
+.status-pill--annulled { background: var(--color-grey); color: var(--text-on-grey); }
+
+/* ---------- Гриф доступа ----------
+   Гриф — не статус документа, а свойство доступа к нему, поэтому и выглядит
+   иначе по типу, а не только по цвету. Раньше ДСП помечался
+   .status-pill--revoked, и действующий документ с грифом читался как
+   отменённый: красный нёс два несовместимых смысла сразу. */
+.access-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12.5px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-field);
+  background: var(--color-navy);
+  color: var(--text-on-navy);
+}
 
 /* ---------- Шапка приложения ---------- */
 .app-header {
@@ -187,4 +217,21 @@
 select[multiple].field {
   padding: var(--space-2);
   min-height: 132px;
+}
+
+/* ---------- Служебное ----------
+   Текст только для скринридера: расшифровка сокращения, пояснение к
+   пиктограмме. Нужен потому, что атрибут title недоступен с клавиатуры и
+   не читается частью скринридеров — на него нельзя опираться как на
+   единственный носитель смысла. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }

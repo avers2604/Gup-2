@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load status_pills %}
 {% block title %}Статус {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
   <p class="label">
@@ -8,11 +9,7 @@
   <h1 class="title">Смена статуса</h1>
   <p>
     {{ document.title }} — текущий статус:
-    <span class="status-pill
-      {% if document.status == 'active' %}status-pill--active
-      {% elif document.status == 'active_amended' %}status-pill--amended
-      {% elif document.status == 'revoked' or document.status == 'annulled' %}status-pill--revoked
-      {% else %}status-pill--draft{% endif %}">{{ document.get_status_display }}</span>
+    <span class="status-pill {{ document.status|status_pill }}">{{ document.get_status_display }}</span>
   </p>
 
   <div class="card" style="margin-top: var(--space-6);">

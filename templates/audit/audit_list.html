@@ -25,7 +25,7 @@
         <button class="btn btn--primary" type="submit">Применить</button>
         <a class="btn btn--ghost" href="{% url 'audit:list' %}">Сбросить</a>
         {# Выгружается тот же срез, что показан на экране, — те же параметры фильтра. #}
-        <a class="btn btn--secondary"
+        <a class="btn btn--ghost"
            href="{% url 'audit:export' %}{% if query_string %}?{{ query_string }}{% endif %}">
           Выгрузить CSV
         </a>
@@ -93,11 +93,11 @@
       {% if page_obj.paginator.num_pages > 1 %}
         <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
           {% if page_obj.has_previous %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
           <span class="caption">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
           {% if page_obj.has_next %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
           {% endif %}
         </nav>
       {% endif %}

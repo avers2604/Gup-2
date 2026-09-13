@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load status_pills %}
 {% block title %}Реестр НРД · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
   <p class="label">Нормативно-распорядительная документация</p>
@@ -12,9 +13,7 @@
   <div class="card" style="margin-top: var(--space-6);">
     <form method="get" novalidate>
       {% if form.non_field_errors %}
-        <p class="caption" style="color: var(--color-red); margin-bottom: var(--space-4);">
-          {{ form.non_field_errors.0 }}
-        </p>
+        <p class="field-error" style="margin-bottom: var(--space-4);">{{ form.non_field_errors.0 }}</p>
       {% endif %}
       <div style="display:flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;">
         <div>
@@ -71,16 +70,12 @@
                 <td>
                   {{ doc.title }}
                   {% if doc.access_level == 'restricted' %}
-                    <span class="status-pill status-pill--revoked" title="Для служебного пользования">ДСП</span>
+                    <span class="access-pill">ДСП<span class="sr-only"> — для служебного пользования</span></span>
                   {% endif %}
                 </td>
                 <td>{{ doc.get_doc_type_display }}</td>
                 <td>
-                  <span class="status-pill
-                    {% if doc.status == 'active' %}status-pill--active
-                    {% elif doc.status == 'active_amended' %}status-pill--amended
-                    {% elif doc.status == 'revoked' or doc.status == 'annulled' %}status-pill--revoked
-                    {% else %}status-pill--draft{% endif %}">
+                  <span class="status-pill {{ doc.status|status_pill }}">
                     {{ doc.get_status_display }}
                   </span>
                 </td>
@@ -95,19 +90,19 @@
       {% if page_obj.paginator.num_pages > 1 %}
         <nav style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); align-items: center;">
           {% if page_obj.has_previous %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
 
           {% for num in page_obj.paginator.page_range %}
             {% if num == page_obj.number %}
               <span class="btn btn--primary" aria-current="page">{{ num }}</span>
             {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-              <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
+              <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
             {% endif %}
           {% endfor %}
 
           {% if page_obj.has_next %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
           {% endif %}
         </nav>
       {% endif %}
