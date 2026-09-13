@@ -11,7 +11,7 @@ URL. Префикс здесь не работает: «Документы», «
 правило этого не угадает.
 """
 from django import template
-from django.utils.safestring import mark_safe
+from django.utils.html import format_html
 
 register = template.Library()
 
@@ -44,9 +44,11 @@ def nav_active(context, *routes) -> str:
     namespace = current.split(":")[0]
     for route in routes:
         if route == current or (route.endswith(":*") and route[:-1] == f"{namespace}:"):
-            # mark_safe на КОНСТАНТЕ: тег возвращает атрибуты, а simple_tag
-            # по умолчанию экранирует результат, превращая кавычки в &quot;
-            # — разметка оставалась валидной, но атрибуты не применялись.
-            # Пользовательских данных в строке нет, подставлять нечего.
-            return mark_safe(' class="is-active" aria-current="page"')  # noqa: S308
+            # Тег возвращает атрибуты, а simple_tag по умолчанию экранирует
+            # результат, превращая кавычки в &quot; — разметка оставалась
+            # валидной, но атрибуты не применялись. format_html, а не
+            # mark_safe: подставлять сюда нечего, зато format_html не
+            # открывает дверь для этого в будущем и не требует исключения
+            # в bandit.
+            return format_html(' class="is-active" aria-current="page"')
     return ""

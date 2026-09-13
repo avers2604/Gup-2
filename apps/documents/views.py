@@ -21,6 +21,8 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views import View
 
+from apps.core.sorting import Column, header_links, resolve
+
 from . import consolidated, permissions, services, transitions
 from .forms import (
     DocumentFilterForm,
@@ -37,18 +39,43 @@ from .models import DocumentRelation, DocumentStatusHistory
 PAGE_SIZE = 20
 
 
+#: Колонки реестра, по которым разрешено сортировать. Вторым полем всюду
+#: идёт reg_number: без устойчивого «добивающего» поля строки с одинаковой
+#: датой или одинаковым видом меняются местами между запросами, и при
+#: пагинации документ может пропасть со страницы 2, попав обратно на 1.
+SORTABLE_COLUMNS = {
+    "reg_number": Column("reg_number", "Рег. номер", ("reg_number",)),
+    "title": Column("title", "Наименование", ("title", "reg_number")),
+    "doc_type": Column("doc_type", "Вид", ("doc_type", "reg_number")),
+    "status": Column("status", "Статус", ("status", "reg_number")),
+    "issuer_dept": Column("issuer_dept", "Издавшее подразделение", ("issuer_dept__name", "reg_number")),
+    "effective_date": Column("effective_date", "Вступил в силу", ("effective_date", "reg_number")),
+}
+
+#: Порядок по умолчанию — как было до появления сортировки: свежие сверху.
+#: Поле reg_date намеренно НЕ заведено колонкой: в таблице его нет (показана
+#: дата вступления в силу), а заголовок для невидимой колонки рисовать
+#: некуда. Пока пользователь не выбрал порядок сам, ни один заголовок не
+#: помечается активным.
+DEFAULT_ORDER = ("-reg_date", "reg_number")
+
+
 class DocumentListView(LoginRequiredMixin, View):
-    """Реестр НРД с фильтрами. Документы «ДСП» не попадают в выборку без
-    допуска — фильтрация в permissions.visible_documents(), не здесь."""
+    """Реестр НРД с фильтрами и сортировкой. Документы «ДСП» не попадают в
+    выборку без допуска — фильтрация в permissions.visible_documents(), не
+    здесь."""
 
     template_name = "documents/document_list.html"
 
     def get(self, request):
         form = DocumentFilterForm(request.GET or None)
+        sort_key, descending, order_by = resolve(
+            SORTABLE_COLUMNS, request.GET.get("sort"), DEFAULT_ORDER,
+        )
         queryset = (
             permissions.visible_documents(request.user)
             .select_related("issuer_dept")
-            .order_by("-reg_date", "reg_number")
+            .order_by(*order_by)
         )
 
         if form.is_valid():
@@ -71,6 +98,10 @@ class DocumentListView(LoginRequiredMixin, View):
         # сбрасывала фильтры (тот же приём, что в Smart Search).
         query_params = request.GET.copy()
         query_params.pop("page", None)
+        # Ссылки заголовков несут фильтры, но не старую сортировку: иначе
+        # в адресе накапливались бы два параметра sort подряд.
+        sort_params = query_params.copy()
+        sort_params.pop("sort", None)
 
         return render(request, self.template_name, {
             "form": form,
@@ -78,6 +109,10 @@ class DocumentListView(LoginRequiredMixin, View):
             "paginator": paginator,
             "results": page_obj.object_list,
             "query_string": query_params.urlencode(),
+            "columns": header_links(
+                SORTABLE_COLUMNS, sort_key, descending, sort_params.urlencode(),
+            ),
+            "applied_filters": _applied_filters(form),
             "can_edit": permissions.can_edit_document(request.user),
         })
 
@@ -542,3 +577,43 @@ class ConsolidatedDetailView(LoginRequiredMixin, View):
                 for amendment in amendments
             ],
         })
+
+
+def _applied_filters(form):
+    """Человекочитаемый список применённых фильтров.
+
+    Нужен потому, что пустой результат с неочевидной причиной выглядит как
+    «в системе ничего нет». Фильтры лежат в свёрнутой форме выше и в
+    адресной строке — ни то, ни другое не бросается в глаза, когда таблица
+    пуста.
+    """
+    if not form.is_bound or not form.is_valid():
+        return []
+
+    applied = []
+    for name, value in form.cleaned_data.items():
+        if value in (None, "", []):
+            continue
+        field = form.fields[name]
+        applied.append({"label": field.label, "value": _filter_value_label(field, value)})
+    return applied
+
+
+def _filter_value_label(field, value) -> str:
+    """Подпись значения фильтра так, как её видел пользователь в форме.
+
+    Для выпадающего списка это подпись варианта, а не хранимое значение:
+    «order» в плашке не говорит ничего. Для подразделения выбранное
+    значение — объект модели, и его в списке вариантов по значению не
+    найти, поэтому берётся его же строковое представление. Для даты —
+    привычный д.м.Г, а не ISO.
+    """
+    import datetime
+
+    if isinstance(value, datetime.date):
+        return value.strftime("%d.%m.%Y")
+
+    for choice_value, choice_label in getattr(field, "choices", None) or ():
+        if choice_value == value:
+            return str(choice_label)
+    return str(value)

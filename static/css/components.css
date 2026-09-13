@@ -106,6 +106,55 @@
   color: var(--text-muted);
 }
 
+/* Заголовок-сортировка. Направление несёт и стрелка, и aria-sort на самой
+   ячейке: стрелка — зрительный признак, aria-sort — то же самое для
+   скринридера (см. apps/core/sorting.py). */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: inherit;
+  text-decoration: none;
+  font: inherit;
+}
+.th-sort:hover { color: var(--text); text-decoration: underline; }
+.th-sort.is-active { color: var(--text); }
+
+/* ---------- Применённые фильтры ----------
+   Фильтры живут в свёрнутой форме выше и в адресной строке — ни то, ни
+   другое не бросается в глаза, когда таблица пуста, и пустой результат
+   читается как «в системе ничего нет». */
+.filter-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin-top: var(--space-4);
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+/* ---------- Пустое состояние ----------
+   Занимает место таблицы, которой нет, и обязано отвечать на два вопроса:
+   почему пусто и что сделать дальше. Строчка «Документы не найдены» серым
+   кеглем 12.5 не отвечала ни на один. */
+.empty-state {
+  text-align: center;
+  padding: var(--space-10) var(--space-6);
+}
+.empty-state .caption {
+  max-width: 52ch;
+  margin: var(--space-2) auto 0;
+}
+
 /* ---------- Прогресс ---------- */
 .progress {
   height: 8px;
