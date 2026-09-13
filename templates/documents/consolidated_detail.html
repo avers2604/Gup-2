@@ -13,6 +13,7 @@
   <header class="page-header stack">
     <p class="eyebrow">Сводная редакция</p>
     <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
+    {% include "ui/access_pill.html" %}
     <p class="caption">
     {{ document.get_doc_type_display }} · {{ document.issuer_dept.name }} ·
     вступил в силу {{ document.effective_date|date:"d.m.Y" }} ·
@@ -54,7 +55,7 @@
               <tr>
                 <td class="data">{{ row.document.effective_date|date:"d.m.Y" }}</td>
                 <td>{{ row.document.reg_number }}</td>
-                <td>{{ row.document.title }}</td>
+                <td>{{ row.document.title }} {% include "ui/access_pill.html" with document=row.document %}</td>
                 <td>{{ row.note|default:"не указаны" }}</td>
                 <td>
                   <a href="{% url 'documents:detail' row.document.pk %}">Карточка</a>
@@ -65,7 +66,7 @@
         </table>
       </div>
     {% else %}
-      <p class="caption">
+      <p class="caption measure">
         Действующих изменений нет. Документ действует в исходной редакции —
         либо изменения к нему вам недоступны по грифу.
       </p>

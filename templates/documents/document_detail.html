@@ -20,9 +20,7 @@
     <span class="status-pill {{ document.status|status_pill }}">
       {{ document.get_status_display }}
     </span>
-    {% if document.access_level == 'restricted' %}
-      <span class="access-pill">ДСП<span class="sr-only"> — для служебного пользования</span></span>
-    {% endif %}
+    {% include "ui/access_pill.html" %}
     {% if document.ocr_status == 'needs_review' %}
       <span class="status-pill status-pill--draft" title="Распознавание ниже порога качества">OCR: требует верификации</span>
     {% endif %}
@@ -147,7 +145,7 @@
       <div class="table-scroll"><table class="table"><thead><tr><th>Время</th><th>Событие</th><th>Кто</th><th>Основание</th></tr></thead><tbody>
         {% for entry in activity %}<tr><td class="data">{{ entry.created_at|date:"d.m.Y H:i" }}</td><td>{{ entry.get_event_type_display }}</td><td>{% if entry.actor %}{{ entry.actor.full_name }}{% elif entry.actor_personnel_number %}таб. {{ entry.actor_personnel_number }}{% else %}—{% endif %}</td><td>{{ entry.details.comment|default:"—" }}</td></tr>{% endfor %}
       </tbody></table></div>
-      <p class="caption">Записи журнала аудита по этому документу. Журнал неизменяем: ни исправить, ни удалить запись нельзя ни из одного контура системы.</p>
+      <p class="caption measure">Записи журнала аудита по этому документу. Журнал неизменяем: ни исправить, ни удалить запись нельзя ни из одного контура системы.</p>
     {% else %}<p class="caption">Действий по документу пока не зафиксировано.</p>{% endif %}
   </div>
 
@@ -158,7 +156,7 @@
         {% if can_edit %}<a class="btn btn--primary" href="{% url 'documents:edit' document.pk %}">Править черновик</a>{% endif %}
         {% if can_change_status %}<a class="btn btn--accent" href="{% url 'documents:status' document.pk %}">Изменить статус</a>{% endif %}
       </div>
-      {% if can_change_status and not can_edit and document.status != 'draft' %}<p class="caption">Правка недоступна: документ уже имеет силу и изменяется новой редакцией со связью версионности (ТЗ 4.2.2), а не на месте.</p>{% endif %}
+      {% if can_change_status and not can_edit and document.status != 'draft' %}<p class="caption measure">Правка недоступна: документ уже имеет силу и изменяется новой редакцией со связью версионности (ТЗ 4.2.2), а не на месте.</p>{% endif %}
     </div>
   {% endif %}
 {% endblock %}

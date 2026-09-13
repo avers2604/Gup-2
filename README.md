@@ -189,6 +189,12 @@ OCR-конвейер работает асинхронно через Celery + R
 
 `/health/` выполняет минимальный `SELECT 1` через настроенный DB endpoint, не кэшируется и не раскрывает детали инфраструктурной ошибки.
 
+Оформление собрано из четырёх слоёв CSS (`tokens` → `base` → `layout` →
+`components`), порядок подключения значим. Тема переключается кнопкой в
+шапке: системная → светлая → тёмная; выбор хранится в `localStorage` и
+применяется до первой отрисовки, без мигания. Сборки фронтенда нет —
+ни npm, ни бандлера: CSS и единственный скрипт отдаются как есть.
+
 ## Архитектура
 
 ### Приложение
@@ -317,8 +323,9 @@ apps/iam/             пользователи, auth/TOTP, импорт перс
 apps/search_ocr/      тезаурус, Smart Search, persisted search read-model
 apps/templates_bank/  банк бланков
 config/               Django/Celery/settings/urls
-static/               CSS и дизайн-токены
-templates/            Django templates
+static/css/           четыре слоя: tokens → base → layout → components
+static/js/            переключатель темы (без сборки и без зависимостей)
+templates/            Django templates; templates/ui/ — общие фрагменты
 deploy/ha/            Patroni/etcd/PgBouncer/HAProxy
 deploy/dr/            pgBackRest, PITR, rebuild и DR runbooks
 deploy/minio/dr/      MinIO active-passive DR
@@ -422,7 +429,8 @@ python manage.py personnel_import_status <task-id>
 ## Документация
 
 - [`STACK.md`](STACK.md) — версии, платформа развёртывания и подробные архитектурные решения;
-- [`DESIGN.md`](DESIGN.md) — дизайн-система Web GUI;
+- [`DESIGN.md`](DESIGN.md) — дизайн-система Web GUI (палитра, роли, контраст);
+  как она устроена в вебе — в STACK.md, раздел «Слой оформления Web GUI»;
 - [`docs/STAGE4_STATUS.md`](docs/STAGE4_STATUS.md) — фактический статус HA/DR;
 - [`deploy/dr/README.md`](deploy/dr/README.md) — PostgreSQL backup/PITR/DR;
 - [`deploy/dr/REBUILD_AND_DRILL.md`](deploy/dr/REBUILD_AND_DRILL.md) — rebuild и combined drill;
