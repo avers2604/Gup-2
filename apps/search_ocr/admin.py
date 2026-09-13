@@ -33,6 +33,24 @@ class ThesaurusEntryAdmin(admin.ModelAdmin):
             request.user.Role.ADMINISTRATOR,
         }
 
+    def has_add_permission(self, request):
+        # Entries are imported by the validated thesaurus service. Manual
+        # inserts would create a second, unaudited source of truth.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        # Keep the change list/actions available to authorized verifiers, but
+        # direct field mutation is disabled by get_readonly_fields() below.
+        return super().has_change_permission(request, obj) and self._can_verify(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_readonly_fields(self, request, obj=None):
+        # Status may change only through the audited actions below; all other
+        # thesaurus content is supplied by the import service.
+        return tuple(field.name for field in self.model._meta.fields)
+
     def _apply_status(self, request, queryset, new_status, action_label):
         if not self._can_verify(request):
             self.message_user(request, "Недостаточно прав для верификации.", messages.ERROR)

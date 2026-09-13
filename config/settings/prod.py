@@ -67,8 +67,14 @@ STORAGES["default"] = STORAGES["working"]
 
 from cryptography.fernet import Fernet
 
-if SECRET_KEY == "insecure-dev-key" or len(SECRET_KEY) < 50:
-    raise ImproperlyConfigured("SECRET_KEY must be a strong production key (at least 50 characters)")
+_INSECURE_PRODUCTION_SECRET_KEYS = {
+    "insecure-dev-key",
+    "replace-with-a-random-production-secret-key-at-least-50-characters-long",
+}
+if SECRET_KEY in _INSECURE_PRODUCTION_SECRET_KEYS or len(SECRET_KEY) < 50:
+    raise ImproperlyConfigured(
+        "SECRET_KEY must be a strong non-example production key (at least 50 characters)"
+    )
 if TOTP_ENCRYPTION_KEY == "5DVKKoTK7rYGmxTDJA3ASa9mGzjWwgqNl2HXSaq6sOA=":
     raise ImproperlyConfigured("The development TOTP key must not be used in production")
 try:
