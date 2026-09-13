@@ -358,26 +358,6 @@ class DocumentRelationCreateView(_DocumentWriteMixin, View):
         return document
 
 
-class DocumentRelationDeleteView(_DocumentWriteMixin, View):
-    """Снять связь. Только POST: удаление по GET-ссылке сработало бы от
-    любого предзагрузчика ссылок в браузере или почтовом клиенте."""
-
-    def post(self, request, pk, relation_id):
-        document = self.get_document(request, pk)
-        if not permissions.can_manage_relations(request.user, document):
-            raise Http404
-        relation = get_object_or_404(
-            DocumentRelation, pk=relation_id, from_document=document
-        )
-        try:
-            services.remove_relation(actor=request.user, relation=relation)
-        except PermissionDenied as error:
-            messages.error(request, str(error))
-        else:
-            messages.success(request, "Связь версионности снята.")
-        return HttpResponseRedirect(reverse("documents:detail", args=[document.pk]))
-
-
 def _relation_error_message(error):
     """Читаемое сообщение вместо текста ограничения БД.
 
