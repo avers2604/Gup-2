@@ -1,0 +1,24 @@
+{% comment %}
+  Одно поле формы в дизайн-системе проекта: подпись, виджет, подсказка,
+  ошибки.
+
+  Живёт в templates/ui/, а не внутри приложения: им пользуются и НРД, и
+  банк бланков, и вход в систему — поле формы принадлежит дизайн-системе,
+  а не предметной области. Раньше партиал лежал в documents/, и половина
+  экранов (вход, смена пароля, вычитка, подтверждение фактора) собирала
+  поле руками, расходясь с ним на каждой правке — ровно то, ради чего он
+  и заведён.
+
+  Звёздочка обязательного поля скрыта от скринридера и продублирована
+  словами: «звёздочка» сама по себе ничего не сообщает, а required у
+  виджета озвучивается не везде.
+{% endcomment %}
+{% load forms %}
+<div class="field-row stack stack--snug{% if field.errors %} field-row--invalid{% endif %}">
+  <label class="field-label" for="{{ field.id_for_label }}">
+    {{ field.label }}{% if field.field.required %}<span class="field-required" aria-hidden="true"> *</span><span class="sr-only"> (обязательное поле)</span>{% endif %}
+  </label>
+  {% field_widget field %}
+  {% if field.help_text %}<p class="caption" id="{{ field.auto_id }}-help">{{ field.help_text }}</p>{% endif %}
+  {% for error in field.errors %}<p class="field-error" id="{{ field.auto_id }}-error">{{ error }}</p>{% endfor %}
+</div>

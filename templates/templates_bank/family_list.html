@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Банк бланков · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Унифицированные формы</p>
-  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
-    <h1 class="title">Банк бланков</h1>
-    {% if can_manage %}
-      <a class="btn btn--accent" href="{% url 'templates_bank:family_create' %}">Новое семейство форм</a>
-    {% endif %}
-  </div>
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Унифицированные формы</p>
+    <div class="row row--baseline">
+      <h1 class="title">Банк бланков</h1>
+      {% if can_manage %}
+        <a class="btn btn--accent" href="{% url 'templates_bank:family_create' %}">Новое семейство форм</a>
+      {% endif %}
+    </div>
+  </header>
 
-  <div class="card" style="margin-top: var(--space-6);">
-    <form method="get" novalidate style="display:flex; gap: var(--space-3); align-items: flex-end; flex-wrap: wrap;">
-      <div style="flex:1; min-width: 240px;">
+  <div class="card">
+    <form method="get" novalidate class="row row--end row--tight">
+      <div class="row__grow">
         <label class="field-label" for="q">Наименование формы</label>
         <input class="field" type="search" id="q" name="q" value="{{ query }}"
                placeholder="например, акт схода">
@@ -21,7 +24,7 @@
     </form>
   </div>
 
-  <div style="margin-top: var(--space-8);">
+  <div class="stack stack--tight">
     {% if families %}
       <div class="table-scroll">
         <table class="table">
@@ -66,7 +69,7 @@
       </div>
 
       {% if page_obj.paginator.num_pages > 1 %}
-        <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
+        <nav class="row row--tight" aria-label="Страницы банка бланков">
           {% if page_obj.has_previous %}
             <a class="btn btn--ghost" href="?q={{ query }}&page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
@@ -80,4 +83,5 @@
       <p class="caption">Семейства форм не найдены.</p>
     {% endif %}
   </div>
+ </div>
 {% endblock %}

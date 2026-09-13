@@ -24,6 +24,19 @@
 }
 .btn:hover { filter: brightness(0.94); }
 .btn:active { filter: brightness(0.88); }
+/* Недоступная кнопка. Стиля не было вовсе: отправленная форма выглядела
+   готовой к повторному нажатию, и различить «идёт отправка» от «можно
+   жать ещё раз» было нечем. Наведение и нажатие гасятся явно — без этого
+   :hover продолжает подсвечивать кнопку, которая ничего не сделает. */
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+  filter: none;
+}
+.btn:disabled:hover,
+.btn:disabled:active,
+.btn[aria-disabled="true"]:hover { filter: none; }
 
 .btn--accent {
   background: var(--color-accent-fill);
@@ -76,6 +89,32 @@
   outline-offset: 0;
 }
 
+/* Отвергнутое поле: рамка ПЛЮС aria-invalid на виджете и красный текст
+   ошибки под ним (apps/core/templatetags/forms.py). Одной рамки мало —
+   правило DESIGN.md запрещает делать цвет единственным носителем
+   смысла, а скринридер рамку не видит вовсе. */
+.field[aria-invalid="true"] {
+  border-color: var(--color-red);
+}
+.field[aria-invalid="true"]:focus {
+  outline-color: color-mix(in srgb, var(--color-red) 30%, transparent);
+}
+
+/* Недоступное и только для чтения. Курсор и приглушённый фон сообщают,
+   что поле не примет ввод, ДО того как пользователь попробует печатать. */
+.field:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.field[readonly] {
+  background: var(--surface-2);
+}
+
+/* Звёздочка обязательного поля. Дублируется словами в .sr-only: сама по
+   себе она ничего не сообщает тому, кто её не видит. */
+.field-required { color: var(--text-danger); }
+
 /* ---------- Карточка ---------- */
 .card {
   background: var(--surface);
@@ -85,25 +124,76 @@
   padding: var(--space-5);
 }
 
-/* ---------- Таблица (веб-эквивалент Treeview) ---------- */
-.table-scroll { overflow-x: auto; }
+/* ---------- Таблица (веб-эквивалент Treeview) ----------
+   Реестр и журнал показывают по 25–50 строк, и до сих пор у строки не
+   было ни одного состояния: при горизонтальном скролле (а min-width его
+   гарантирует на ноутбуке) глаз терял строку на полпути и читал реквизит
+   от соседнего документа. */
+.table-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  /* Тень у правого края, пока справа есть непоказанные колонки. Сама по
+     себе полоса прокрутки на трекпаде не видна, пока её не тронешь, и
+     «таблица обрезана» читается как «данных больше нет». Приём на
+     background-attachment: local — фон уезжает вместе с содержимым, и
+     тень гаснет сама, когда доскроллили до конца. Скрипт не нужен. */
+  background:
+    linear-gradient(to right, var(--surface), transparent) left center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface), transparent) right center / 24px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--shadow-scroll-edge), transparent) left center / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--shadow-scroll-edge), transparent) right center / 12px 100% no-repeat scroll;
+}
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  /* Таблица НЕ превращается в карточки на узком экране, и это решение.
+     Реестр читают построчно и сравнивают колонки между строками —
+     «карточка на строку» ломает именно это, а горизонтальный скролл
+     сохраняет. Зато скролл обязан быть заметен: тень у края
+     (.table-scroll) и подпись над таблицей делают его видимым. */
   min-width: 560px;
+}
+@media (max-width: 560px) {
+  /* Кегль и поля ужимаются, чтобы в видимую ширину попадало больше
+     колонок и скроллить приходилось реже. */
+  .table { font-size: 13px; }
+  .table th, .table td { padding: 8px 10px; }
 }
 .table th, .table td {
   text-align: left;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
 }
+/* Липкой шапки здесь НЕТ намеренно. Она отсчитывается от ближайшего
+   предка со скроллом, то есть от .table-scroll, а для этого контейнеру
+   нужна ограниченная высота — и тогда поверх страничной полосы
+   прокрутки появляется вторая, внутри таблицы. На выдаче по 25–50 строк
+   (везде пагинация) лекарство хуже болезни: шапка и так остаётся на
+   экране. Если появится экран с длинной непагинированной таблицей, к
+   нему заводится отдельный модификатор с высотой, а не общее правило. */
 .table thead th {
   background: var(--surface-2);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: .04em;
   color: var(--text-muted);
+}
+
+/* Подсветка строки под курсором. Не зебра: чередование окрашивает строки
+   постоянно и спорит со статус-плашками, ради которых цвет в этой
+   таблице и нужен. Подсветка появляется только там, где сейчас взгляд. */
+.table tbody tr:hover { background: var(--surface-2); }
+/* Клавиатура ведёт по ссылкам внутри строки, а не по строкам, поэтому
+   подсвечивается строка, внутри которой есть элемент в фокусе. */
+.table tbody tr:focus-within { background: var(--surface-2); }
+
+/* Плотный режим — для журнала аудита: там строк больше, а каждая короче,
+   и стандартная высота растягивает страницу без пользы. */
+.table--dense th, .table--dense td { padding: 6px 12px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .table tbody tr { transition: background-color .1s ease; }
 }
 
 /* Заголовок-сортировка. Направление несёт и стрелка, и aria-sort на самой
@@ -242,6 +332,29 @@
 }
 .app-header nav a:hover { opacity: 1; }
 
+/* Переключатель темы. Оформлен как пункт навигации, а не как кнопка
+   интерфейса: он живёт в шапке и не должен спорить с главным действием
+   экрана — правило DESIGN.md «акцент один на экран». */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: var(--radius-button);
+  color: var(--text-on-navy);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 10px;
+  opacity: .85;
+}
+.theme-toggle:hover { opacity: 1; }
+
+@media (max-width: 560px) {
+  /* Название системы и навигация — в колонку: в строку они всё равно
+     переносятся, но с рваным выравниванием. */
+  .app-header .container { flex-direction: column; align-items: flex-start; }
+  .app-header nav { gap: var(--space-3) var(--space-4); }
+}
+
 /* Текущий раздел. Подчёркивание, а не только яркость: разница в
    непрозрачности между .85 и 1 почти не видна, а форма видна всегда —
    в том числе при инверсии цветов и на плохом мониторе. Бирюза здесь
@@ -328,7 +441,7 @@
 /* Ошибки поля формы — рядом с полем, красным по тексту, а не только
    цветом рамки: рамка без подписи не читается скринридером. */
 .field-error {
-  color: var(--color-red);
+  color: var(--text-danger);
   font-size: 13px;
   margin-top: var(--space-1);
 }
