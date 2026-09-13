@@ -51,7 +51,7 @@ class Template(TimeStampedModel):
 
     class Status(models.TextChoices):
         ACTIVE = "active", "Активна"
-        SUPERSEDED = "superseded", "superseded"
+        SUPERSEDED = "superseded", "Заменена новой редакцией"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     family = models.ForeignKey(TemplateFamily, on_delete=models.PROTECT, related_name="templates")

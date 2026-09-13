@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}АИС «БЗ ГЭТ»{% endblock %}</title>
   {% load static %}
+  {% load navigation %}
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
   <link rel="stylesheet" href="{% static 'css/components.css' %}">
@@ -31,19 +32,27 @@
   {% block extra_head %}{% endblock %}
 </head>
 <body>
+  {% comment %}
+    Пропустить навигацию: первый элемент в порядке табуляции, видим только
+    при фокусе. Без него пользователь клавиатуры на каждой странице
+    прощёлкивает все пункты меню, прежде чем добраться до содержимого.
+    {# #} — однострочный комментарий Django: многострочный не вырезается и
+    уходит в разметку, что и поймал test_pages_contain_no_raw_template_comments.
+  {% endcomment %}
+  <a class="skip-link" href="#content">Перейти к содержимому</a>
   <header class="app-header">
     <div class="container">
       <strong>АИС «БЗ ГЭТ»</strong>
-      <nav>
-        <a href="{% url 'search_ocr:search' %}">Поиск</a>
-        <a href="{% url 'documents:list' %}">Документы</a>
-        <a href="{% url 'templates_bank:family_list' %}">Бланки</a>
-        <a href="{% url 'documents:consolidated_list' %}">Сводные редакции</a>
+      <nav aria-label="Основная навигация">
+        <a href="{% url 'search_ocr:search' %}"{% nav_active 'search_ocr:*' %}>Поиск</a>
+        <a href="{% url 'documents:list' %}"{% nav_active 'documents:list' 'documents:detail' 'documents:create' 'documents:edit' 'documents:status' 'documents:relation_create' 'documents:relation_delete' 'documents:file-link' %}>Документы</a>
+        <a href="{% url 'templates_bank:family_list' %}"{% nav_active 'templates_bank:*' %}>Бланки</a>
+        <a href="{% url 'documents:consolidated_list' %}"{% nav_active 'documents:consolidated_list' 'documents:consolidated_detail' %}>Сводные редакции</a>
         {% if can_review_ocr %}
-          <a href="{% url 'documents:ocr_review_queue' %}">Вычитка OCR</a>
+          <a href="{% url 'documents:ocr_review_queue' %}"{% nav_active 'documents:ocr_review_queue' 'documents:ocr_review' %}>Вычитка OCR</a>
         {% endif %}
         {% if can_view_audit_log %}
-          <a href="{% url 'audit:list' %}">Журнал аудита</a>
+          <a href="{% url 'audit:list' %}"{% nav_active 'audit:*' %}>Журнал аудита</a>
         {% endif %}
         <a href="/admin/">Администрирование</a>
         {% if user.is_authenticated %}
@@ -64,7 +73,8 @@
       </nav>
     </div>
   </header>
-  <main class="container" style="padding-top: var(--space-8); padding-bottom: var(--space-10);">
+  <main id="content" class="container" style="padding-top: var(--space-8); padding-bottom: var(--space-10);">
+    {% block breadcrumbs %}{% endblock %}
     {% if messages %}
       {% for message in messages %}
         <div class="notice notice--{{ message.tags|default:'info' }}" role="status">{{ message }}</div>

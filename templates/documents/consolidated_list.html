@@ -35,7 +35,7 @@
                 <td>{{ document.issuer_dept.name }}</td>
                 <td class="data">{{ document.amendment_count }}</td>
                 <td>
-                  <a class="btn btn--secondary"
+                  <a class="btn btn--ghost"
                      href="{% url 'documents:consolidated_detail' document.pk %}">Сводка</a>
                 </td>
               </tr>
@@ -47,10 +47,10 @@
       {% if page_obj.has_other_pages %}
         <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
           {% if page_obj.has_previous %}
-            <a class="btn btn--secondary" href="?page={{ page_obj.previous_page_number }}">Назад</a>
+            <a class="btn btn--ghost" href="?page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
           {% if page_obj.has_next %}
-            <a class="btn btn--secondary" href="?page={{ page_obj.next_page_number }}">Вперёд</a>
+            <a class="btn btn--ghost" href="?page={{ page_obj.next_page_number }}">Вперёд</a>
           {% endif %}
         </div>
       {% endif %}

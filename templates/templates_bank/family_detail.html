@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% load worm_files %}
 {% block title %}{{ family.name }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'templates_bank:family_list' %}">Бланки</a></li>
+      <li aria-current="page">{{ family.name }}</li>
+    </ol>
+  </nav>
+{% endblock %}
 {% block content %}
   <p class="label"><a href="{% url 'templates_bank:family_list' %}">Банк бланков</a></p>
   <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">

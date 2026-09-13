@@ -35,7 +35,7 @@
       <input type="hidden" name="object_id" value="{{ form.object_id.value|default_if_none:'' }}">
       <input type="hidden" name="date_from" value="{{ form.date_from.value|default_if_none:'' }}">
       <input type="hidden" name="date_to" value="{{ form.date_to.value|default_if_none:'' }}">
-      <button class="btn btn--secondary" type="submit">Выгрузить CSV</button>
+      <button class="btn btn--ghost" type="submit">Выгрузить CSV</button>
     </form>
   </div>
 
@@ -99,11 +99,11 @@
       {% if page_obj.paginator.num_pages > 1 %}
         <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
           {% if page_obj.has_previous %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
           <span class="caption">{{ page_obj.number }} / {{ page_obj.paginator.num_pages }}</span>
           {% if page_obj.has_next %}
-            <a class="btn btn--secondary" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
+            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
           {% endif %}
         </nav>
       {% endif %}
