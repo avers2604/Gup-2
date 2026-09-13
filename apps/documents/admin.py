@@ -101,3 +101,32 @@ class DocumentRelationAdmin(admin.ModelAdmin):
     list_display = ("from_document", "relation_type", "to_document", "created_at")
     list_filter = ("relation_type",)
     list_select_related = ("from_document", "to_document")
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        visible_ids = permissions.visible_documents(request.user).values("pk")
+        return queryset.filter(
+            from_document_id__in=visible_ids,
+            to_document_id__in=visible_ids,
+        )
+
+    def has_view_permission(self, request, obj=None):
+        if not super().has_view_permission(request, obj):
+            return False
+        if obj is None:
+            return True
+        return (
+            permissions.can_view_document(request.user, obj.from_document)
+            and permissions.can_view_document(request.user, obj.to_document)
+        )
+
+    def has_add_permission(self, request):
+        # Relation mutations are audited domain operations and therefore must
+        # go through the document workspace/service layer, never raw admin.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
