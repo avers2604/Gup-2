@@ -332,6 +332,22 @@
 }
 .app-header nav a:hover { opacity: 1; }
 
+/* Переключатель темы. Оформлен как пункт навигации, а не как кнопка
+   интерфейса: он живёт в шапке и не должен спорить с главным действием
+   экрана — правило DESIGN.md «акцент один на экран». */
+.theme-toggle {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .35);
+  border-radius: var(--radius-button);
+  color: var(--text-on-navy);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 6px 10px;
+  opacity: .85;
+}
+.theme-toggle:hover { opacity: 1; }
+
 @media (max-width: 560px) {
   /* Название системы и навигация — в колонку: в строку они всё равно
      переносятся, но с рваным выравниванием. */
