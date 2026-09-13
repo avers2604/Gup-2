@@ -1,9 +1,11 @@
 import io
 import os
+import subprocess
 import zipfile
 from pathlib import Path
 from unittest import mock
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 from pdf2image.exceptions import (
@@ -296,3 +298,75 @@ class PDFValidationTests(SimpleTestCase):
     def test_poppler_timeout_is_fail_closed(self, pdfinfo):
         with self.assertRaises(upload_validation.FormatValidatorUnavailable):
             upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"pdf"))
+
+
+class PDFAValidationTests(SimpleTestCase):
+    @mock.patch("apps.core.upload_validation.subprocess.run")
+    @mock.patch("apps.core.upload_validation._validate_pdf_path")
+    def test_poppler_runs_before_verapdf_and_exit_zero_passes(self, validate_path, run):
+        events = []
+        validate_path.side_effect = lambda path: events.append("poppler")
+        run.side_effect = lambda *args, **kwargs: (
+            events.append("verapdf") or mock.Mock(returncode=0, stdout="", stderr="")
+        )
+
+        upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
+
+        self.assertEqual(events, ["poppler", "verapdf"])
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], settings.VERAPDF_EXECUTABLE)
+        self.assertEqual(
+            command[1:10],
+            [
+                "--format",
+                "text",
+                "--maxfailures",
+                "1",
+                "--maxfailuresdisplayed",
+                "1",
+                "--loglevel",
+                "1",
+                "-f",
+                "2b",
+            ],
+        )
+        self.assertFalse(run.call_args.kwargs["shell"])
+
+    @mock.patch(
+        "apps.core.upload_validation.subprocess.run",
+        return_value=mock.Mock(returncode=1, stdout="", stderr="non-compliant"),
+    )
+    @mock.patch("apps.core.upload_validation._validate_pdf_path")
+    def test_exit_one_is_pdfa_nonconformance(self, validate_path, run):
+        with self.assertRaises(upload_validation.PDFAValidationFailed):
+            upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
+
+    @mock.patch(
+        "apps.core.upload_validation.subprocess.run",
+        return_value=mock.Mock(returncode=2, stdout="", stderr="internal details"),
+    )
+    @mock.patch("apps.core.upload_validation._validate_pdf_path")
+    def test_unexpected_exit_is_fail_closed_without_diagnostic_leak(
+        self, validate_path, run
+    ):
+        with self.assertRaises(upload_validation.FormatValidatorUnavailable) as caught:
+            upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
+        self.assertNotIn("internal details", str(caught.exception))
+
+    @mock.patch(
+        "apps.core.upload_validation.subprocess.run",
+        side_effect=FileNotFoundError("verapdf missing"),
+    )
+    @mock.patch("apps.core.upload_validation._validate_pdf_path")
+    def test_missing_executable_is_fail_closed(self, validate_path, run):
+        with self.assertRaises(upload_validation.FormatValidatorUnavailable):
+            upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
+
+    @mock.patch(
+        "apps.core.upload_validation.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("verapdf", 60),
+    )
+    @mock.patch("apps.core.upload_validation._validate_pdf_path")
+    def test_timeout_is_fail_closed(self, validate_path, run):
+        with self.assertRaises(upload_validation.FormatValidatorUnavailable):
+            upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
