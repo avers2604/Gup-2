@@ -16,19 +16,22 @@ from .factories import make_document
 
 
 class NormativeDocumentAntivirusTests(ClamdTestCase):
-    def test_clean_file_upload_succeeds(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_clean_file_upload_succeeds(self, _pdfa):
         upload = SimpleUploadedFile("scan.pdf", b"%PDF-1.4 clean content", content_type="application/pdf")
         doc = make_document(reg_number="AV-1", files_original=upload)
         doc.refresh_from_db()
         self.assertTrue(doc.files_original.name)
 
-    def test_eicar_upload_blocks_save(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_eicar_upload_blocks_save(self, _pdfa):
         upload = SimpleUploadedFile("scan.pdf", EICAR_BYTES, content_type="application/pdf")
         with self.assertRaises(MalwareDetected):
             make_document(reg_number="AV-2", files_original=upload)
         self.assertFalse(NormativeDocument.objects.filter(reg_number="AV-2").exists())
 
-    def test_eicar_upload_writes_audit_entry(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_eicar_upload_writes_audit_entry(self, _pdfa):
         upload = SimpleUploadedFile("scan.pdf", EICAR_BYTES, content_type="application/pdf")
         with self.assertRaises(MalwareDetected):
             make_document(reg_number="AV-3", files_original=upload)
@@ -42,13 +45,16 @@ class NormativeDocumentAntivirusTests(ClamdTestCase):
         self.assertEqual(entry.details["field"], "files_original")
         self.assertIn("Eicar-Test-Signature", entry.details["signature"])
 
-    def test_eicar_in_editable_file_also_blocks_save(self):
+    @patch("apps.documents.models.upload_validation.validate_ooxml")
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_eicar_in_editable_file_also_blocks_save(self, _pdfa, _ooxml):
         clean = SimpleUploadedFile("scan.pdf", b"clean content", content_type="application/pdf")
         infected = SimpleUploadedFile("draft.docx", EICAR_BYTES)
         with self.assertRaises(MalwareDetected):
             make_document(reg_number="AV-4", files_original=clean, files_editable=infected)
 
-    def test_resaving_without_new_file_does_not_rescan(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_resaving_without_new_file_does_not_rescan(self, _pdfa):
         upload = SimpleUploadedFile("scan.pdf", b"clean content", content_type="application/pdf")
         doc = make_document(reg_number="AV-5", files_original=upload)
 
@@ -66,7 +72,8 @@ class NormativeDocumentAntivirusTests(ClamdTestCase):
 
 
 class NormativeDocumentAntivirusUnavailableTests(ClamdTestCase):
-    def test_clamd_unavailable_blocks_save(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_clamd_unavailable_blocks_save(self, _pdfa):
         upload = SimpleUploadedFile("scan.pdf", b"clean content", content_type="application/pdf")
         with override_settings(CLAMAV_HOST="127.0.0.1", CLAMAV_PORT=1):
             with self.assertRaises(AntivirusUnavailable):

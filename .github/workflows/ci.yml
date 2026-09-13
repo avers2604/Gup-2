@@ -66,6 +66,18 @@ jobs:
       - name: Установить системные пакеты OCR
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus poppler-utils fonts-dejavu-core
 
+      - name: Установить veraPDF 1.30.2
+        run: |
+          sudo apt-get install -y -qq default-jre-headless unzip curl
+          sudo bash deploy/verapdf/install.sh
+          echo "/opt/verapdf" >> "$GITHUB_PATH"
+
+      - name: Проверить veraPDF/Poppler intake validators
+        run: |
+          bash -n deploy/verapdf/install.sh
+          bash -n deploy/verapdf/validate.sh
+          bash deploy/verapdf/validate.sh /opt/verapdf/verapdf
+
       - name: Установить ClamAV (анти-фрод, Этап 3)
         run: sudo apt-get install -y -qq clamav-daemon
 

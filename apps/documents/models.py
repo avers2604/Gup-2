@@ -1,4 +1,5 @@
 import datetime
+from pathlib import Path
 
 from django.contrib.postgres.constraints import ExclusionConstraint
 from django.contrib.postgres.fields import DateTimeRangeField, RangeOperators
@@ -7,7 +8,7 @@ from django.core.validators import FileExtensionValidator, MinValueValidator, Ma
 from django.db import models, transaction
 from django.utils import timezone
 
-from apps.core import antivirus, macro_check
+from apps.core import antivirus, macro_check, upload_validation
 from apps.core.models import TimeStampedModel, UUIDPKModel
 from apps.core.storage import originals_storage, working_storage
 from apps.iam.models import Department
@@ -196,28 +197,28 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
         # Rejected-upload evidence must survive the failed document transaction.
         if kwargs.get("update_fields") is not None and not kwargs["update_fields"]:
             return
-        # Антивирусная проверка (ТЗ 4.7, apps/core/antivirus.py) — ДО
-        # super().save(), пока файл ещё не записан в storage: заражённый
-        # файл не должен попасть в WORM-бакет originals, откуда его потом
-        # может быть невозможно удалить. needs_scan() пропускает случай
-        # "поле — просто строка-имя уже существующего файла" (тесты,
-        # загрузка из БД) — сканировать там нечего, ничего нового не
-        # добавляется в хранилище.
-        # Структурная проверка на макросы (ТЗ 4.7, apps/core/macro_check.py)
-        # — рядом с антивирусом, тот же fail-closed: ClamAV ловит только
-        # ИЗВЕСТНЫЕ вредоносные макросы по сигнатурам, не сам факт наличия
-        # VBA-кода.
+        # Content validation and antivirus happen before super().save(), while
+        # a newly uploaded file is still outside storage/WORM. Existing stored
+        # names are skipped by needs_scan(): nothing new is entering storage.
         for field_name in ("files_original", "files_editable"):
             field_file = getattr(self, field_name)
             if antivirus.needs_scan(field_file):
+                upload_validation.validate_upload_size(field_file)
+                if field_name == "files_original":
+                    upload_validation.validate_pdfa_2b(field_file)
+                else:
+                    expected_kind = Path(field_file.name).suffix.lower().lstrip(".")
+                    upload_validation.validate_ooxml(field_file, expected_kind)
+
                 antivirus.scan_uploaded_field(
                     field_file, object_type="NormativeDocument",
                     object_id=str(self.pk), object_label=self.reg_number,
                 )
-                macro_check.reject_if_has_macros(
-                    field_file, object_type="NormativeDocument",
-                    object_id=str(self.pk), object_label=self.reg_number,
-                )
+                if field_name == "files_editable":
+                    macro_check.reject_if_has_macros(
+                        field_file, object_type="NormativeDocument",
+                        object_id=str(self.pk), object_label=self.reg_number,
+                    )
 
         return self._save_validated(*args, **kwargs)
 

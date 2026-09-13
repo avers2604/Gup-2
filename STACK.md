@@ -2515,6 +2515,23 @@ README в трёх местах описывал `--async` и команду
 отдельный тест `test_duplicate_delivery_does_not_import_twice`, которого
 в исходном PR не было.
 
+## Pre-WORM валидация входных файлов
+
+Контроль загрузок вынесен в `apps/core/upload_validation.py` и выполняется только для новых upload-объектов до ClamAV и любого storage write. Existing `FieldFile` references повторно не валидируются.
+
+Инварианты intake:
+
+1. `UPLOAD_MAX_BYTES = 150 MiB`, `OCR_MAX_BYTES = UPLOAD_MAX_BYTES`.
+2. НРД original: Poppler structural check + veraPDF **PDF/A-2b**.
+3. НРД/template editable: ZIP/OOXML structural check, обязательные package parts и main-part MIME, затем ClamAV и macro/ActiveX gate.
+4. Template sample: обычный структурно корректный PDF через Poppler; PDF/A не требуется.
+5. Любая недоступность/timeout/unexpected exit внешнего validator — fail-closed.
+6. Rejected upload не должен создавать объект в staging, mutable file storage или WORM originals.
+
+veraPDF runtime закреплён на **Greenfield 1.30.2**, профиль `2b` не конфигурируется. Installer SHA-256 хранится в `deploy/verapdf/SHA256SUMS`; deployment использует `deploy/verapdf/install.sh` и `deploy/verapdf/validate.sh`. При смене версии maintainer сначала проверяет upstream detached signature и полный fingerprint, затем обновляет checksum. Полная процедура — `deploy/verapdf/README.md`.
+
+CI на PostgreSQL 16/18 устанавливает тот же pinned runtime и выполняет real-runtime smoke на vendored pass/fail fixtures из `veraPDF/veraPDF-corpus`, после чего запускает полный Django suite, coverage и live Redis worker integration.
+
 ## Слой оформления Web GUI: CSS, раскладка, темы (шесть UI-партий)
 
 DESIGN.md описывает дизайн-систему как таковую — палитру, роли текста,
