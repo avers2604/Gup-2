@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Сводка {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'documents:consolidated_list' %}">Сводные редакции</a></li>
+      <li aria-current="page">{{ document.reg_number }}</li>
+    </ol>
+  </nav>
+{% endblock %}
 {% block content %}
   <p class="label">Сводная редакция</p>
   <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
@@ -16,7 +24,7 @@
   </div>
 
   <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
-    <a class="btn btn--secondary" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
+    <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
     {% if document.files_original %}
       <a class="btn btn--ghost" href="{% url 'documents:file-link' document.pk 'original' %}"
          target="_blank" rel="noopener">Скан базового документа</a>

@@ -68,11 +68,11 @@
       {% if page_obj.paginator.num_pages > 1 %}
         <nav style="display:flex; gap: var(--space-2); margin-top: var(--space-4); align-items:center;">
           {% if page_obj.has_previous %}
-            <a class="btn btn--secondary" href="?q={{ query }}&page={{ page_obj.previous_page_number }}">Назад</a>
+            <a class="btn btn--ghost" href="?q={{ query }}&page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
           <span class="caption">Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }}</span>
           {% if page_obj.has_next %}
-            <a class="btn btn--secondary" href="?q={{ query }}&page={{ page_obj.next_page_number }}">Вперёд</a>
+            <a class="btn btn--ghost" href="?q={{ query }}&page={{ page_obj.next_page_number }}">Вперёд</a>
           {% endif %}
         </nav>
       {% endif %}

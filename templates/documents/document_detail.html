@@ -1,6 +1,15 @@
 {% extends "base.html" %}
+{% load status_pills %}
 {% load worm_files %}
 {% block title %}{{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'documents:list' %}">Документы</a></li>
+      <li aria-current="page">{{ document.reg_number }}</li>
+    </ol>
+  </nav>
+{% endblock %}
 {% block content %}
   <p class="label">
     <a href="{% url 'documents:list' %}">Реестр НРД</a> · {{ document.get_doc_type_display }}
@@ -8,15 +17,11 @@
   <h1 class="title">{{ document.title }}</h1>
 
   <div style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-2);">
-    <span class="status-pill
-      {% if document.status == 'active' %}status-pill--active
-      {% elif document.status == 'active_amended' %}status-pill--amended
-      {% elif document.status == 'revoked' or document.status == 'annulled' %}status-pill--revoked
-      {% else %}status-pill--draft{% endif %}">
+    <span class="status-pill {{ document.status|status_pill }}">
       {{ document.get_status_display }}
     </span>
     {% if document.access_level == 'restricted' %}
-      <span class="status-pill status-pill--revoked">ДСП</span>
+      <span class="access-pill">ДСП<span class="sr-only"> — для служебного пользования</span></span>
     {% endif %}
     {% if document.ocr_status == 'needs_review' %}
       <span class="status-pill status-pill--draft" title="Распознавание ниже порога качества">OCR: требует верификации</span>

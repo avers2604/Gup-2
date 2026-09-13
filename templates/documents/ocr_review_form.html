@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block title %}Вычитка {{ document.reg_number }} · АИС «БЗ ГЭТ»{% endblock %}
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'documents:ocr_review_queue' %}">Вычитка OCR</a></li>
+      <li aria-current="page">{{ document.reg_number }}</li>
+    </ol>
+  </nav>
+{% endblock %}
 {% block content %}
   <p class="label">Вычитка OCR</p>
   <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
