@@ -447,3 +447,19 @@ python manage.py personnel_import_status <task-id>
 Порядок развёртывания: [docs/SECURITY_RELIABILITY.md](docs/SECURITY_RELIABILITY.md).
 Воспроизводимая установка: `pip install -r requirements-dev.txt -c constraints.txt`
 (для production — `requirements.txt` с тем же constraints). CI проверяет PostgreSQL 16 и 18.
+
+
+## Входная валидация файлов до storage/WORM
+
+Новые загрузки проверяются синхронно **до** записи в mutable staging или WORM `originals`. Общий лимит intake — **150 MiB**; тот же предел используется OCR-конвейером.
+
+Контракт полей:
+
+- `NormativeDocument.files_original` — только структурно корректный PDF, соответствующий **PDF/A-2b**;
+- `NormativeDocument.files_editable` — валидный OOXML DOCX/XLSX, тип пакета должен совпадать с расширением;
+- `Template.file_editable` — валидный OOXML DOCX/XLSX с тем же правилом совпадения типа;
+- `Template.file_sample` — валидный обычный PDF; соответствие PDF/A для образца не требуется.
+
+Порядок проверки новой загрузки: **размер → формат/структура → ClamAV → macro/ActiveX для OOXML → staging/storage**. Ошибка, timeout или отсутствие Poppler/veraPDF трактуются fail-closed: файл не сохраняется. Макросы/ActiveX по-прежнему запрещены после успешной OOXML-проверки.
+
+PDF/A проверяется локальным veraPDF Greenfield 1.30.2 с фиксированным профилем `2b`; CI выполняет реальный smoke на PostgreSQL 16 и 18. Установка, checksum pin, signing-key fingerprint и процедура обновления описаны в [`deploy/verapdf/README.md`](deploy/verapdf/README.md).
