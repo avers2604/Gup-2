@@ -46,10 +46,7 @@
       {% if form.non_field_errors %}
         <p class="field-error">{{ form.non_field_errors.0 }}</p>
       {% endif %}
-      <label class="field-label" for="{{ form.ocr_body.id_for_label }}">{{ form.ocr_body.label }}</label>
-      {{ form.ocr_body }}
-      <p class="caption">{{ form.ocr_body.help_text }}</p>
-      {% for error in form.ocr_body.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
+      {% include "ui/field.html" with field=form.ocr_body %}
     </div>
 
     <div class="row">

@@ -19,26 +19,7 @@
         <p class="field-error">{{ form.non_field_errors.0 }}</p>
       {% endif %}
       <div class="row row--end">
-        <div>
-          <label class="field-label" for="{{ form.doc_type.id_for_label }}">{{ form.doc_type.label }}</label>
-          {{ form.doc_type }}
-        </div>
-        <div>
-          <label class="field-label" for="{{ form.status.id_for_label }}">{{ form.status.label }}</label>
-          {{ form.status }}
-        </div>
-        <div>
-          <label class="field-label" for="{{ form.issuer_dept.id_for_label }}">{{ form.issuer_dept.label }}</label>
-          {{ form.issuer_dept }}
-        </div>
-        <div>
-          <label class="field-label" for="{{ form.effective_from.id_for_label }}">{{ form.effective_from.label }}</label>
-          {{ form.effective_from }}
-        </div>
-        <div>
-          <label class="field-label" for="{{ form.effective_to.id_for_label }}">{{ form.effective_to.label }}</label>
-          {{ form.effective_to }}
-        </div>
+        {% for field in form %}{% include "ui/field.html" %}{% endfor %}
         <button class="btn btn--primary" type="submit">Применить</button>
         <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить</a>
       </div>

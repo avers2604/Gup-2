@@ -31,7 +31,7 @@
             {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
           </div>
         {% endif %}
-        {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
+        {% for field in form %}{% include "ui/field.html" %}{% endfor %}
         <p class="caption">
           Переход записывается в WORM-журнал аудита и закрывает текущий
           период в истории статусов (ТЗ 4.2.3) — отменить его нельзя.

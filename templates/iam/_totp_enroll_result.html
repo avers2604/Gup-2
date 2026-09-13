@@ -5,12 +5,11 @@
   <a href="{{ provisioning_uri }}">{{ provisioning_uri }}</a>
 </p>
 <p class="muted">Введите код из приложения, чтобы подтвердить подключение:</p>
-<form
-  method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
- 
->
+<form class="stack stack--tight"
+  method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML">
   {% csrf_token %}
-  <label class="field-label" for="{{ form.code.id_for_label }}">Код</label>
-  {{ form.code }}
-  <button class="btn btn--primary" type="submit">Подтвердить</button>
+  {% include "ui/field.html" with field=form.code %}
+  <div class="form-actions">
+    <button class="btn btn--primary" type="submit">Подтвердить</button>
+  </div>
 </form>

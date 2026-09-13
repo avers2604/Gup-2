@@ -42,7 +42,7 @@
       <div class="card stack stack--tight">
         <p class="label">{{ group.title }}</p>
         {% if group.hint %}<p class="caption">{{ group.hint }}</p>{% endif %}
-        {% for field in group.fields %}{% include "documents/_form_field.html" %}{% endfor %}
+        {% for field in group.fields %}{% include "ui/field.html" %}{% endfor %}
       </div>
     {% endfor %}
 

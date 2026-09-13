@@ -24,6 +24,19 @@
 }
 .btn:hover { filter: brightness(0.94); }
 .btn:active { filter: brightness(0.88); }
+/* Недоступная кнопка. Стиля не было вовсе: отправленная форма выглядела
+   готовой к повторному нажатию, и различить «идёт отправка» от «можно
+   жать ещё раз» было нечем. Наведение и нажатие гасятся явно — без этого
+   :hover продолжает подсвечивать кнопку, которая ничего не сделает. */
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
+  filter: none;
+}
+.btn:disabled:hover,
+.btn:disabled:active,
+.btn[aria-disabled="true"]:hover { filter: none; }
 
 .btn--accent {
   background: var(--color-accent-fill);
@@ -75,6 +88,32 @@
   outline: 2px solid color-mix(in srgb, var(--color-accent-fill) 30%, transparent);
   outline-offset: 0;
 }
+
+/* Отвергнутое поле: рамка ПЛЮС aria-invalid на виджете и красный текст
+   ошибки под ним (apps/core/templatetags/forms.py). Одной рамки мало —
+   правило DESIGN.md запрещает делать цвет единственным носителем
+   смысла, а скринридер рамку не видит вовсе. */
+.field[aria-invalid="true"] {
+  border-color: var(--color-red);
+}
+.field[aria-invalid="true"]:focus {
+  outline-color: color-mix(in srgb, var(--color-red) 30%, transparent);
+}
+
+/* Недоступное и только для чтения. Курсор и приглушённый фон сообщают,
+   что поле не примет ввод, ДО того как пользователь попробует печатать. */
+.field:disabled {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+.field[readonly] {
+  background: var(--surface-2);
+}
+
+/* Звёздочка обязательного поля. Дублируется словами в .sr-only: сама по
+   себе она ничего не сообщает тому, кто её не видит. */
+.field-required { color: var(--color-red); }
 
 /* ---------- Карточка ---------- */
 .card {

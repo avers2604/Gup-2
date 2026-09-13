@@ -11,12 +11,12 @@
       {{ form.non_field_errors.0 }}
     </p>
   {% endif %}
-  <form
-    method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
-  >
+  <form class="stack stack--tight"
+    method="post" hx-post="{% url 'iam:totp-confirm' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML">
     {% csrf_token %}
-    <label class="field-label" for="{{ form.code.id_for_label }}">Код</label>
-    {{ form.code }}
-    <button class="btn btn--primary" type="submit">Подтвердить</button>
+    {% include "ui/field.html" with field=form.code %}
+    <div class="form-actions">
+      <button class="btn btn--primary" type="submit">Подтвердить</button>
+    </div>
   </form>
 {% endif %}

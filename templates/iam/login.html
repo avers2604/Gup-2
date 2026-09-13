@@ -10,16 +10,16 @@
         {{ form.non_field_errors.0 }}
       </p>
     {% endif %}
-    <form method="post" novalidate>
+    <form method="post" novalidate class="stack stack--tight">
       {% csrf_token %}
-      <label class="field-label" for="{{ form.personnel_number.id_for_label }}">Табельный номер</label>
-      {{ form.personnel_number }}
-      <label class="field-label" for="{{ form.password.id_for_label }}">Пароль</label>
-      {{ form.password }}
+      {% include "ui/field.html" with field=form.personnel_number %}
+      {% include "ui/field.html" with field=form.password %}
       <label class="caption row row--tight">
         {{ form.shared_terminal }} {{ form.shared_terminal.label }}
       </label>
-      <button class="btn btn--primary" type="submit">Войти</button>
+      <div class="form-actions">
+        <button class="btn btn--primary" type="submit">Войти</button>
+      </div>
     </form>
   </div>
 {% endblock %}

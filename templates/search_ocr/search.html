@@ -10,20 +10,10 @@
 
   <div class="card">
     <form method="get" novalidate class="stack stack--tight">
-      <label class="field-label" for="{{ form.q.id_for_label }}">Запрос</label>
-      {{ form.q }}
-      {% if form.q.errors %}
-        <p class="field-error">{{ form.q.errors|striptags }}</p>
-      {% endif %}
-      <div class="row">
-        <div>
-          <label class="field-label" for="{{ form.category.id_for_label }}">{{ form.category.label }}</label>
-          {{ form.category }}
-        </div>
-        <div>
-          <label class="field-label" for="{{ form.service.id_for_label }}">{{ form.service.label }}</label>
-          {{ form.service }}
-        </div>
+      {% include "ui/field.html" with field=form.q %}
+      <div class="row row--end">
+        {% include "ui/field.html" with field=form.category %}
+        {% include "ui/field.html" with field=form.service %}
       </div>
       <p class="caption">
         Категория и служба используются только для разрешения неоднозначных

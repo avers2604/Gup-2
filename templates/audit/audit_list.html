@@ -18,13 +18,7 @@
         <p class="field-error">{{ form.non_field_errors.0 }}</p>
       {% endif %}
       <div class="row row--end">
-        {% for field in form %}
-          <div>
-            <label class="field-label" for="{{ field.id_for_label }}">{{ field.label }}</label>
-            {{ field }}
-            {% for error in field.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
-          </div>
-        {% endfor %}
+        {% for field in form %}{% include "ui/field.html" %}{% endfor %}
         <button class="btn btn--primary" type="submit">Применить</button>
         <a class="btn btn--ghost" href="{% url 'audit:list' %}">Сбросить</a>
       </div>

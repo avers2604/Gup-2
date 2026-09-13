@@ -28,7 +28,7 @@
         Оба файла уходят в WORM-хранилище с Governance-блокировкой и
         проверяются антивирусом и на встроенные макросы до записи.
       </p>
-      {% for field in form %}{% include "documents/_form_field.html" %}{% endfor %}
+      {% for field in form %}{% include "ui/field.html" %}{% endfor %}
       <div class="row row--tight">
         <button class="btn btn--primary" type="submit">Выпустить версию</button>
         <a class="btn btn--ghost" href="{% url 'templates_bank:family_detail' family.pk %}">Отмена</a>
