@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import logging
 import os
 import shutil
 import tempfile
@@ -12,6 +13,14 @@ from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from pdf2image import pdfinfo_from_path
+from pdf2image.exceptions import (
+    PDFInfoNotInstalledError,
+    PDFPageCountError,
+    PDFPopplerTimeoutError,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class UploadValidationError(ValidationError):
@@ -24,6 +33,18 @@ class UploadTooLarge(UploadValidationError):
 
 class InvalidOOXML(UploadValidationError):
     """DOCX/XLSX upload is not a valid package of the declared family."""
+
+
+class InvalidPDF(UploadValidationError):
+    """PDF upload cannot be parsed into a non-empty document."""
+
+
+class PDFAValidationFailed(UploadValidationError):
+    """PDF is structurally readable but does not conform to PDF/A-2b."""
+
+
+class FormatValidatorUnavailable(UploadValidationError):
+    """External format-validation runtime is unavailable or failed closed."""
 
 
 def _source_file(field_file):
@@ -88,6 +109,32 @@ def _temporary_upload_path(field_file):
                 os.unlink(path)
             except FileNotFoundError:
                 pass
+
+
+def _validate_pdf_path(path: str) -> None:
+    """Validate an on-disk PDF through Poppler without exposing runtime details."""
+    try:
+        info = pdfinfo_from_path(path, timeout=settings.OCR_PROCESS_TIMEOUT)
+    except PDFPageCountError as exc:
+        raise InvalidPDF("Некорректный PDF-файл.") from exc
+    except (PDFInfoNotInstalledError, PDFPopplerTimeoutError, OSError) as exc:
+        logger.exception("PDF structural validator unavailable")
+        raise FormatValidatorUnavailable(
+            "Проверка формата временно недоступна; файл не сохранён."
+        ) from exc
+
+    try:
+        pages = int(info.get("Pages", 0))
+    except (TypeError, ValueError) as exc:
+        raise InvalidPDF("Некорректный PDF-файл.") from exc
+    if pages < 1:
+        raise InvalidPDF("Некорректный PDF-файл.")
+
+
+def validate_pdf(field_file) -> None:
+    """Validate an uploaded ordinary PDF structurally through Poppler."""
+    with _temporary_upload_path(field_file) as path:
+        _validate_pdf_path(path)
 
 
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
