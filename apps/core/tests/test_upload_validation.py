@@ -370,3 +370,35 @@ class PDFAValidationTests(SimpleTestCase):
     def test_timeout_is_fail_closed(self, validate_path, run):
         with self.assertRaises(upload_validation.FormatValidatorUnavailable):
             upload_validation.validate_pdfa_2b(SimpleUploadedFile("x.pdf", b"pdf"))
+
+
+FIXTURES = Path(__file__).with_name("fixtures")
+
+
+class RealValidatorSmokeTests(SimpleTestCase):
+    def setUp(self):
+        import shutil
+
+        if shutil.which(settings.VERAPDF_EXECUTABLE) is None:
+            self.skipTest("veraPDF executable is not installed outside CI/runtime smoke")
+
+    def test_pdfa_pass_fixture_passes_verapdf(self):
+        from django.core.files import File
+
+        with open(FIXTURES / "pdfa-2b-valid.pdf", "rb") as handle:
+            upload_validation.validate_pdfa_2b(File(handle, name="valid.pdf"))
+
+    def test_pdfa_fail_fixture_is_rejected(self):
+        from django.core.files import File
+
+        with open(FIXTURES / "pdfa-2b-invalid.pdf", "rb") as handle:
+            with self.assertRaises(upload_validation.PDFAValidationFailed):
+                upload_validation.validate_pdfa_2b(File(handle, name="invalid.pdf"))
+
+    def test_poppler_parses_both_checked_in_pdfs(self):
+        from django.core.files import File
+
+        for name in ("pdfa-2b-valid.pdf", "pdfa-2b-invalid.pdf"):
+            with self.subTest(name=name):
+                with open(FIXTURES / name, "rb") as handle:
+                    upload_validation.validate_pdf(File(handle, name=name))
