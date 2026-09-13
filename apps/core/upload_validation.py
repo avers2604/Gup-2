@@ -1,7 +1,9 @@
 """Fail-closed content validation for newly uploaded files."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
+import tempfile
 import zipfile
 from xml.etree.ElementTree import ParseError
 
@@ -58,6 +60,44 @@ def validate_upload_size(field_file) -> None:
             source.seek(0)
         except (AttributeError, OSError, ValueError):
             pass
+
+
+@contextmanager
+def _temporary_upload_path(field_file):
+    """Materialize an upload into a bounded temporary file and always clean it up."""
+    source = _source_file(field_file)
+    path = None
+    chunk_size = 1024 * 1024
+    max_bytes = settings.UPLOAD_MAX_BYTES
+    copied = 0
+
+    try:
+        source.seek(0)
+        with tempfile.NamedTemporaryFile(delete=False) as temporary:
+            path = temporary.name
+            while copied <= max_bytes:
+                read_size = min(chunk_size, max_bytes + 1 - copied)
+                chunk = source.read(read_size)
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > max_bytes:
+                    raise UploadTooLarge(
+                        f"Размер файла превышает допустимые {max_bytes // (1024 * 1024)} МБ."
+                    )
+                temporary.write(chunk)
+
+        yield path
+    finally:
+        try:
+            source.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
+        if path:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
 
 
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
