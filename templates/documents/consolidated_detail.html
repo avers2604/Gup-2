@@ -9,21 +9,24 @@
   </nav>
 {% endblock %}
 {% block content %}
-  <p class="label">Сводная редакция</p>
-  <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
-  <p class="caption" style="margin-top: var(--space-2);">
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Сводная редакция</p>
+    <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
+    <p class="caption">
     {{ document.get_doc_type_display }} · {{ document.issuer_dept.name }} ·
     вступил в силу {{ document.effective_date|date:"d.m.Y" }} ·
     {{ document.get_status_display }}
-  </p>
+    </p>
+  </header>
 
-  <div class="notice notice--info" style="margin-top: var(--space-6);">
+  <div class="notice notice--info">
     Это перечень действующих изменений, а не единый текст документа с
     применёнными правками. Чтобы получить действующее требование целиком,
     читайте базовый документ и изменения к нему по порядку.
   </div>
 
-  <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+  <div class="row">
     <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
     {% if document.files_original %}
       <a class="btn btn--ghost" href="{% url 'documents:file-link' document.pk 'original' %}"
@@ -32,10 +35,10 @@
     <a class="btn btn--ghost" href="{% url 'documents:consolidated_list' %}">К перечню</a>
   </div>
 
-  <div class="card" style="margin-top: var(--space-8);">
+  <div class="card stack stack--tight">
     <p class="label">Действующие изменения ({{ rows|length }})</p>
     {% if rows %}
-      <div class="table-scroll" style="margin-top: var(--space-4);">
+      <div class="table-scroll">
         <table class="table">
           <thead>
             <tr>
@@ -62,10 +65,11 @@
         </table>
       </div>
     {% else %}
-      <p class="caption" style="margin-top: var(--space-2);">
+      <p class="caption">
         Действующих изменений нет. Документ действует в исходной редакции —
         либо изменения к нему вам недоступны по грифу.
       </p>
     {% endif %}
   </div>
+ </div>
 {% endblock %}

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Личный кабинет · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Учётная запись</p>
+  <p class="eyebrow">Учётная запись</p>
   <h1 class="title">{{ user.full_name }}</h1>
   <p class="caption">{{ user.position }} · {{ user.department.name }}</p>
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <p class="label">Учётные данные</p>
     <div class="table-scroll">
       <table class="table">
@@ -26,13 +26,13 @@
         </tbody>
       </table>
     </div>
-    <p class="caption" style="margin-top: var(--space-3);">
+    <p class="caption">
       Роль и допуск назначает Администратор — изменить их самостоятельно нельзя.
       Любое изменение роли фиксируется в журнале аудита.
     </p>
   </div>
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <p class="label">Безопасность</p>
     <div class="table-scroll">
       <table class="table">
@@ -65,21 +65,21 @@
         </tbody>
       </table>
     </div>
-    <div style="display:flex; gap: var(--space-3); margin-top: var(--space-4); flex-wrap: wrap;">
+    <div class="row row--tight">
       <a class="btn btn--primary" href="{% url 'iam:password-change' %}">Сменить пароль</a>
       {% if not summary.totp_enabled %}
         <a class="btn btn--accent" href="{% url 'iam:totp-enroll' %}">Подключить 2FA</a>
       {% endif %}
     </div>
     {% if summary.password_change_required %}
-      <div class="notice notice--warning" style="margin-top: var(--space-4);">
+      <div class="notice notice--warning">
         Требуется смена пароля. Пока она не выполнена, разделы системы,
         кроме страниц учётной записи, недоступны.
       </div>
     {% endif %}
   </div>
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <p class="label">Последние входы</p>
     {% if recent_events %}
       <div class="table-scroll">
@@ -96,7 +96,7 @@
           </tbody>
         </table>
       </div>
-      <p class="caption" style="margin-top: var(--space-3);">
+      <p class="caption">
         Показаны только собственные события. Вход, которого вы не совершали,
         — повод обратиться к Офицеру ИБ.
       </p>

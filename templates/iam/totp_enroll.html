@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Настройка 2FA · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Безопасность аккаунта</p>
+  <p class="eyebrow">Безопасность аккаунта</p>
   <h1 class="title">Двухфакторная аутентификация (TOTP)</h1>
 
-  <div class="card" style="max-width: 480px; margin-top: var(--space-6);" id="totp-enroll-panel">
+  <div class="card card--medium stack stack--tight" id="totp-enroll-panel">
     {% if totp_enabled %}
       <p>2FA уже включена для вашей учётной записи.</p>
     {% else %}
@@ -13,7 +13,7 @@
         и т.п.), чтобы получить секрет для входа.
       </p>
       <button
-        class="btn btn--primary" style="margin-top: var(--space-4);"
+        class="btn btn--primary"
         hx-post="{% url 'iam:totp-enroll' %}" hx-target="#totp-enroll-panel" hx-swap="innerHTML"
       >
         Начать подключение

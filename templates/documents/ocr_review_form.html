@@ -9,11 +9,14 @@
   </nav>
 {% endblock %}
 {% block content %}
-  <p class="label">Вычитка OCR</p>
-  <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Вычитка OCR</p>
+    <h1 class="title">{{ document.reg_number }} — {{ document.title }}</h1>
+  </header>
 
-  <div class="card" style="margin-top: var(--space-6);">
-    <dl style="display:grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-6);">
+  <div class="card">
+    <dl class="definition-grid">
       <dt class="caption">Уверенность распознавания</dt>
       <dd>
         {% if document.ocr_confidence is not None %}
@@ -37,22 +40,23 @@
     </dl>
   </div>
 
-  <form method="post" style="margin-top: var(--space-6);">
+  <form method="post" class="stack stack--tight">
     {% csrf_token %}
     <div class="card">
       {% if form.non_field_errors %}
-        <p class="field-error" style="margin-bottom: var(--space-4);">{{ form.non_field_errors.0 }}</p>
+        <p class="field-error">{{ form.non_field_errors.0 }}</p>
       {% endif %}
       <label class="field-label" for="{{ form.ocr_body.id_for_label }}">{{ form.ocr_body.label }}</label>
       {{ form.ocr_body }}
-      <p class="caption" style="margin-top: var(--space-2);">{{ form.ocr_body.help_text }}</p>
+      <p class="caption">{{ form.ocr_body.help_text }}</p>
       {% for error in form.ocr_body.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
     </div>
 
-    <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+    <div class="row">
       <button class="btn btn--primary" type="submit">Сохранить и снять с очереди</button>
       <a class="btn btn--ghost" href="{% url 'documents:ocr_review_queue' %}">Вернуться к очереди</a>
       <a class="btn btn--ghost" href="{% url 'documents:detail' document.pk %}">Карточка документа</a>
     </div>
   </form>
+ </div>
 {% endblock %}

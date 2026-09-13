@@ -8,6 +8,7 @@
   {% load navigation %}
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/layout.css' %}">
   <link rel="stylesheet" href="{% static 'css/components.css' %}">
   {# Web GUI — Django Templates + HTMX + Alpine.js (решение Заказчика): #}
   {# HTMX — частичные обновления без полной перезагрузки (2FA enroll и #}
@@ -63,7 +64,7 @@
             не потребуется.
           {% endcomment %}
           <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
-          <form method="post" action="{% url 'iam:logout' %}" style="display:inline;">
+          <form method="post" action="{% url 'iam:logout' %}">
             {% csrf_token %}
             <button class="btn btn--ghost" type="submit">Выйти</button>
           </form>
@@ -73,7 +74,7 @@
       </nav>
     </div>
   </header>
-  <main id="content" class="container" style="padding-top: var(--space-8); padding-bottom: var(--space-10);">
+  <main id="content" class="container page-main">
     {% block breadcrumbs %}{% endblock %}
     {% if messages %}
       {% for message in messages %}

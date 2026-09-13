@@ -10,8 +10,9 @@
   </nav>
 {% endblock %}
 {% block content %}
-  <p class="label"><a href="{% url 'templates_bank:family_list' %}">Банк бланков</a></p>
-  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
+ <div class="stack">
+  <p class="eyebrow"><a href="{% url 'templates_bank:family_list' %}">Банк бланков</a></p>
+  <div class="row row--baseline">
     <h1 class="title">{{ family.name }}</h1>
     {% if can_manage %}
       <a class="btn btn--accent" href="{% url 'templates_bank:version_create' family.pk %}">Выпустить версию</a>
@@ -23,7 +24,7 @@
     выпускается новая версия, а предыдущая переходит в архив.
   </p>
 
-  <div class="card" style="margin-top: var(--space-6);">
+  <div class="card stack stack--tight">
     <p class="label">Линия версий</p>
     {% if versions %}
       <div class="table-scroll">
@@ -87,7 +88,7 @@
           </tbody>
         </table>
       </div>
-      <p class="caption" style="margin-top: var(--space-4);">
+      <p class="caption">
         Скачивание архивной версии фиксируется в журнале аудита — форма,
         утратившая силу, не должна расходиться по подразделениям незаметно.
       </p>
@@ -95,4 +96,5 @@
       <p class="caption">Ни одной версии ещё не выпущено.</p>
     {% endif %}
   </div>
+ </div>
 {% endblock %}

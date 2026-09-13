@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Вход · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Вход в систему</p>
+  <p class="eyebrow">Вход в систему</p>
   <h1 class="title">АИС «БЗ ГЭТ»</h1>
 
-  <div class="card" style="max-width: 420px; margin-top: var(--space-6);">
+  <div class="card card--narrow stack stack--tight">
     {% if form.non_field_errors %}
-      <p class="caption" style="color: var(--color-red); margin-bottom: var(--space-4);">
+      <p class="field-error">
         {{ form.non_field_errors.0 }}
       </p>
     {% endif %}
@@ -14,12 +14,12 @@
       {% csrf_token %}
       <label class="field-label" for="{{ form.personnel_number.id_for_label }}">Табельный номер</label>
       {{ form.personnel_number }}
-      <label class="field-label" for="{{ form.password.id_for_label }}" style="margin-top: var(--space-4); display:block;">Пароль</label>
+      <label class="field-label" for="{{ form.password.id_for_label }}">Пароль</label>
       {{ form.password }}
-      <label class="caption" style="display:flex; align-items:center; gap: var(--space-2); margin-top: var(--space-4);">
+      <label class="caption row row--tight">
         {{ form.shared_terminal }} {{ form.shared_terminal.label }}
       </label>
-      <button class="btn btn--primary" type="submit" style="margin-top: var(--space-6);">Войти</button>
+      <button class="btn btn--primary" type="submit">Войти</button>
     </form>
   </div>
 {% endblock %}

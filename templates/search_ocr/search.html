@@ -2,17 +2,20 @@
 {% load status_pills %}
 {% block title %}Поиск · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Smart Search</p>
-  <h1 class="title">Поиск по базе знаний</h1>
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Smart Search</p>
+    <h1 class="title">Поиск по базе знаний</h1>
+  </header>
 
-  <div class="card" style="margin-top: var(--space-6);">
-    <form method="get" novalidate>
+  <div class="card">
+    <form method="get" novalidate class="stack stack--tight">
       <label class="field-label" for="{{ form.q.id_for_label }}">Запрос</label>
       {{ form.q }}
       {% if form.q.errors %}
         <p class="field-error">{{ form.q.errors|striptags }}</p>
       {% endif %}
-      <div style="display:flex; gap: var(--space-4); margin-top: var(--space-4); flex-wrap: wrap;">
+      <div class="row">
         <div>
           <label class="field-label" for="{{ form.category.id_for_label }}">{{ form.category.label }}</label>
           {{ form.category }}
@@ -22,19 +25,19 @@
           {{ form.service }}
         </div>
       </div>
-      <p class="caption" style="margin-top: var(--space-2);">
+      <p class="caption">
         Категория и служба используются только для разрешения неоднозначных
         сокращений тезауруса (например «ТП»), не фильтруют сами документы.
       </p>
-      <button class="btn btn--primary" type="submit" style="margin-top: var(--space-4);">Найти</button>
+      <button class="btn btn--primary" type="submit">Найти</button>
     </form>
   </div>
 
   {% if results is not None %}
-    <div style="margin-top: var(--space-8);">
+    <div class="stack stack--tight">
       <p class="label">Результаты по запросу «{{ form.cleaned_data.q }}»</p>
       {% if page_obj %}
-        <p class="caption" style="margin-top: var(--space-2);">
+        <p class="caption">
           Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
           показано {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ page_obj.paginator.count }}
         </p>
@@ -68,7 +71,7 @@
         </div>
 
         {% if page_obj and page_obj.paginator.num_pages > 1 %}
-          <nav style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); align-items: center;">
+          <nav class="row row--tight">
             {% if page_obj.has_previous %}
               <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
             {% endif %}
@@ -91,4 +94,5 @@
       {% endif %}
     </div>
   {% endif %}
+ </div>
 {% endblock %}

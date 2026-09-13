@@ -2,20 +2,23 @@
 {% load status_pills %}
 {% block title %}Реестр НРД · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Нормативно-распорядительная документация</p>
-  <div style="display:flex; gap: var(--space-4); align-items: baseline; flex-wrap: wrap;">
-    <h1 class="title">Реестр документов</h1>
-    {% if can_edit %}
-      <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
-    {% endif %}
-  </div>
-
-  <div class="card" style="margin-top: var(--space-6);">
-    <form method="get" novalidate>
-      {% if form.non_field_errors %}
-        <p class="field-error" style="margin-bottom: var(--space-4);">{{ form.non_field_errors.0 }}</p>
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Нормативно-распорядительная документация</p>
+    <div class="row row--baseline">
+      <h1 class="title">Реестр документов</h1>
+      {% if can_edit %}
+        <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
       {% endif %}
-      <div style="display:flex; gap: var(--space-4); flex-wrap: wrap; align-items: flex-end;">
+    </div>
+  </header>
+
+  <div class="card">
+    <form method="get" novalidate class="stack stack--tight">
+      {% if form.non_field_errors %}
+        <p class="field-error">{{ form.non_field_errors.0 }}</p>
+      {% endif %}
+      <div class="row row--end">
         <div>
           <label class="field-label" for="{{ form.doc_type.id_for_label }}">{{ form.doc_type.label }}</label>
           {{ form.doc_type }}
@@ -52,7 +55,7 @@
     </div>
   {% endif %}
 
-  <div style="margin-top: var(--space-8);">
+  <div class="stack stack--tight">
     {% if page_obj %}
       <p class="caption">
         Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
@@ -103,7 +106,7 @@
       </div>
 
       {% if page_obj.paginator.num_pages > 1 %}
-        <nav style="display:flex; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-4); align-items: center;">
+        <nav class="row row--tight" aria-label="Страницы реестра">
           {% if page_obj.has_previous %}
             <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
@@ -122,15 +125,14 @@
         </nav>
       {% endif %}
     {% else %}
-      <div class="card empty-state">
+      <div class="card empty-state stack stack--tight">
         {% if applied_filters %}
           <p class="heading">Под фильтры не подошёл ни один документ</p>
           <p class="caption">
             В реестре есть документы, но заданным условиям они не отвечают.
             Снимите часть фильтров или расширьте диапазон дат.
           </p>
-          <a class="btn btn--ghost" href="{% url 'documents:list' %}"
-             style="margin-top: var(--space-4);">Сбросить фильтры</a>
+          <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить фильтры</a>
         {% else %}
           <p class="heading">В реестре пока нет документов</p>
           <p class="caption">
@@ -143,11 +145,11 @@
             {% endif %}
           </p>
           {% if can_edit %}
-            <a class="btn btn--accent" href="{% url 'documents:create' %}"
-               style="margin-top: var(--space-4);">Зарегистрировать документ</a>
+            <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
           {% endif %}
         {% endif %}
       </div>
     {% endif %}
   </div>
+ </div>
 {% endblock %}

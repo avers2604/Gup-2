@@ -1,15 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Вычитка OCR · АИС «БЗ ГЭТ»{% endblock %}
 {% block content %}
-  <p class="label">Распознавание сканов</p>
-  <h1 class="title">Вычитка OCR</h1>
-  <p class="caption" style="margin-top: var(--space-2);">
+ <div class="stack">
+  <header class="page-header stack">
+    <p class="eyebrow">Распознавание сканов</p>
+    <h1 class="title">Вычитка OCR</h1>
+    <p class="caption">
     Документы, распознанные с уверенностью ниже порога для своей категории.
     Пока текст не вычитан, документ хуже находится поиском: в формуле
     ранжирования участвует именно распознанный текст.
-  </p>
+    </p>
+  </header>
 
-  <div style="margin-top: var(--space-8);">
+  <div class="stack stack--tight">
     {% if page_obj %}
       <p class="caption">
         Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
@@ -53,7 +56,7 @@
       </div>
 
       {% if page_obj.has_other_pages %}
-        <div style="display:flex; gap: var(--space-4); margin-top: var(--space-6);">
+        <div class="row">
           {% if page_obj.has_previous %}
             <a class="btn btn--ghost" href="?page={{ page_obj.previous_page_number }}">Назад</a>
           {% endif %}
@@ -68,4 +71,5 @@
       </div>
     {% endif %}
   </div>
+ </div>
 {% endblock %}
