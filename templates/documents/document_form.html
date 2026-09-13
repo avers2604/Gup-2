@@ -1,5 +1,13 @@
 {% extends "base.html" %}
 {% block title %}{% if document %}Правка {{ document.reg_number }}{% else %}Новая карточка НРД{% endif %} · АИС «БЗ ГЭТ»{% endblock %}
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'documents:list' %}">Документы</a></li>
+      <li aria-current="page">{% if document %}{{ document.reg_number }}{% else %}Регистрация{% endif %}</li>
+    </ol>
+  </nav>
+{% endblock %}
 {% block content %}
   <p class="label">
     <a href="{% url 'documents:list' %}">Реестр НРД</a>
