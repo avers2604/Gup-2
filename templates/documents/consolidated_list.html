@@ -5,7 +5,7 @@
   <header class="page-header stack">
     <p class="eyebrow">Действующие требования</p>
     <h1 class="title">Сводные редакции</h1>
-    <p class="caption">
+    <p class="caption measure">
     Документы, в которые внесены действующие изменения. Сводка собирает
     базовый документ и все изменяющие его документы в одном месте — она
     не порождает единый «сшитый» текст: система хранит сканы, а не
@@ -34,7 +34,7 @@
             {% for document in documents %}
               <tr>
                 <td>{{ document.reg_number }}</td>
-                <td>{{ document.title }}</td>
+                <td>{{ document.title }} {% include "ui/access_pill.html" %}</td>
                 <td>{{ document.issuer_dept.name }}</td>
                 <td class="data">{{ document.amendment_count }}</td>
                 <td>
@@ -67,7 +67,7 @@
   {% if stale %}
     <div class="card stack stack--tight">
       <p class="label">Статус разошёлся со связями</p>
-      <p class="caption">
+      <p class="caption measure">
         У этих документов статус «Действует с изм.», но ни одного
         действующего изменения не осталось — все изменяющие документы
         отменены или аннулированы. Статус возвращает в «Действует»
@@ -81,7 +81,7 @@
             {% for document in stale %}
               <tr>
                 <td>{{ document.reg_number }}</td>
-                <td>{{ document.title }}</td>
+                <td>{{ document.title }} {% include "ui/access_pill.html" %}</td>
                 <td><a href="{% url 'documents:detail' document.pk %}">Карточка</a></td>
               </tr>
             {% endfor %}

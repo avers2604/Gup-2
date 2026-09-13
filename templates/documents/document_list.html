@@ -68,9 +68,7 @@
                 <td class="data"><a href="{% url 'documents:detail' doc.pk %}">{{ doc.reg_number }}</a></td>
                 <td>
                   {{ doc.title }}
-                  {% if doc.access_level == 'restricted' %}
-                    <span class="access-pill">ДСП<span class="sr-only"> — для служебного пользования</span></span>
-                  {% endif %}
+                  {% include "ui/access_pill.html" with document=doc %}
                 </td>
                 <td>{{ doc.get_doc_type_display }}</td>
                 <td>
@@ -109,14 +107,14 @@
       <div class="card empty-state stack stack--tight">
         {% if applied_filters %}
           <p class="heading">Под фильтры не подошёл ни один документ</p>
-          <p class="caption">
+          <p class="caption measure">
             В реестре есть документы, но заданным условиям они не отвечают.
             Снимите часть фильтров или расширьте диапазон дат.
           </p>
           <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить фильтры</a>
         {% else %}
           <p class="heading">В реестре пока нет документов</p>
-          <p class="caption">
+          <p class="caption measure">
             {% if can_edit %}
               Зарегистрируйте первую карточку НРД — она появится здесь сразу
               после сохранения черновика.

@@ -132,3 +132,113 @@ class LayoutComesFromClassesTests(SimpleTestCase):
             "Раскладка задана инлайном вместо классов static/css/layout.css: "
             + "; ".join(f"{name} ({', '.join(sorted(props))})" for name, props in sorted(offenders.items())),
         )
+
+
+class AnchorButtonsAreNotUnderlinedTests(SimpleTestCase):
+    """Кнопка, собранная из <a>, не должна выглядеть подчёркнутой ссылкой.
+
+    Повод — первый живой просмотр интерфейса. Из 42 «кнопок» в шаблонах 41
+    — это `<a class="btn …>`: «Зарегистрировать документ», «Сбросить»,
+    «Добавить связь», вся пагинация. Браузер подчёркивает `<a>` по
+    умолчанию, `.btn` подчёркивание не гасил — и заливка выходила с
+    подчёркнутой подписью. Ни один тест этого не видел: класс существует,
+    шаблон рендерится, CSS валиден.
+
+    Обратная половина правила не менее важна. Настоящие ссылки — рег.
+    номер в таблице реестра, пункт хлебных крошек — подчёркиваются
+    намеренно: DESIGN.md, правило 1, цвет не может быть единственным
+    носителем смысла. Поэтому тест требует не «нигде нет подчёркивания», а
+    ровно двух вещей: `.btn` его гасит, базовое правило `a` — нет.
+    """
+
+    _RULE = re.compile(r"([^{}]+)\{([^{}]*)\}")
+
+    def _declarations_of(self, selector: str) -> str:
+        """Тело правила с ровно таким селектором (без комментариев)."""
+        bodies = [
+            body
+            for head, body in self._RULE.findall(_css_text())
+            if head.strip() == selector
+        ]
+        self.assertEqual(
+            len(bodies), 1, f"Правило `{selector}` должно быть ровно одно, найдено {len(bodies)}"
+        )
+        return bodies[0]
+
+    def test_btn_removes_the_link_underline(self):
+        self.assertRegex(
+            self._declarations_of(".btn"),
+            r"text-decoration\s*:\s*none",
+            "`.btn` не гасит подчёркивание — ссылки-кнопки рисуются с подчёркнутой подписью",
+        )
+
+    def test_plain_links_keep_their_underline(self):
+        self.assertNotRegex(
+            self._declarations_of("a"),
+            r"text-decoration\s*:\s*none",
+            "Базовое правило `a` сняло подчёркивание со всех ссылок разом: "
+            "цвет остался их единственным признаком (DESIGN.md, правило 1)",
+        )
+
+    def test_every_anchor_styled_as_a_button_carries_the_btn_class(self):
+        """Модификатор .btn--* без базового .btn остался бы подчёркнутым."""
+        offenders = {}
+        for path in _template_files():
+            for tag in re.findall(r"<a\b[^>]*>", path.read_text(encoding="utf-8")):
+                classes = re.search(r'class="([^"]*)"', tag)
+                if classes and "btn--" in classes.group(1):
+                    names = set(classes.group(1).split())
+                    if "btn" not in names:
+                        offenders.setdefault(path.name, []).append(classes.group(1))
+
+        self.assertEqual(offenders, {}, f"Модификатор кнопки без базового класса: {offenders}")
+
+
+class ExplanatoryTextHasReadableMeasureTests(SimpleTestCase):
+    """Длина строки пояснительного текста ограничена.
+
+    Ещё одна находка живого просмотра. Пояснение под заголовком «Сводные
+    редакции» — 217 символов — растягивалось на всю ширину контейнера:
+    на 1280 px это около 160 знаков в строке при норме 60–75. Глаз
+    теряет начало следующей строки, и текст, написанный ради ясности,
+    читается хуже, чем не написанный вовсе.
+
+    Класс `.measure` (60ch) для этого и заведён в layout.css ещё в
+    партии UI-1 — но применён тогда не был: посмотреть было не на что.
+    Тест закрывает разрыв между «примитив есть» и «примитив применён».
+    """
+
+    #: Порог в знаках. Короткая подпись («Связей нет», «11.09.2026») в
+    #: ограничении не нуждается — она и так не дотягивает до края.
+    _LONG = 110
+
+    _CAPTION = re.compile(r'<p class="caption([^"]*)">(.*?)</p>', re.S)
+    _TEMPLATE_TAG = re.compile(r"\{[%{].*?[%}]\}", re.S)
+
+    def _visible_length(self, raw: str) -> int:
+        """Длина без тегов шаблона: `{{ x }}` — это не видимый текст."""
+        return len(" ".join(self._TEMPLATE_TAG.sub("", raw).split()))
+
+    def test_long_captions_are_limited_to_a_readable_measure(self):
+        offenders = []
+        for path in _template_files():
+            for match in self._CAPTION.finditer(path.read_text(encoding="utf-8")):
+                extra, body = match.group(1), match.group(2)
+                length = self._visible_length(body)
+                if length > self._LONG and "measure" not in extra.split():
+                    offenders.append(f"{path.name}: {length} знаков — {body.strip()[:60]}…")
+
+        self.assertEqual(
+            offenders,
+            [],
+            "Пояснение длиннее 110 знаков без .measure — строка растянется "
+            "на всю ширину контейнера:\n" + "\n".join(offenders),
+        )
+
+    def test_measure_is_defined_and_is_a_width_limit(self):
+        """Класс должен существовать и ограничивать именно ширину."""
+        self.assertRegex(
+            _css_text(),
+            r"\.measure\s*\{[^}]*max-width\s*:\s*\d+ch",
+            ".measure должен ограничивать ширину в ch — единице, привязанной к кеглю",
+        )

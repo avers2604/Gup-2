@@ -15,7 +15,7 @@
         {% include "ui/field.html" with field=form.category %}
         {% include "ui/field.html" with field=form.service %}
       </div>
-      <p class="caption">
+      <p class="caption measure">
         Категория и служба используются только для разрешения неоднозначных
         сокращений тезауруса (например «ТП»), не фильтруют сами документы.
       </p>
@@ -47,7 +47,7 @@
               {% for doc in results %}
                 <tr>
                   <td class="data">{{ doc.reg_number }}</td>
-                  <td>{{ doc.title }}</td>
+                  <td>{{ doc.title }} {% include "ui/access_pill.html" with document=doc %}</td>
                   <td>
                     <span class="status-pill {{ doc.status|status_pill }}">
                       {{ doc.get_status_display }}

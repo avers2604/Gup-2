@@ -61,7 +61,44 @@
   <a class="skip-link" href="#content">Перейти к содержимому</a>
   <header class="app-header">
     <div class="container">
-      <strong>АИС «БЗ ГЭТ»</strong>
+      {% comment %}
+        Две строки, а не одна. Шапка с семью пунктами меню, именем
+        пользователя и кнопкой выхода в один ряд не помещалась даже на
+        1280 px: flex переносил её на три строки, первая из которых
+        оставалась почти пустой — название системы слева и ничего справа.
+        Разделение по смыслу устраняет и перенос, и семантическую ошибку:
+        форма выхода и ссылка в личный кабинет — это не навигация по
+        разделам, и внутри <nav aria-label="Основная навигация"> им было
+        не место.
+      {% endcomment %}
+      <div class="app-header__top">
+        <strong>АИС «БЗ ГЭТ»</strong>
+        <div class="app-header__session">
+          {% comment %}
+            Кнопка, а не ссылка: переключение темы ничего не открывает и
+            никуда не ведёт. Подпись живёт в aria-label, потому что видимый
+            текст здесь — пиктограмма: она короче и не ломает перенос
+            навигации, но сама по себе для скринридера ничего не значит.
+          {% endcomment %}
+          <button id="theme-toggle" class="theme-toggle" type="button"
+                  aria-label="Тема оформления">◐</button>
+          {% if user.is_authenticated %}
+            {% comment %}
+              п.8.2 решения Заказчика: имя и роль в шапке ведут в личный
+              кабинет. get_role_display() берёт название прямо из
+              User.Role.choices — при изменении списка ролей шаблон править
+              не потребуется.
+            {% endcomment %}
+            <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
+            <form method="post" action="{% url 'iam:logout' %}">
+              {% csrf_token %}
+              <button class="btn btn--ghost" type="submit">Выйти</button>
+            </form>
+          {% else %}
+            <a href="{% url 'iam:login' %}">Войти</a>
+          {% endif %}
+        </div>
+      </div>
       <nav aria-label="Основная навигация">
         <a href="{% url 'search_ocr:search' %}"{% nav_active 'search_ocr:*' %}>Поиск</a>
         <a href="{% url 'documents:list' %}"{% nav_active 'documents:list' 'documents:detail' 'documents:create' 'documents:edit' 'documents:status' 'documents:relation_create' 'documents:relation_delete' 'documents:file-link' %}>Документы</a>
@@ -74,29 +111,6 @@
           <a href="{% url 'audit:list' %}"{% nav_active 'audit:*' %}>Журнал аудита</a>
         {% endif %}
         <a href="/admin/">Администрирование</a>
-        {% comment %}
-          Кнопка, а не ссылка: переключение темы ничего не открывает и
-          никуда не ведёт. Подпись живёт в aria-label, потому что видимый
-          текст здесь — пиктограмма: она короче и не ломает перенос
-          навигации, но сама по себе для скринридера ничего не значит.
-        {% endcomment %}
-        <button id="theme-toggle" class="theme-toggle" type="button"
-                aria-label="Тема оформления">◐</button>
-        {% if user.is_authenticated %}
-          {% comment %}
-            п.8.2 решения Заказчика: имя и роль в шапке ведут в личный
-            кабинет. get_role_display() берёт название прямо из
-            User.Role.choices — при изменении списка ролей шаблон править
-            не потребуется.
-          {% endcomment %}
-          <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
-          <form method="post" action="{% url 'iam:logout' %}">
-            {% csrf_token %}
-            <button class="btn btn--ghost" type="submit">Выйти</button>
-          </form>
-        {% else %}
-          <a href="{% url 'iam:login' %}">Войти</a>
-        {% endif %}
       </nav>
     </div>
   </header>
