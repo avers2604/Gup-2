@@ -6,6 +6,11 @@ from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
+from pdf2image.exceptions import (
+    PDFInfoNotInstalledError,
+    PDFPageCountError,
+    PDFPopplerTimeoutError,
+)
 
 from apps.core import upload_validation
 from apps.core.tests.upload_fixtures import (
@@ -255,3 +260,39 @@ class TemporaryUploadTests(SimpleTestCase):
 
         self.assertEqual(source.tell(), 0)
         self.assertFalse(os.path.exists(path_value))
+
+
+class PDFValidationTests(SimpleTestCase):
+    @mock.patch("apps.core.upload_validation.pdfinfo_from_path", return_value={"Pages": 1})
+    def test_valid_pdf_passes(self, pdfinfo):
+        upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"pdf"))
+        self.assertEqual(pdfinfo.call_count, 1)
+
+    @mock.patch("apps.core.upload_validation.pdfinfo_from_path", return_value={"Pages": 0})
+    def test_zero_page_pdf_rejects(self, pdfinfo):
+        with self.assertRaises(upload_validation.InvalidPDF):
+            upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"pdf"))
+
+    @mock.patch(
+        "apps.core.upload_validation.pdfinfo_from_path",
+        side_effect=PDFPageCountError("bad"),
+    )
+    def test_parse_error_is_user_input_failure(self, pdfinfo):
+        with self.assertRaises(upload_validation.InvalidPDF):
+            upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"bad"))
+
+    @mock.patch(
+        "apps.core.upload_validation.pdfinfo_from_path",
+        side_effect=PDFInfoNotInstalledError("missing"),
+    )
+    def test_missing_poppler_is_fail_closed(self, pdfinfo):
+        with self.assertRaises(upload_validation.FormatValidatorUnavailable):
+            upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"pdf"))
+
+    @mock.patch(
+        "apps.core.upload_validation.pdfinfo_from_path",
+        side_effect=PDFPopplerTimeoutError("timeout"),
+    )
+    def test_poppler_timeout_is_fail_closed(self, pdfinfo):
+        with self.assertRaises(upload_validation.FormatValidatorUnavailable):
+            upload_validation.validate_pdf(SimpleUploadedFile("x.pdf", b"pdf"))
