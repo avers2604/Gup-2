@@ -1,0 +1,84 @@
+name: Task 6 materialize verified inputs
+
+on:
+  push:
+    branches: [feat/upload-validation-56]
+    paths:
+      - .github/workflows/task6-materialize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify veraPDF release and vendor exact corpus fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+
+          archive="verapdf-greenfield-1.30.2-installer.zip"
+          base="https://software.verapdf.org/rel/1.30"
+          curl -fsSL -o "$work/$archive" "$base/$archive"
+          curl -fsSL -o "$work/$archive.asc" "$base/$archive.asc"
+          curl -fsSL -o "$work/KEY" "https://software.verapdf.org/keys/KEY"
+
+          export GNUPGHOME="$work/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          gpg --batch --import "$work/KEY"
+          fingerprint="$(gpg --batch --with-colons --fingerprint 78B17FE7 | awk -F: '$1 == "fpr" {print $10; exit}')"
+          test "$fingerprint" = "13DD102B4DD69354D12DE5A83184863278B17FE7"
+          gpg --batch --verify "$work/$archive.asc" "$work/$archive"
+
+          mkdir -p deploy/verapdf apps/core/tests/fixtures
+          sha256sum "$work/$archive" | sed "s#  $work/#  #" > deploy/verapdf/SHA256SUMS
+
+          pass="apps/core/tests/fixtures/pdfa-2b-valid.pdf"
+          fail="apps/core/tests/fixtures/pdfa-2b-invalid.pdf"
+          corpus="https://raw.githubusercontent.com/veraPDF/veraPDF-corpus/master/PDF_A-2b/6.1%20File%20structure/6.1.2%20File%20header"
+          curl -fsSL -o "$pass" "$corpus/veraPDF%20test%20suite%206-1-2-t02-pass-a.pdf"
+          curl -fsSL -o "$fail" "$corpus/veraPDF%20test%20suite%206-1-2-t02-fail-a.pdf"
+          test "$(git hash-object "$pass")" = "1bad81119b6bbf2cb52d2713f57955bf32bbe749"
+          test "$(git hash-object "$fail")" = "f01744ef9a17e5a6442a5de7644f6d251e7cf879"
+
+          cat > apps/core/tests/fixtures/README.md <<'EOF'
+          # veraPDF corpus fixtures
+
+          These two PDF/A-2b fixtures are vendored verbatim from
+          `veraPDF/veraPDF-corpus` (`master`) and are used only for real-runtime
+          Poppler/veraPDF smoke tests.
+
+          Retrieval date: 2026-09-12.
+
+          - `pdfa-2b-valid.pdf`
+            - upstream path: `PDF_A-2b/6.1 File structure/6.1.2 File header/veraPDF test suite 6-1-2-t02-pass-a.pdf`
+            - Git blob: `1bad81119b6bbf2cb52d2713f57955bf32bbe749`
+          - `pdfa-2b-invalid.pdf`
+            - upstream path: `PDF_A-2b/6.1 File structure/6.1.2 File header/veraPDF test suite 6-1-2-t02-fail-a.pdf`
+            - Git blob: `f01744ef9a17e5a6442a5de7644f6d251e7cf879`
+
+          Upstream repository: `https://github.com/veraPDF/veraPDF-corpus`.
+          The veraPDF corpus is licensed under Creative Commons Attribution 4.0
+          International (CC BY 4.0), as stated in its upstream README.
+          EOF
+
+          echo "Verified fingerprint: $fingerprint"
+          cat deploy/verapdf/SHA256SUMS
+          git hash-object "$pass" "$fail"
+
+      - name: Commit verified inputs to the feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/verapdf/SHA256SUMS apps/core/tests/fixtures
+          git commit -m "test: vendor verified veraPDF runtime fixtures"
+          git push origin HEAD:feat/upload-validation-56
