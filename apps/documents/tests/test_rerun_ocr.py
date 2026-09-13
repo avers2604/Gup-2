@@ -1,79 +1,115 @@
-"""Тесты management-команды rerun_ocr — ретроактивная постановка OCR в
-очередь. run_ocr_for_document.delay замокан: команда проверяется только на
-то, какие документы она отбирает и сколько задач ставит, реальный прогон
-задачи уже покрыт test_ocr_task.py."""
+"""Тесты management-команды rerun_ocr — durable постановка OCR в очередь.
+
+Штатная загрузка оригинала уже использует apps.core.outbox: intent хранится
+в PostgreSQL и не теряется при недоступном Redis. Эти тесты проверяют тот же
+контракт для ручного rerun, а не внутренний вызов Celery `.delay()`.
+"""
 from io import StringIO
-from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase
 
+from apps.core.models import TaskOutbox
 from apps.documents.models import NormativeDocument
 
 from .factories import make_document
 
 
+TASK_NAME = "apps.documents.tasks.run_ocr_for_document"
+
+
+def _attach_original(document, filename):
+    """Добавить имя файла без model.save() и его автоматического OCR outbox."""
+    NormativeDocument.objects.filter(pk=document.pk).update(files_original=filename)
+    return document
+
+
+def _queued_document_ids():
+    return {
+        args[0]
+        for args in TaskOutbox.objects.filter(task_name=TASK_NAME).values_list("args", flat=True)
+    }
+
+
 class RerunOcrCommandTests(TestCase):
     def test_default_only_queues_not_processed_documents_with_a_file(self):
-        not_processed = make_document(
-            reg_number="RQ-1", files_original="documents/originals/2026/01/rq1.pdf",
-            ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+        not_processed = _attach_original(
+            make_document(reg_number="RQ-1", ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED),
+            "documents/originals/2026/01/rq1.pdf",
         )
-        make_document(
-            reg_number="RQ-2", files_original="documents/originals/2026/01/rq2.pdf",
-            ocr_status=NormativeDocument.OcrStatus.INDEXED,
+        _attach_original(
+            make_document(reg_number="RQ-2", ocr_status=NormativeDocument.OcrStatus.INDEXED),
+            "documents/originals/2026/01/rq2.pdf",
         )
         make_document(reg_number="RQ-3", ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED)
 
-        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay") as mock_delay:
-            call_command("rerun_ocr")
+        call_command("rerun_ocr")
 
-        mock_delay.assert_called_once_with(str(not_processed.pk))
+        self.assertEqual(_queued_document_ids(), {str(not_processed.pk)})
 
     def test_force_queues_already_processed_documents_too(self):
-        not_processed = make_document(
-            reg_number="RQ-4", files_original="documents/originals/2026/01/rq4.pdf",
-            ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+        not_processed = _attach_original(
+            make_document(reg_number="RQ-4", ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED),
+            "documents/originals/2026/01/rq4.pdf",
         )
-        indexed = make_document(
-            reg_number="RQ-5", files_original="documents/originals/2026/01/rq5.pdf",
-            ocr_status=NormativeDocument.OcrStatus.INDEXED,
+        indexed = _attach_original(
+            make_document(reg_number="RQ-5", ocr_status=NormativeDocument.OcrStatus.INDEXED),
+            "documents/originals/2026/01/rq5.pdf",
         )
 
-        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay") as mock_delay:
-            call_command("rerun_ocr", "--force")
+        call_command("rerun_ocr", "--force")
 
-        queued_ids = {call.args[0] for call in mock_delay.call_args_list}
-        self.assertEqual(queued_ids, {str(not_processed.pk), str(indexed.pk)})
+        self.assertEqual(_queued_document_ids(), {str(not_processed.pk), str(indexed.pk)})
 
     def test_documents_without_a_file_are_never_queued(self):
         make_document(reg_number="RQ-6", ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED)
 
-        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay") as mock_delay:
-            call_command("rerun_ocr", "--force")
+        call_command("rerun_ocr", "--force")
 
-        mock_delay.assert_not_called()
+        self.assertFalse(TaskOutbox.objects.filter(task_name=TASK_NAME).exists())
 
     def test_limit_caps_number_of_queued_documents(self):
         for i in range(5):
-            make_document(
-                reg_number=f"RQ-LIM-{i}", files_original=f"documents/originals/2026/01/rq-lim-{i}.pdf",
-                ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+            _attach_original(
+                make_document(
+                    reg_number=f"RQ-LIM-{i}",
+                    ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+                ),
+                f"documents/originals/2026/01/rq-lim-{i}.pdf",
             )
 
-        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay") as mock_delay:
-            call_command("rerun_ocr", "--limit=2")
+        call_command("rerun_ocr", "--limit=2")
 
-        self.assertEqual(mock_delay.call_count, 2)
+        self.assertEqual(TaskOutbox.objects.filter(task_name=TASK_NAME).count(), 2)
 
     def test_prints_queued_count(self):
-        make_document(
-            reg_number="RQ-7", files_original="documents/originals/2026/01/rq7.pdf",
-            ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+        _attach_original(
+            make_document(reg_number="RQ-7", ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED),
+            "documents/originals/2026/01/rq7.pdf",
         )
         out = StringIO()
 
-        with patch("apps.documents.management.commands.rerun_ocr.run_ocr_for_document.delay"):
-            call_command("rerun_ocr", stdout=out)
+        call_command("rerun_ocr", stdout=out)
 
         self.assertIn("Поставлено в очередь: 1", out.getvalue())
+
+    def test_rerun_persists_durable_outbox_intent_before_delivery(self):
+        """Ручной rerun не должен теряться при недоступном брокере Redis."""
+        document = _attach_original(
+            make_document(
+                reg_number="RQ-DURABLE",
+                ocr_status=NormativeDocument.OcrStatus.NOT_PROCESSED,
+            ),
+            "documents/originals/2026/01/rq-durable.pdf",
+        )
+
+        call_command("rerun_ocr")
+
+        entry = TaskOutbox.objects.get(
+            task_name=TASK_NAME,
+            args=[str(document.pk)],
+        )
+        # TestCase держит внешнюю транзакцию, поэтому on_commit-dispatch ещё
+        # не выполнялся: можно доказать, что durable intent существует ДО
+        # фактической доставки в Celery.
+        self.assertIsNone(entry.delivered_at)

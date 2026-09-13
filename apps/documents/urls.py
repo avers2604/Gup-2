@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import file_views, views
+from . import file_views, relation_views, views
 
 app_name = "documents"
 
@@ -28,6 +28,6 @@ urlpatterns = [
     ),
     path(
         "<uuid:pk>/relations/<int:relation_id>/delete/",
-        views.DocumentRelationDeleteView.as_view(), name="relation_delete",
+        relation_views.DocumentRelationDeleteView.as_view(), name="relation_delete",
     ),
 ]

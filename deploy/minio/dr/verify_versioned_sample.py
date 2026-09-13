@@ -126,7 +126,7 @@ def verify_one(source, target, bucket: str, item: ObjectVersion) -> dict[str, st
     row = {
         "key": item.key,
         "source_version_id": item.version_id,
-        "target_version_id": item.version_id,
+        "target_version_id": "",
         "source_sha256": "",
         "target_sha256": "",
         "source_retention_mode": "",
@@ -140,9 +140,11 @@ def verify_one(source, target, bucket: str, item: ObjectVersion) -> dict[str, st
     }
     try:
         # Bucket replication must preserve the source version ID. Reading target
-        # by the same ID proves both version existence and ID equality.
+        # by the same ID proves both version existence and ID equality. Do not
+        # claim the target ID in evidence until that read has actually succeeded.
         row["source_sha256"] = _sha256(source, bucket, item)
         row["target_sha256"] = _sha256(target, bucket, item)
+        row["target_version_id"] = item.version_id
         source_mode, source_until = _retention(source, bucket, item)
         target_mode, target_until = _retention(target, bucket, item)
         row["source_retention_mode"] = source_mode

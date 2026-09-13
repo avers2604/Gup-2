@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
+from apps.core.outbox import enqueue
 from apps.documents.models import NormativeDocument
-from apps.documents.tasks import run_ocr_for_document
 
 
 class Command(BaseCommand):
@@ -32,7 +32,12 @@ class Command(BaseCommand):
 
         count = 0
         for document in queryset:
-            run_ocr_for_document.delay(str(document.pk))
+            # Тот же durable delivery boundary, что используется при штатной
+            # загрузке/замене оригинала в NormativeDocument.save(). Прямой
+            # Celery .delay() теряет ручной rerun, если Redis недоступен в
+            # момент запуска команды; TaskOutbox сохраняет intent в БД и
+            # повторит доставку через dispatch_pending().
+            enqueue("apps.documents.tasks.run_ocr_for_document", [str(document.pk)])
             count += 1
 
         self.stdout.write(self.style.SUCCESS(f"Поставлено в очередь: {count}"))

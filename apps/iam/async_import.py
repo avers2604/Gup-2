@@ -4,10 +4,13 @@ import uuid
 
 from django.core.files import File
 
+from apps.core.outbox import enqueue
 from apps.core.storage import working_storage
 
 from .models import User
-from .tasks import run_personnel_import_task
+
+
+PERSONNEL_IMPORT_TASK = "apps.iam.tasks.run_personnel_import_task"
 
 
 def stage_personnel_import(file_obj, *, original_name: str = "personnel.xlsx") -> str:
@@ -23,10 +26,17 @@ def stage_personnel_import(file_obj, *, original_name: str = "personnel.xlsx") -
 
 
 def enqueue_personnel_import(file_obj, *, actor: User | None = None, original_name: str = "personnel.xlsx") -> str:
-    """Stage an Excel file and enqueue its import. Returns the Celery task id."""
+    """Stage an Excel file and durably enqueue its import.
+
+    Возвращаем UUID TaskOutbox: dispatcher использует его же как Celery task_id,
+    поэтому внешний контракт management-команды `--async` сохраняется — этим
+    идентификатором можно опрашивать AsyncResult после фактической доставки.
+    Отказ брокера после staging не теряет импорт: outbox остаётся в PostgreSQL
+    и будет повторно доставлен через dispatch_pending().
+    """
     storage_name = stage_personnel_import(file_obj, original_name=original_name)
-    task = run_personnel_import_task.delay(
-        storage_name=storage_name,
-        actor_id=str(actor.pk) if actor else None,
+    entry = enqueue(
+        PERSONNEL_IMPORT_TASK,
+        [storage_name, str(actor.pk) if actor else None],
     )
-    return task.id
+    return str(entry.pk)

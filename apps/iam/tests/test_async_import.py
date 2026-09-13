@@ -6,10 +6,11 @@ import openpyxl
 from django.core.files.storage import FileSystemStorage
 from django.test import TestCase
 
+from apps.core.models import TaskOutbox
 from apps.iam.models import Department, User
 from apps.iam.services import HEADER
 
-from ..async_import import stage_personnel_import
+from ..async_import import enqueue_personnel_import, stage_personnel_import
 from ..tasks import run_personnel_import_task
 
 TEST_PERSONNEL_NUMBER = "909001"
@@ -106,3 +107,27 @@ class AsyncPersonnelImportTests(TestCase):
             if touched_at is not None:
                 user.refresh_from_db()
                 self.assertEqual(user.updated_at, touched_at)
+
+    def test_enqueue_survives_broker_outage_with_durable_intent(self):
+        """После staging отказ Redis не должен терять импорт или оставлять его без task intent."""
+        with tempfile.TemporaryDirectory() as location:
+            storage = FileSystemStorage(location=location)
+            with (
+                mock.patch("apps.iam.async_import.working_storage", return_value=storage),
+                mock.patch(
+                    "celery.app.task.Task.apply_async",
+                    side_effect=ConnectionError("redis unavailable"),
+                ),
+            ):
+                task_id = enqueue_personnel_import(
+                    _xlsx_bytes(self.department_path),
+                    original_name="personnel.xlsx",
+                )
+
+            entry = TaskOutbox.objects.get(
+                task_name="apps.iam.tasks.run_personnel_import_task"
+            )
+            self.assertEqual(str(entry.pk), task_id)
+            self.assertEqual(entry.args[1], None)
+            self.assertTrue(storage.exists(entry.args[0]))
+            self.assertIsNone(entry.delivered_at)
