@@ -1,5 +1,6 @@
 """Web GUI рабочих мест — реестр и карточка НРД (ТЗ 4.1)."""
 import datetime
+from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, TestCase
@@ -347,7 +348,8 @@ class DocumentCreationUploadTests(_WriteTestSetup, ClamdTestCase):
     # Свой порт, чтобы не пересечься с другими ClamdTestCase при --parallel.
     clamd_port = 13312
 
-    def test_methodist_creates_draft(self):
+    @patch("apps.documents.models.upload_validation.validate_pdfa_2b")
+    def test_methodist_creates_draft(self, _pdfa):
         scan = SimpleUploadedFile("scan.pdf", b"%PDF-1.4 test", content_type="application/pdf")
         response = self._client(self.methodist).post(
             reverse("documents:create"), self._form_data(files_original=scan)
