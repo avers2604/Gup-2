@@ -124,8 +124,25 @@
   padding: var(--space-5);
 }
 
-/* ---------- Таблица (веб-эквивалент Treeview) ---------- */
-.table-scroll { overflow-x: auto; }
+/* ---------- Таблица (веб-эквивалент Treeview) ----------
+   Реестр и журнал показывают по 25–50 строк, и до сих пор у строки не
+   было ни одного состояния: при горизонтальном скролле (а min-width его
+   гарантирует на ноутбуке) глаз терял строку на полпути и читал реквизит
+   от соседнего документа. */
+.table-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  /* Тень у правого края, пока справа есть непоказанные колонки. Сама по
+     себе полоса прокрутки на трекпаде не видна, пока её не тронешь, и
+     «таблица обрезана» читается как «данных больше нет». Приём на
+     background-attachment: local — фон уезжает вместе с содержимым, и
+     тень гаснет сама, когда доскроллили до конца. Скрипт не нужен. */
+  background:
+    linear-gradient(to right, var(--surface), transparent) left center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--surface), transparent) right center / 24px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, var(--shadow-scroll-edge), transparent) left center / 12px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, var(--shadow-scroll-edge), transparent) right center / 12px 100% no-repeat scroll;
+}
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -137,12 +154,35 @@
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
 }
+/* Липкой шапки здесь НЕТ намеренно. Она отсчитывается от ближайшего
+   предка со скроллом, то есть от .table-scroll, а для этого контейнеру
+   нужна ограниченная высота — и тогда поверх страничной полосы
+   прокрутки появляется вторая, внутри таблицы. На выдаче по 25–50 строк
+   (везде пагинация) лекарство хуже болезни: шапка и так остаётся на
+   экране. Если появится экран с длинной непагинированной таблицей, к
+   нему заводится отдельный модификатор с высотой, а не общее правило. */
 .table thead th {
   background: var(--surface-2);
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: .04em;
   color: var(--text-muted);
+}
+
+/* Подсветка строки под курсором. Не зебра: чередование окрашивает строки
+   постоянно и спорит со статус-плашками, ради которых цвет в этой
+   таблице и нужен. Подсветка появляется только там, где сейчас взгляд. */
+.table tbody tr:hover { background: var(--surface-2); }
+/* Клавиатура ведёт по ссылкам внутри строки, а не по строкам, поэтому
+   подсвечивается строка, внутри которой есть элемент в фокусе. */
+.table tbody tr:focus-within { background: var(--surface-2); }
+
+/* Плотный режим — для журнала аудита: там строк больше, а каждая короче,
+   и стандартная высота растягивает страницу без пользы. */
+.table--dense th, .table--dense td { padding: 6px 12px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .table tbody tr { transition: background-color .1s ease; }
 }
 
 /* Заголовок-сортировка. Направление несёт и стрелка, и aria-sort на самой

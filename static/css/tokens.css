@@ -58,6 +58,10 @@
   --font-family: "Moscow Sans", "Echoes Sans", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
 
   --shadow-card: 0 1px 2px rgba(27, 33, 64, .05), 0 6px 20px -10px rgba(27, 33, 64, .18);
+  /* Тень у края прокручиваемой таблицы. Отдельный токен, а не цвет в
+     месте применения: в тёмной теме она обязана быть темнее фона, а не
+     светлее, иначе выглядит свечением. */
+  --shadow-scroll-edge: rgba(27, 33, 64, .14);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -69,6 +73,7 @@
     --text: #F1F2FA;
     --text-muted: #AEB4D6;
     --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 6px 20px -10px rgba(0, 0, 0, .55);
+    --shadow-scroll-edge: rgba(0, 0, 0, .5);
   }
 }
 
@@ -80,4 +85,5 @@
   --text: #F1F2FA;
   --text-muted: #AEB4D6;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 6px 20px -10px rgba(0, 0, 0, .55);
+  --shadow-scroll-edge: rgba(0, 0, 0, .5);
 }
