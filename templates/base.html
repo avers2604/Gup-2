@@ -6,9 +6,11 @@
   <title>{% block title %}АИС «БЗ ГЭТ»{% endblock %}</title>
   {% load static %}
   {% load navigation %}
+  {% load icons %}
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
   <link rel="stylesheet" href="{% static 'css/layout.css' %}">
+  <link rel="stylesheet" href="{% static 'css/shell.css' %}">
   <link rel="stylesheet" href="{% static 'css/components.css' %}">
   {# Web GUI — Django Templates + HTMX + Alpine.js (решение Заказчика): #}
   {# HTMX — частичные обновления без полной перезагрузки (2FA enroll и #}
@@ -34,6 +36,7 @@
   <script src="{% static 'vendor/htmx-1.9.12.min.js' %}"></script>
   <script src="{% static 'vendor/alpine-3.14.1.min.js' %}" defer></script>
   <script src="{% static 'js/theme.js' %}" defer></script>
+  <script src="{% static 'js/sidebar.js' %}" defer></script>
   <script>
     // hx-post/hx-get элементы вне <form> (например, кнопка "Начать
     // подключение" на странице 2FA) не несут csrf-токен сами по
@@ -59,28 +62,78 @@
     уходит в разметку, что и поймал test_pages_contain_no_raw_template_comments.
   {% endcomment %}
   <a class="skip-link" href="#content">Перейти к содержимому</a>
-  <header class="app-header">
-    <div class="container">
-      {% comment %}
-        Две строки, а не одна. Шапка с семью пунктами меню, именем
-        пользователя и кнопкой выхода в один ряд не помещалась даже на
-        1280 px: flex переносил её на три строки, первая из которых
-        оставалась почти пустой — название системы слева и ничего справа.
-        Разделение по смыслу устраняет и перенос, и семантическую ошибку:
-        форма выхода и ссылка в личный кабинет — это не навигация по
-        разделам, и внутри <nav aria-label="Основная навигация"> им было
-        не место.
-      {% endcomment %}
-      <div class="app-header__top">
-        <strong>АИС «БЗ ГЭТ»</strong>
-        <div class="app-header__session">
+  <div class="app-shell{% if not user.is_authenticated %} app-shell--bare{% endif %}">
+    {% comment %}
+      Боковое меню. В шапке только знак, без подписи: название системы
+      стоит в <title> и в хлебных крошках, а в меню оно занимало бы две
+      строки из четырёх, ничего не добавляя тому, кто уже вошёл.
+
+      До входа меню не рисуется вовсе. Не ради вида: каждая его ссылка
+      всё равно вернула бы на форму входа, то есть это меню, которое
+      ничего не делает, — и одновременно опись разделов системы,
+      показанная любому, кто открыл страницу входа. Утечкой данных это
+      не является, но и сообщать структуру до аутентификации незачем.
+    {% endcomment %}
+    {% if user.is_authenticated %}
+    <aside class="sidebar" id="sidebar">
+      <a class="sidebar__brand" href="{% url 'documents:list' %}" aria-label="На главную">
+        {% include "ui/logo.html" %}
+      </a>
+
+      <nav class="sidebar__nav" aria-label="Основная навигация">
+        <a class="sidebar__link" href="{% url 'search_ocr:search' %}"{% nav_active 'search_ocr:*' %}>{% icon "search" %}Поиск</a>
+        <a class="sidebar__link" href="{% url 'documents:list' %}"{% nav_active 'documents:list' 'documents:detail' 'documents:create' 'documents:edit' 'documents:status' 'documents:relation_create' 'documents:relation_delete' 'documents:file-link' %}>{% icon "document" %}Документы</a>
+        <a class="sidebar__link" href="{% url 'templates_bank:family_list' %}"{% nav_active 'templates_bank:*' %}>{% icon "form" %}Бланки</a>
+        <a class="sidebar__link" href="{% url 'documents:consolidated_list' %}"{% nav_active 'documents:consolidated_list' 'documents:consolidated_detail' %}>{% icon "layers" %}Сводные редакции</a>
+        {% if can_review_ocr %}
+          <a class="sidebar__link" href="{% url 'documents:ocr_review_queue' %}"{% nav_active 'documents:ocr_review_queue' 'documents:ocr_review' %}>{% icon "ocr" %}Вычитка OCR</a>
+        {% endif %}
+        {% if can_view_audit_log %}
+          <a class="sidebar__link" href="{% url 'audit:list' %}"{% nav_active 'audit:*' %}>{% icon "chart" %}Журнал аудита</a>
+        {% endif %}
+        <hr class="sidebar__divider">
+        <a class="sidebar__link" href="/admin/">{% icon "settings" %}Администрирование</a>
+      </nav>
+
+      <div class="sidebar__footer">
+        <p class="sidebar__motto">Движение<br>в развитии</p>
+        Санкт-Петербург<br>Горэлектротранс
+      </div>
+    </aside>
+    {% endif %}
+
+    <div class="app-main">
+      <header class="topbar">
+        {% comment %}
+          Кнопка меню видна только на узкой ширине (см. shell.css). Она
+          вне <nav>: это управление показом навигации, а не пункт её.
+        {% endcomment %}
+        {% if user.is_authenticated %}
+          <button class="topbar__toggle" type="button" id="sidebar-toggle"
+                  aria-controls="sidebar" aria-expanded="false"
+                  aria-label="Показать меню">{% icon "menu" %}</button>
+        {% endif %}
+
+        {% block breadcrumbs %}{% endblock %}
+
+        {% if user.is_authenticated %}
+          <form class="topbar__search" method="get" action="{% url 'search_ocr:search' %}" role="search">
+            <label class="field-with-icon">
+              <span class="sr-only">Поиск по документам</span>
+              {% icon "search" %}
+              <input class="field" type="search" name="q" placeholder="Поиск по документам…"
+                     value="{{ request.GET.q|default:'' }}">
+            </label>
+          </form>
+        {% endif %}
+
+        <div class="topbar__actions">
           {% comment %}
             Кнопка, а не ссылка: переключение темы ничего не открывает и
             никуда не ведёт. Подпись живёт в aria-label, потому что видимый
-            текст здесь — пиктограмма: она короче и не ломает перенос
-            навигации, но сама по себе для скринридера ничего не значит.
+            текст здесь — пиктограмма.
           {% endcomment %}
-          <button id="theme-toggle" class="theme-toggle" type="button"
+          <button id="theme-toggle" class="icon-btn" type="button"
                   aria-label="Тема оформления">◐</button>
           {% if user.is_authenticated %}
             {% comment %}
@@ -89,39 +142,32 @@
               User.Role.choices — при изменении списка ролей шаблон править
               не потребуется.
             {% endcomment %}
-            <a href="{% url 'iam:profile' %}" class="caption">{{ user.full_name }} · {{ user.get_role_display }}</a>
+            <a class="user-chip" href="{% url 'iam:profile' %}">
+              <span class="avatar" aria-hidden="true">{{ user.initials }}</span>
+              <span>
+                <span class="user-chip__name">{{ user.short_name }}</span><br>
+                <span class="user-chip__role">{{ user.get_role_display }}</span>
+              </span>
+            </a>
             <form method="post" action="{% url 'iam:logout' %}">
               {% csrf_token %}
-              <button class="btn btn--ghost" type="submit">Выйти</button>
+              <button class="icon-btn" type="submit" aria-label="Выйти из системы">{% icon "logout" %}</button>
             </form>
           {% else %}
-            <a href="{% url 'iam:login' %}">Войти</a>
+            <a class="btn btn--ghost" href="{% url 'iam:login' %}">Войти</a>
           {% endif %}
         </div>
-      </div>
-      <nav aria-label="Основная навигация">
-        <a href="{% url 'search_ocr:search' %}"{% nav_active 'search_ocr:*' %}>Поиск</a>
-        <a href="{% url 'documents:list' %}"{% nav_active 'documents:list' 'documents:detail' 'documents:create' 'documents:edit' 'documents:status' 'documents:relation_create' 'documents:relation_delete' 'documents:file-link' %}>Документы</a>
-        <a href="{% url 'templates_bank:family_list' %}"{% nav_active 'templates_bank:*' %}>Бланки</a>
-        <a href="{% url 'documents:consolidated_list' %}"{% nav_active 'documents:consolidated_list' 'documents:consolidated_detail' %}>Сводные редакции</a>
-        {% if can_review_ocr %}
-          <a href="{% url 'documents:ocr_review_queue' %}"{% nav_active 'documents:ocr_review_queue' 'documents:ocr_review' %}>Вычитка OCR</a>
+      </header>
+
+      <main id="content" class="app-content">
+        {% if messages %}
+          {% for message in messages %}
+            <div class="notice notice--{{ message.tags|default:'info' }}" role="status">{{ message }}</div>
+          {% endfor %}
         {% endif %}
-        {% if can_view_audit_log %}
-          <a href="{% url 'audit:list' %}"{% nav_active 'audit:*' %}>Журнал аудита</a>
-        {% endif %}
-        <a href="/admin/">Администрирование</a>
-      </nav>
+        {% block content %}{% endblock %}
+      </main>
     </div>
-  </header>
-  <main id="content" class="container page-main">
-    {% block breadcrumbs %}{% endblock %}
-    {% if messages %}
-      {% for message in messages %}
-        <div class="notice notice--{{ message.tags|default:'info' }}" role="status">{{ message }}</div>
-      {% endfor %}
-    {% endif %}
-    {% block content %}{% endblock %}
-  </main>
+  </div>
 </body>
 </html>

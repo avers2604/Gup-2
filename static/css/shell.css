@@ -1,0 +1,271 @@
+/*
+  Каркас приложения: боковое меню, верхняя панель, рабочая область.
+
+  Пятый слой оформления, после layout.css и до components.css. Разделение
+  не формальное: layout.css — это примитивы раскладки ВНУТРИ страницы
+  (.stack, .row, .measure), а здесь — постоянная рама вокруг любой
+  страницы, которая на всех экранах одна и та же. Смешивать их в одном
+  файле значило бы искать правило бокового меню среди сорока правил
+  вертикального ритма.
+
+  Палитра фирменная. В исходном макете акцент синий, но брендбук ГЭТ
+  (DESIGN.md, правило 4) синего в таблице не имеет: главное действие и
+  активный пункт меню залиты бирюзой accent_fill — тем самым цветом, у
+  которого проверен контраст под подписью (4.61). Структура, плотность и
+  компоновка макета при этом воспроизведены как есть.
+*/
+
+/* Прокрутка остаётся у документа, а меню зафиксировано.
+
+   Через это место пришлось пройти дважды, и обе неудачи видны только
+   на живой странице.
+
+   Первая редакция: min-height: 100vh у рамы и sticky у меню. На
+   странице длиннее экрана под меню появилась полоса фона — колонка
+   грида тянулась во всю высоту документа, а сам элемент меню был ровно
+   100vh, и ниже него просвечивал фон страницы.
+
+   Вторая: рама height: 100vh; overflow: hidden, прокрутка внутри
+   рабочей области. Полоса исчезла, но прокрутка ушла из документа — а
+   вместе с ней сломались печать реестра и снимок всей страницы: и то,
+   и другое умеет только документ, но не внутренний контейнер. Поймал
+   это скриншот узкой ширины, обрезанный на первом же экране.
+
+   Итог: меню position: fixed, рабочая область со смещением на его
+   ширину. Документ прокручивается как обычно, меню видно всегда, и
+   ниже него ничего не просвечивает — фиксированный элемент занимает
+   весь экран по высоте независимо от длины страницы.
+
+   На решение «липкой шапки у таблиц нет» (components.css) это не
+   влияет: sticky отсчитывается от ближайшего прокручиваемого предка, а
+   им для <thead> остаётся .table-scroll с overflow-x: auto. */
+.app-shell { min-height: 100vh; }
+
+/* Рама без меню — страница входа и всё, что видно до аутентификации.
+   Содержимое прижимается влево наравне с остальными экранами, а не
+   центрируется: форма входа и так узкая карточка, а центрирование
+   рассогласовало бы её с заголовком и крошками. */
+.app-shell--bare .app-main { margin-left: 0; }
+.app-shell--bare .topbar { justify-content: flex-end; }
+
+/* ---------- Боковое меню ---------- */
+.sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: var(--sidebar-width);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, var(--color-navy) 0%, var(--color-navy-deep) 100%);
+  color: var(--text-on-navy);
+}
+
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-5);
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.sidebar__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 11px var(--space-3);
+  border-radius: var(--radius-button);
+  color: var(--text-on-navy);
+  opacity: .82;
+  text-decoration: none;
+  font-size: 14.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.sidebar__link:hover { opacity: 1; background: rgba(255, 255, 255, .07); }
+.sidebar__link.is-active {
+  background: var(--color-accent-fill);
+  color: var(--text-on-accent-fill);
+  opacity: 1;
+}
+/* Значок бледнее подписи: иначе строка меню читается как два одинаково
+   важных объекта, и глаз цепляется за пиктограмму вместо слова. */
+.sidebar__link .icon { opacity: .85; flex: none; }
+.sidebar__link.is-active .icon { opacity: 1; }
+
+.sidebar__divider {
+  height: 1px;
+  margin: var(--space-3) var(--space-4);
+  background: rgba(255, 255, 255, .14);
+  border: 0;
+}
+
+.sidebar__footer {
+  padding: var(--space-5);
+  color: var(--text-muted-on-navy);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.sidebar__motto {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-on-navy);
+  margin: 0 0 var(--space-2);
+}
+
+/* ---------- Верхняя панель ---------- */
+.app-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+  /* Смещение под фиксированное меню. margin, а не padding: фон рабочей
+     области не должен заезжать под меню — иначе на время загрузки
+     градиента (и в тёмной теме) слева видна полоса чужого цвета. */
+  margin-left: var(--sidebar-width);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.topbar__toggle {
+  display: none;          /* виден только на узкой ширине — см. медиаблок */
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px;
+  line-height: 0;
+}
+
+.topbar__search {
+  margin-left: auto;
+  flex: 0 1 380px;
+  min-width: 0;
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Поле с пиктограммой внутри. Пиктограмма — это оформление поля, а не
+   отдельная кнопка: она не кликабельна и не попадает в порядок табуляции. */
+.field-with-icon { position: relative; display: block; }
+.field-with-icon .icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.field-with-icon .field { padding-left: 40px; }
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-button);
+  color: var(--text);
+  text-decoration: none;
+}
+.user-chip:hover { background: var(--surface-2); }
+.user-chip__name { font-size: 13.5px; font-weight: 700; line-height: 1.25; }
+.user-chip__role { font-size: 12px; color: var(--text-muted); }
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-accent-fill);
+  color: var(--text-on-accent-fill);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+/* ---------- Рабочая область ---------- */
+.app-content {
+  padding: var(--space-6);
+  /* Хлебные крошки, заголовок и содержимое ограничены общей шириной, а
+     не тянутся на четыре монитора: на широком экране таблица из шести
+     колонок иначе растягивает «Наименование» до неудобочитаемой строки. */
+  max-width: 1400px;
+  width: 100%;
+}
+
+/* Экран-список: содержимое слева, панель фильтров справа. Вторая колонка
+   фиксированной ширины, первая — резиновая с minmax(0,…), иначе широкая
+   таблица распирает грид и вместо своей прокрутки получает общую. */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Узкая ширина ----------
+   Боковое меню уезжает за край и выдвигается кнопкой. Порог 900 px, а не
+   общий 560 px: меню занимает 264 px — на планшете это уже четверть
+   экрана, и таблица реестра начинает переносить каждую ячейку задолго до
+   того, как включается телефонная раскладка. */
+@media (max-width: 900px) {
+  .app-main { margin-left: 0; }
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform .18s ease;
+  }
+  .sidebar.is-open { transform: none; }
+  .topbar__toggle { display: block; }
+  .topbar__search { flex-basis: 220px; }
+  .user-chip__name,
+  .user-chip__role { display: none; }
+  .app-content { padding: var(--space-4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar { transition: none; }
+}
+
+/* Затемнение под выдвинутым меню: на узкой ширине меню перекрывает
+   содержимое, и без подложки непонятно, что клик снаружи его закроет. */
+.sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(24, 33, 63, .5);
+  border: 0;
+  padding: 0;
+}

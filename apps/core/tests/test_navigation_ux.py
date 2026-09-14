@@ -5,6 +5,8 @@
 крошка `{{ documnet.reg_number }}` выглядела бы в шаблоне правдоподобно и
 молча рисовала пустой пункт.
 """
+import re
+
 from django.test import TestCase
 from django.urls import reverse
 
@@ -20,10 +22,17 @@ class NavActiveSectionTests(TestCase):
         self.client.login(personnel_number="0800", password=PASSWORD)
 
     def _nav(self, response):
-        """Фрагмент разметки шапки — чтобы не ловить совпадения в теле страницы."""
+        """Фрагмент разметки меню — чтобы не ловить совпадения в теле страницы.
+
+        Тег ищется по aria-label, а не по точной строке `<nav aria-label=…>`:
+        первая редакция сравнивала тег целиком и развалилась, как только у
+        <nav> появился класс. Проверяется здесь разметка активного пункта,
+        а не порядок атрибутов, и тест не должен падать от второго.
+        """
         body = response.content.decode()
-        start = body.index('<nav aria-label="Основная навигация">')
-        return body[start:body.index("</nav>", start)]
+        match = re.search(r'<nav[^>]*aria-label="Основная навигация"[^>]*>', body)
+        self.assertIsNotNone(match, "на странице нет основного меню")
+        return body[match.start():body.index("</nav>", match.start())]
 
     def test_current_section_is_marked(self):
         nav = self._nav(self.client.get(reverse("documents:list")))

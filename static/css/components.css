@@ -305,94 +305,164 @@
   color: var(--text-on-navy);
 }
 
-/* ---------- Шапка приложения ---------- */
-.app-header {
-  background: var(--color-navy);
-  color: var(--text-on-navy);
-}
-/* Шапка сложена из двух рядов. Один ряд не выдержал живой проверки: семь
-   пунктов меню, ФИО с должностью и кнопка выхода не умещались даже на
-   1280 px, flex переносил их на три строки, и верхняя оставалась пустой
-   справа от названия системы. Ряды разделены по смыслу, а не ради вида:
-   «кто вошёл и как выйти» — не навигация по разделам (см. base.html). */
-.app-header .container {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-top: var(--space-4);
-  padding-bottom: var(--space-4);
-}
-.app-header__top,
-.app-header__session {
-  display: flex;
-  align-items: center;
-  /* Перенос всё равно нужен: на 400 px ФИО с должностью длиннее строки. */
-  flex-wrap: wrap;
-  gap: var(--space-4);
-}
-.app-header__top { justify-content: space-between; }
-.app-header nav {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-4) var(--space-5);
-}
-.app-header nav a {
-  color: var(--text-on-navy);
-  opacity: .85;
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 700;
-  padding-bottom: 2px;
-  border-bottom: 2px solid transparent;
-}
-.app-header nav a:hover { opacity: 1; }
+/* ---------- Значки ----------
+   Геометрия значков живёт в apps/core/templatetags/icons.py, а размер и
+   выравнивание — здесь: значок всегда стоит в строке рядом с текстом, и
+   его базовая линия должна совпадать с ней, а не с низом строки. */
+.icon { flex: none; vertical-align: -.2em; }
 
-/* Ссылки в правом блоке шапки — те же правила, что у пунктов меню: на
-   тёмно-синем фоне цвет ссылок --text-link нечитаем, а подчёркивание в
-   служебной полосе только шумит. ФИО с должностью приглушено ролью,
-   рассчитанной именно на эту синеву (см. tokens.css). */
-.app-header__session a {
-  color: var(--text-on-navy);
-  text-decoration: none;
-  font-weight: 700;
-}
-.app-header__session .caption { color: var(--text-muted-on-navy); }
-
-/* Переключатель темы. Оформлен как пункт навигации, а не как кнопка
-   интерфейса: он живёт в шапке и не должен спорить с главным действием
-   экрана — правило DESIGN.md «акцент один на экран». */
-.theme-toggle {
+/* Кнопка-значок: переключатель темы, выход, действия в строке таблицы.
+   Отдельный класс, а не .btn--ghost: у .btn есть подпись и внутренние
+   отступы под неё, а здесь содержимое — квадратный значок, и те же
+   отступы делают из кнопки прямоугольник вдвое шире нужного. */
+.icon-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, .35);
-  border-radius: var(--radius-button);
-  color: var(--text-on-navy);
+  border: 1px solid transparent;
+  border-radius: var(--radius-field);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
-  padding: 6px 10px;
-  opacity: .85;
 }
-.theme-toggle:hover { opacity: 1; }
+.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.icon-btn:disabled,
+.icon-btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; }
+.icon-btn:disabled:hover { background: transparent; }
 
-@media (max-width: 560px) {
-  /* Название системы и навигация — в колонку: в строку они всё равно
-     переносятся, но с рваным выравниванием. */
-  .app-header .container { flex-direction: column; align-items: flex-start; }
-  .app-header nav { gap: var(--space-3) var(--space-4); }
+/* Звезда «в избранном». Залитая — фирменный жёлтый: он в таблице
+   DESIGN.md и означает «предупреждение/исторический срез», но здесь
+   работает не как статус, а как пометка пользователя, и рядом с ним нет
+   других жёлтых элементов, с которыми его можно спутать. Пустая звезда
+   остаётся серой обводкой: цвет не единственный признак — форма значка
+   меняется с контура на заливку. */
+.star-btn { color: var(--text-muted); }
+.star-btn:hover { color: var(--color-yellow); }
+.star-btn.is-on { color: var(--color-yellow); }
+.star-btn.is-on:hover { color: var(--color-yellow); }
+
+/* ---------- Вкладки над таблицей ----------
+   Срезы одного и того же реестра (все / внутренние / внешние / бланки /
+   избранное). Именно вкладки, а не ещё один select в фильтрах: это
+   переключение представления, к которому возвращаются по десять раз за
+   смену, и оно должно быть в один клик и видно без раскрытия. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--space-2);
 }
-
-/* Текущий раздел. Подчёркивание, а не только яркость: разница в
-   непрозрачности между .85 и 1 почти не видна, а форма видна всегда —
-   в том числе при инверсии цветов и на плохом мониторе. Бирюза здесь
-   чистая (--color-accent), потому что под ней нет текста: правило
-   DESIGN.md про контраст 3.24 касается только заливок с подписью.
-   Для скринридера то же состояние несёт aria-current (см.
-   apps/core/templatetags/navigation.py). */
-.app-header nav a.is-active {
-  opacity: 1;
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 14.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tab.is-active {
+  color: var(--text-link);
   border-bottom-color: var(--color-accent);
 }
+
+/* ---------- Панель фильтров ----------
+   Правая колонка экрана-списка. Заголовок со сбросом, поля в столбик,
+   два действия внизу. Отдельно от .card только отступами: рамка, фон и
+   тень — те же, иначе на экране появилось бы две разные карточки. */
+.filter-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* Строка пагинации: слева сколько показано, по центру страницы, справа
+   размер страницы. На узкой ширине переносится и прижимается влево. */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.pager__pages { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); }
+.pager__size { display: flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+.pager__size .field { width: auto; padding-top: 6px; padding-bottom: 6px; }
+
+/* Номер страницы — квадратная кнопка, а не .btn с подписью: подпись
+   здесь одна-две цифры, и прямоугольник под слово выглядит пустым. */
+.page-link {
+  display: inline-grid;
+  place-items: center;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+}
+.page-link:hover { background: var(--surface-2); }
+.page-link.is-current {
+  background: var(--color-accent-fill);
+  border-color: var(--color-accent-fill);
+  color: var(--text-on-accent-fill);
+}
+.page-link.is-gap {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* Многоточие «ещё действия» в строке таблицы. <details> вместо JS:
+   раскрытие и закрытие по Esc браузер делает сам, и меню работает до
+   загрузки любых скриптов. */
+.row-menu { position: relative; }
+.row-menu > summary { list-style: none; cursor: pointer; }
+.row-menu > summary::-webkit-details-marker { display: none; }
+.row-menu__list {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 15;
+  min-width: 200px;
+  padding: var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-field);
+  box-shadow: var(--shadow-card);
+}
+.row-menu__list a,
+.row-menu__list button {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-field);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.row-menu__list a:hover,
+.row-menu__list button:hover { background: var(--surface-2); }
 
 /* Ссылка «Перейти к содержимому»: в потоке, но за пределами экрана, пока
    не получила фокус. display:none сделал бы её недостижимой и для
@@ -412,6 +482,7 @@
   transition: top .12s ease;
 }
 .skip-link:focus { top: var(--space-4); }
+
 
 /* ---------- Хлебные крошки ----------
    Вложенные экраны (карточка документа, сводка, вычитка, версия бланка)
