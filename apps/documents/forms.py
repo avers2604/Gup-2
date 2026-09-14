@@ -39,6 +39,10 @@ class DocumentFilterForm(forms.Form):
         label="Действует по", required=False,
         widget=forms.DateInput(attrs={**_FIELD_ATTRS, "type": "date"}),
     )
+    only_bookmarked = forms.BooleanField(
+        label="Только избранное", required=False,
+        widget=forms.CheckboxInput(),
+    )
 
     def clean(self):
         cleaned = super().clean()

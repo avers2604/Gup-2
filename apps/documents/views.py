@@ -16,9 +16,11 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import IntegrityError
+from django.db.models import Exists, OuterRef
 from django.http import Http404, HttpResponseRedirect
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 
 from apps.core.sorting import Column, header_links, resolve
@@ -31,7 +33,7 @@ from .forms import (
     RelationForm,
     StatusChangeForm,
 )
-from .models import DocumentRelation, DocumentStatusHistory
+from .models import DocumentBookmark, DocumentRelation, DocumentStatusHistory
 
 # Тот же размер страницы, что и в Smart Search (apps/search_ocr/views.py)
 # — реестр и результаты поиска показывают один и тот же тип строк, разная
@@ -51,6 +53,32 @@ SORTABLE_COLUMNS = {
     "issuer_dept": Column("issuer_dept", "Издавшее подразделение", ("issuer_dept__name", "reg_number")),
     "effective_date": Column("effective_date", "Вступил в силу", ("effective_date", "reg_number")),
 }
+
+#: Допустимые размеры страницы. Перечень, а не любое число из адреса:
+#: `?per_page=100000` иначе выгружал бы весь реестр одним запросом —
+#: и как способ положить страницу, и как способ выкачать реестр целиком
+#: в обход постраничной выдачи.
+PAGE_SIZE_CHOICES = (10, 20, 50, 100)
+
+#: Срезы реестра — вкладки над таблицей.
+#:
+#: ОТСТУПЛЕНИЕ ОТ МАКЕТА, сознательное. В присланном макете вкладки
+#: назывались «Внутренние», «Внешние» и «Бланки». Первых двух признаков
+#: в модели НРД нет вовсе — ни поля, ни справочника, ни упоминания в ТЗ;
+#: нарисовать их значило бы завести вкладки, которые нечем наполнить.
+#: «Бланки» — отдельный раздел системы (ТЗ 4.3, банк бланков) со своим
+#: пунктом меню и своей моделью, и дублировать его вкладкой в реестре
+#: НРД неверно: это не срез этого списка.
+#:
+#: Вместо них — срезы по тому, что в данных действительно есть и что
+#: спрашивают чаще всего. Строка вкладок, её вид и поведение — как в
+#: макете.
+REGISTRY_TABS = (
+    ("all", "Все документы", {}),
+    ("active", "Действующие", {"status__in": ("active", "active_amended")}),
+    ("draft", "Черновики", {"status": "draft"}),
+    ("archive", "Архив", {"status__in": ("revoked", "annulled")}),
+)
 
 #: Порядок по умолчанию — как было до появления сортировки: свежие сверху.
 #: Поле reg_date намеренно НЕ заведено колонкой: в таблице его нет (показана
@@ -72,9 +100,18 @@ class DocumentListView(LoginRequiredMixin, View):
         sort_key, descending, order_by = resolve(
             SORTABLE_COLUMNS, request.GET.get("sort"), DEFAULT_ORDER,
         )
+        # Признак «в избранном» подмешивается подзапросом EXISTS, а не
+        # отдельным запросом на строку и не prefetch_related: на странице
+        # из 25 строк последнее дало бы 25 обращений, и тест
+        # test_query_counts поймал бы это как N+1. EXISTS к тому же не
+        # тянет сами закладки — нужен только факт наличия.
+        bookmarks = DocumentBookmark.objects.filter(
+            user=request.user, document=OuterRef("pk")
+        )
         queryset = (
             permissions.visible_documents(request.user)
             .select_related("issuer_dept")
+            .annotate(is_bookmarked=Exists(bookmarks))
             .order_by(*order_by)
         )
 
@@ -90,8 +127,17 @@ class DocumentListView(LoginRequiredMixin, View):
                 queryset = queryset.filter(effective_date__gte=data["effective_from"])
             if data.get("effective_to"):
                 queryset = queryset.filter(effective_date__lte=data["effective_to"])
+            if data.get("only_bookmarked"):
+                queryset = queryset.filter(is_bookmarked=True)
 
-        paginator = Paginator(queryset, PAGE_SIZE)
+        tab = _current_tab(request)
+        if tab["filters"]:
+            queryset = queryset.filter(**tab["filters"])
+        if tab["key"] == "favourites":
+            queryset = queryset.filter(is_bookmarked=True)
+
+        per_page = _per_page(request)
+        paginator = Paginator(queryset, per_page)
         page_obj = paginator.get_page(request.GET.get("page"))
 
         # Параметры фильтров без page — чтобы навигация по страницам не
@@ -114,7 +160,59 @@ class DocumentListView(LoginRequiredMixin, View):
             ),
             "applied_filters": _applied_filters(form),
             "can_edit": permissions.can_edit_document(request.user),
+            "tabs": _tab_links(request, tab["key"]),
+            "current_tab": tab["key"],
+            "per_page": per_page,
+            "page_size_choices": PAGE_SIZE_CHOICES,
+            # Форма выбора размера страницы — отдельный GET-запрос, и все
+            # прочие параметры она обязана унести с собой скрытыми
+            # полями. Иначе смена «показывать по» сбрасывала бы фильтры,
+            # вкладку и сортировку разом.
+            "preserved_params": [
+                (key, value)
+                for key in query_params
+                for value in query_params.getlist(key)
+                if key != "per_page"
+            ],
         })
+
+
+class DocumentBookmarkToggleView(LoginRequiredMixin, View):
+    """Поставить/снять звезду «Избранное» на документе.
+
+    Только POST: закладка меняет состояние, а GET по определению не
+    должен ничего менять — иначе предзагрузка ссылок браузером или
+    обход поисковым роботом сами расставляли бы звёзды.
+
+    Документ берётся из visible_documents(): документ «ДСП» без допуска
+    отдаёт 404 так же, как и его карточка, — закладка не должна
+    становиться способом проверить, существует ли скрытый документ.
+    """
+
+    def post(self, request, pk):
+        document = get_object_or_404(permissions.visible_documents(request.user), pk=pk)
+        services.toggle_bookmark(actor=request.user, document=document)
+        return HttpResponseRedirect(_safe_next(request, default=reverse("documents:list")))
+
+
+def _safe_next(request, *, default):
+    """Куда вернуться после переключения звезды.
+
+    Звезду нажимают и в реестре, и на карточке, и в результатах поиска —
+    возвращать всегда в реестр значило бы терять место в списке и
+    применённые фильтры.
+
+    Адрес берётся только внутренний: url_has_allowed_host_and_scheme
+    отсекает переход на чужой домен. Без этой проверки поле next
+    превращается в открытый редирект — классический способ увести
+    сотрудника на поддельную форму входа с адреса настоящей системы.
+    """
+    candidate = request.POST.get("next") or ""
+    if candidate and url_has_allowed_host_and_scheme(
+        candidate, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return candidate
+    return default
 
 
 class DocumentDetailView(LoginRequiredMixin, View):
@@ -566,6 +664,58 @@ class ConsolidatedDetailView(LoginRequiredMixin, View):
         })
 
 
+def _per_page(request) -> int:
+    """Размер страницы из адреса, но только из разрешённого перечня.
+
+    Любое число из ?per_page= принимать нельзя: `?per_page=100000` — это
+    и способ положить страницу, и способ выкачать реестр целиком в обход
+    постраничной выдачи. Нераспознанное значение молча даёт значение по
+    умолчанию, а не ошибку: подобранный вручную адрес не повод показать
+    сотруднику 400 вместо реестра.
+    """
+    raw = request.GET.get("per_page")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return PAGE_SIZE
+    return value if value in PAGE_SIZE_CHOICES else PAGE_SIZE
+
+
+def _current_tab(request):
+    """Выбранный срез реестра. Неизвестный ключ — «Все документы»."""
+    requested = request.GET.get("tab")
+    for key, label, filters in REGISTRY_TABS:
+        if key == requested:
+            return {"key": key, "label": label, "filters": filters}
+    if requested == "favourites":
+        return {"key": "favourites", "label": "Избранное", "filters": {}}
+    return {"key": "all", "label": "Все документы", "filters": {}}
+
+
+def _tab_links(request, current_key):
+    """Ссылки вкладок с сохранением фильтров и сбросом страницы.
+
+    Страница сбрасывается намеренно: на вкладке «Черновики» документов
+    может быть меньше, чем на «Все», и перенесённый номер страницы
+    показал бы пустой список вместо результата.
+    """
+    params = request.GET.copy()
+    params.pop("page", None)
+    params.pop("tab", None)
+    rest = params.urlencode()
+
+    links = []
+    for key, label, _filters in (*REGISTRY_TABS, ("favourites", "Избранное", {})):
+        query = f"tab={key}" + (f"&{rest}" if rest else "")
+        links.append({
+            "key": key,
+            "label": label,
+            "url": f"{reverse('documents:list')}?{query}",
+            "is_active": key == current_key,
+        })
+    return links
+
+
 def _applied_filters(form):
     """Человекочитаемый список применённых фильтров.
 
@@ -579,7 +729,12 @@ def _applied_filters(form):
 
     applied = []
     for name, value in form.cleaned_data.items():
-        if value in (None, "", []):
+        # Ложное булево — это снятый флажок, а не заданный фильтр.
+        # Проверка `value in (None, "", [])` его НЕ отсеивала: False не
+        # равен ни одному из этих трёх, и первый же флажок в форме
+        # («Только избранное») дал бы плашку «Только избранное: False».
+        # Поймано при добавлении флажка, а не в проде.
+        if value is False or value in (None, "", []):
             continue
         field = form.fields[name]
         applied.append({"label": field.label, "value": _filter_value_label(field, value)})
@@ -596,6 +751,12 @@ def _filter_value_label(field, value) -> str:
     привычный д.м.Г, а не ISO.
     """
     import datetime
+
+    # bool проверяется до choices: True прошёл бы в str() и показался бы
+    # как «True». Проверяется раньше и даты — datetime.date bool не
+    # является, но порядок здесь читается как «сначала частные случаи».
+    if isinstance(value, bool):
+        return "да"
 
     if isinstance(value, datetime.date):
         return value.strftime("%d.%m.%Y")

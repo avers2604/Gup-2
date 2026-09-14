@@ -526,3 +526,28 @@ def apply_ocr_review(*, actor, document, corrected_text):
 
     document.refresh_from_db()
     return locked
+
+
+def toggle_bookmark(*, actor, document) -> bool:
+    """Поставить или снять закладку «Избранное». Возвращает новое состояние.
+
+    В журнал аудита не пишется намеренно. Журнал по ТЗ 4.7 фиксирует
+    действия над документами и учётными записями — то, что подлежит
+    проверке. Личная пометка ничего в документе не меняет и никому,
+    кроме самого сотрудника, не видна; складывать её в неизменяемый
+    WORM-журнал значило бы засорять его тем, что проверяющему не нужно,
+    и одновременно заводить вечный след пользовательских предпочтений,
+    который нечем удалить.
+
+    Гриф проверяется вызывающей стороной: сюда документ приходит уже
+    отобранным через permissions.visible_documents().
+    """
+    # Модель через apps.get_model(), а не прямым импортом — тот же приём,
+    # что и выше в файле: models.py импортирует этот модуль, и прямой
+    # импорт замкнул бы цикл.
+    model = apps.get_model("documents", "DocumentBookmark")
+    bookmark, created = model.objects.get_or_create(user=actor, document=document)
+    if created:
+        return True
+    bookmark.delete()
+    return False

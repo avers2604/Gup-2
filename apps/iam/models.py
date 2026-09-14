@@ -193,6 +193,30 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
         return " ".join(part for part in (self.last_name, self.first_name, self.middle_name) if part)
 
     @property
+    def short_name(self):
+        """Фамилия с инициалами — «Иванов И. И.».
+
+        Полное ФИО в шапке занимало половину строки и вытесняло всё
+        остальное: у «Демидов Игорь Сергеевич · Методист подразделения»
+        44 знака, и на ноутбучной ширине панель переносилась. В реквизитах
+        документа и в журнале аудита остаётся full_name: там важна точность
+        записи, а не экономия места.
+        """
+        initials = " ".join(
+            f"{part[0]}." for part in (self.first_name, self.middle_name) if part
+        )
+        return f"{self.last_name} {initials}".strip()
+
+    @property
+    def initials(self):
+        """Две буквы для кружка аватара — «ДИ».
+
+        Отчество не берётся намеренно: три буквы в кружке 38 px
+        нечитаемы, а фамилия с именем различают сотрудников достаточно.
+        """
+        return "".join(part[0] for part in (self.last_name, self.first_name) if part).upper()
+
+    @property
     def totp_secret(self):
         """Прозрачный доступ к секрету TOTP — вызывающий код (apps.iam.totp,
         apps.iam.services) читает/пишет user.totp_secret как обычное поле;
