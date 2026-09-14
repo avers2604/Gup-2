@@ -1,5 +1,8 @@
+import secrets
+
+from django.conf import settings
 from django.db import DatabaseError, connection
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.views.decorators.cache import never_cache
 from django.views.decorators.http import require_safe
 from django.views.generic import TemplateView
@@ -27,10 +30,28 @@ def health(request):
     return HttpResponse("healthy\n", content_type="text/plain")
 
 
+def _require_business_metrics_token(request) -> None:
+    """Hide the metrics endpoint unless its configured bearer token matches.
+
+    Development keeps the historical open endpoint when no token is configured;
+    production settings require a strong token and therefore always execute this
+    guard. A 404 intentionally avoids advertising the monitoring surface.
+    """
+
+    token = getattr(settings, "BUSINESS_METRICS_TOKEN", "")
+    if not token:
+        return
+
+    supplied = request.headers.get("Authorization", "")
+    if not secrets.compare_digest(supplied, f"Bearer {token}"):
+        raise Http404
+
+
 @require_safe
 @never_cache
 def business_metrics(request):
     """Prometheus text endpoint for Stage 4 business observability indicators."""
+    _require_business_metrics_token(request)
     return HttpResponse(
         render_prometheus(),
         content_type="text/plain; version=0.0.4; charset=utf-8",

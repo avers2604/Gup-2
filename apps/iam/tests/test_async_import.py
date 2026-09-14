@@ -41,6 +41,12 @@ def _xlsx_bytes(department_path: str) -> io.BytesIO:
 
 class AsyncPersonnelImportTests(TestCase):
     def setUp(self):
+        # These tests exercise durable staging/outbox semantics, not ClamAV
+        # availability. Intake/AV ordering has its own regression tests.
+        antivirus = mock.patch("apps.core.antivirus.scan_file")
+        antivirus.start()
+        self.addCleanup(antivirus.stop)
+
         self.head, _ = Department.objects.get_or_create(
             name="Асинхронный аппарат",
             parent=None,

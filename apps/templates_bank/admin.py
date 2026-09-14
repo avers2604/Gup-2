@@ -26,6 +26,25 @@ class TemplateFamilyAdmin(admin.ModelAdmin):
     search_fields = ("name",)
     inlines = [TemplateInline]
 
+    @staticmethod
+    def _can_manage(request):
+        return permissions.can_manage_templates(request.user)
+
+    def has_add_permission(self, request):
+        return super().has_add_permission(request) and self._can_manage(request)
+
+    def has_change_permission(self, request, obj=None):
+        return super().has_change_permission(request, obj) and self._can_manage(request)
+
+    def has_delete_permission(self, request, obj=None):
+        # Families are stable identities for the immutable version lineage.
+        return False
+
+    def save_model(self, request, obj, form, change):
+        if not self._can_manage(request):
+            raise PermissionDenied("Недостаточно прав для управления семейством бланков.")
+        super().save_model(request, obj, form, change)
+
 
 @admin.register(Template)
 class TemplateAdmin(admin.ModelAdmin):

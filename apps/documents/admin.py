@@ -10,10 +10,28 @@ class DocumentRelationInline(admin.TabularInline):
     fk_name = "from_document"
     extra = 0
 
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
 
 class DocumentStatusHistoryInline(admin.TabularInline):
     model = DocumentStatusHistory
     extra = 0
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(NormativeDocument)
@@ -25,7 +43,10 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     list_filter = ("status", "doc_type", "access_level", "issuer_dept", "retention_category", "retention_mode")
     search_fields = ("reg_number", "title", "summary")
     filter_horizontal = ("applied_depts", "category_tags")
-    readonly_fields = ("retention_mode", "retention_until")
+    # Status transitions are legal/business events and must go through the
+    # application service/Web flow where transition rules, grounds and WORM
+    # audit are enforced. Admin may edit draft content, not change status.
+    readonly_fields = ("status", "retention_mode", "retention_until")
     list_select_related = ("issuer_dept",)
     inlines = [DocumentRelationInline, DocumentStatusHistoryInline]
 
@@ -40,15 +61,29 @@ class NormativeDocumentAdmin(admin.ModelAdmin):
     def has_view_permission(self, request, obj=None):
         return super().has_view_permission(request, obj) and self._can_access(request, obj)
 
+    def has_add_permission(self, request):
+        return (
+            super().has_add_permission(request)
+            and permissions.can_edit_document(request.user)
+        )
+
     def has_change_permission(self, request, obj=None):
-        return super().has_change_permission(request, obj) and self._can_access(request, obj)
+        return (
+            super().has_change_permission(request, obj)
+            and permissions.can_edit_document(request.user, obj)
+        )
 
     def has_delete_permission(self, request, obj=None):
-        return super().has_delete_permission(request, obj) and self._can_access(request, obj)
+        # A registered NРД is never physically deleted through Django admin.
+        # Lifecycle/status changes are explicit audited domain transitions.
+        return False
 
     def save_model(self, request, obj, form, change):
-        if not self._can_access(request, obj):
-            raise PermissionDenied("Для работы с документами ДСП требуется соответствующий допуск.")
+        allowed = permissions.can_edit_document(request.user, obj if change else None)
+        if not allowed:
+            raise PermissionDenied(
+                "Изменение этой карточки через административный интерфейс запрещено."
+            )
         # Транзитный атрибут (не поле модели) — NormativeDocument.save()
         # читает его для комплексного аудита смены статуса документа
         # (усиление аудита, решение Заказчика).
@@ -66,3 +101,32 @@ class DocumentRelationAdmin(admin.ModelAdmin):
     list_display = ("from_document", "relation_type", "to_document", "created_at")
     list_filter = ("relation_type",)
     list_select_related = ("from_document", "to_document")
+
+    def get_queryset(self, request):
+        queryset = super().get_queryset(request)
+        visible_ids = permissions.visible_documents(request.user).values("pk")
+        return queryset.filter(
+            from_document_id__in=visible_ids,
+            to_document_id__in=visible_ids,
+        )
+
+    def has_view_permission(self, request, obj=None):
+        if not super().has_view_permission(request, obj):
+            return False
+        if obj is None:
+            return True
+        return (
+            permissions.can_view_document(request.user, obj.from_document)
+            and permissions.can_view_document(request.user, obj.to_document)
+        )
+
+    def has_add_permission(self, request):
+        # Relation mutations are audited domain operations and therefore must
+        # go through the document workspace/service layer, never raw admin.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

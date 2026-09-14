@@ -6,6 +6,8 @@ from .base import *  # noqa: F401,F403
 
 DEBUG = False
 
+BUSINESS_METRICS_TOKEN = os.environ.get("BUSINESS_METRICS_TOKEN", "")
+
 _required_production_settings = {
     "SECRET_KEY": os.environ.get("SECRET_KEY"),
     "TOTP_ENCRYPTION_KEY": os.environ.get("TOTP_ENCRYPTION_KEY"),
@@ -16,6 +18,7 @@ _required_production_settings = {
     "MINIO_ACCESS_KEY": os.environ.get("MINIO_ACCESS_KEY"),
     "MINIO_SECRET_KEY": os.environ.get("MINIO_SECRET_KEY"),
     "MINIO_ENDPOINT_URL": os.environ.get("MINIO_ENDPOINT_URL"),
+    "BUSINESS_METRICS_TOKEN": BUSINESS_METRICS_TOKEN,
 }
 _missing_production_settings = [
     name for name, value in _required_production_settings.items() if not value
@@ -38,12 +41,26 @@ SECURE_HSTS_PRELOAD = True
 # допускает перезаписи; "working" — обычный бакет для редактируемых копий
 # и бланков, которые правомерно заменяются при минорной корректировке
 # (ТЗ 4.3.1). Никогда не указывать один и тот же MINIO_BUCKET_* для обоих.
+try:
+    MINIO_PRESIGNED_URL_TTL_SECONDS = int(
+        os.environ.get("MINIO_PRESIGNED_URL_TTL_SECONDS", "300")
+    )
+except ValueError as exc:
+    raise ImproperlyConfigured(
+        "MINIO_PRESIGNED_URL_TTL_SECONDS must be an integer"
+    ) from exc
+if not 30 <= MINIO_PRESIGNED_URL_TTL_SECONDS <= 300:
+    raise ImproperlyConfigured(
+        "MINIO_PRESIGNED_URL_TTL_SECONDS must be between 30 and 300 seconds"
+    )
+
 _s3_common_options = {
     "access_key": os.environ.get("MINIO_ACCESS_KEY"),
     "secret_key": os.environ.get("MINIO_SECRET_KEY"),
     "endpoint_url": os.environ.get("MINIO_ENDPOINT_URL"),
     "default_acl": "private",
     "file_overwrite": False,
+    "querystring_expire": MINIO_PRESIGNED_URL_TTL_SECONDS,
 }
 
 STORAGES["originals"] = {
@@ -67,14 +84,24 @@ STORAGES["default"] = STORAGES["working"]
 
 from cryptography.fernet import Fernet
 
-if SECRET_KEY == "insecure-dev-key" or len(SECRET_KEY) < 50:
-    raise ImproperlyConfigured("SECRET_KEY must be a strong production key (at least 50 characters)")
+_INSECURE_PRODUCTION_SECRET_KEYS = {
+    "insecure-dev-key",
+    "replace-with-a-random-production-secret-key-at-least-50-characters-long",
+}
+if SECRET_KEY in _INSECURE_PRODUCTION_SECRET_KEYS or len(SECRET_KEY) < 50:
+    raise ImproperlyConfigured(
+        "SECRET_KEY must be a strong non-example production key (at least 50 characters)"
+    )
 if TOTP_ENCRYPTION_KEY == "5DVKKoTK7rYGmxTDJA3ASa9mGzjWwgqNl2HXSaq6sOA=":
     raise ImproperlyConfigured("The development TOTP key must not be used in production")
 try:
     Fernet(TOTP_ENCRYPTION_KEY)
 except (ValueError, TypeError) as exc:
     raise ImproperlyConfigured("TOTP_ENCRYPTION_KEY must be a valid Fernet key") from exc
+if len(BUSINESS_METRICS_TOKEN) < 32 or BUSINESS_METRICS_TOKEN.startswith("replace-with"):
+    raise ImproperlyConfigured(
+        "BUSINESS_METRICS_TOKEN must be a non-example secret of at least 32 characters"
+    )
 if not ALLOWED_HOSTS or "*" in ALLOWED_HOSTS:
     raise ImproperlyConfigured("Explicit ALLOWED_HOSTS are required")
 if STORAGES["originals"]["OPTIONS"]["bucket_name"] == STORAGES["working"]["OPTIONS"]["bucket_name"]:

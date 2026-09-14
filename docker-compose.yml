@@ -2,23 +2,32 @@ services:
   postgres:
     image: postgres:18.6
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in infra env}
+      # Bootstrap/admin credentials exist only in the infrastructure secret set.
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER must be set in infra env}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?POSTGRES_ADMIN_PASSWORD must be set in infra env}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER must be set in infra env}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:?POSTGRES_MIGRATION_USER must be set in infra env}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD:?POSTGRES_MIGRATION_PASSWORD must be set in infra env}
+      # Long-lived application credentials remain separate and non-owner.
+      POSTGRES_RUNTIME_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in infra env}
+      POSTGRES_RUNTIME_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in infra env}
+      GRAFANA_POSTGRES_USER: ${GRAFANA_POSTGRES_USER:?GRAFANA_POSTGRES_USER must be set in infra env}
+      GRAFANA_POSTGRES_PASSWORD: ${GRAFANA_POSTGRES_PASSWORD:?GRAFANA_POSTGRES_PASSWORD must be set in infra env}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
+      - ./deploy/postgres/init-bootstrap.sh:/docker-entrypoint-initdb.d/10-bz-get-roles.sh:ro
+      - ./deploy/postgres/bootstrap-roles.sql:/opt/bz-get/bootstrap-roles.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?POSTGRES_USER must be set in .env}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:?POSTGRES_ADMIN_USER must be set in infra env}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # Пул соединений перед PostgreSQL (снижение риска: явно выделен в стек по
-  # рекомендации ревью, ТЗ 4.8 подразумевает его неявно при HA-переключении
-  # Patroni). Приложение пока подключено к postgres напрямую — маршрутизация
-  # через pgbouncer (порт 6432) переключается на Этапе 4 вместе с Patroni.
+  # Runtime traffic uses only the non-owner application role. Migration/admin
+  # credentials are intentionally not exposed to PgBouncer.
   pgbouncer:
     image: edoburu/pgbouncer:1.21.0
     environment:
@@ -52,19 +61,15 @@ services:
     volumes:
       - etcd_data:/etcd-data
 
-  # MinIO Community Edition (AGPLv3) — решение риск-ревью вместо коммерческой
-  # AIStor, см. STACK.md → «Лицензии». ВНИМАНИЕ: 4 диска на одном контейнере —
-  # это ТОЛЬКО локальная эмуляция Distributed mode + Erasure Coding (ТЗ 4.9)
-  # для проверки кода и образов; она НЕ отражает целевую эксплуатационную
-  # топологию (число узлов/дисков — открытый вопрос, см. STACK.md). Два
-  # бакета с разными политиками создаются отдельно (см. deploy/minio/
-  # init-bucket.sh): originals — с Object Locking (WORM), working — без.
+  # MinIO root credentials are bootstrap-only. Django uses MINIO_ACCESS_KEY /
+  # MINIO_SECRET_KEY, provisioned by deploy/minio/init-bucket.sh with a policy
+  # that cannot delete/bypass retention in the WORM originals bucket.
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: server /data{1...4} --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in infra env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in infra env}
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
@@ -74,27 +79,22 @@ services:
       - minio_data3:/data3
       - minio_data4:/data4
 
-  # Разовая утилита для настройки бакетов MinIO (Object Locking/WORM для
-  # originals, Versioning для working) — не запускается автоматически с
-  # `up`, см. deploy/minio/init-bucket.sh.
   mc:
     image: minio/mc:RELEASE.2024-10-08T09-37-26Z
     profiles: ["tools"]
     entrypoint: ["/bin/sh", "-c", "sleep infinity"]
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
-      MINIO_BUCKET_ORIGINALS: ${MINIO_BUCKET_ORIGINALS:?MINIO_BUCKET_ORIGINALS must be set in .env}
-      MINIO_BUCKET_WORKING: ${MINIO_BUCKET_WORKING:?MINIO_BUCKET_WORKING must be set in .env}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set in infra env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set in infra env}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in infra env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in infra env}
+      MINIO_BUCKET_ORIGINALS: ${MINIO_BUCKET_ORIGINALS:?MINIO_BUCKET_ORIGINALS must be set in infra env}
+      MINIO_BUCKET_WORKING: ${MINIO_BUCKET_WORKING:?MINIO_BUCKET_WORKING must be set in infra env}
+    volumes:
+      - ./deploy/minio/app-policy.json.tpl:/config/app-policy.json.tpl:ro
     depends_on:
       - minio
 
-  # Брокер очереди Celery — конвейер OCR (Этап 3, apps/documents/tasks.py).
-  # Само приложение (веб + воркер Celery) в этом docker-compose не
-  # контейнеризовано (см. README «Запуск») — воркер запускается локально:
-  #   celery -A config worker -l info
-  # (тем же .env/REDIS_URL, что и здесь; для тестов брокер не нужен —
-  # CELERY_TASK_ALWAYS_EAGER=True, config/settings/base.py).
   redis:
     image: redis:8.10-alpine
     ports:
@@ -102,13 +102,6 @@ services:
     volumes:
       - redis_data:/data
 
-  # Антивирусная проверка загружаемых файлов (ТЗ 4.7, Этап 3) —
-  # apps/core/antivirus.py, вызывается из NormativeDocument.save()/
-  # Template.save() синхронно, до записи файла в хранилище. Первый запуск
-  # дольше обычного — скачивание баз сигнатур. deploy/clamav/clamd.conf
-  # поднимает лимиты размера потока/файла под ТЗ 1.2 §4.2.1 (150 МБ) —
-  # заводской дефолт ClamAV (25 МБ) меньше этого лимита; см. честную
-  # границу в самом файле — не проверено вживую против этого образа.
   clamav:
     image: clamav/clamav:1.4
     ports:
@@ -128,14 +121,10 @@ services:
   grafana:
     image: grafana/grafana:11.3.0
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
-      # Переменные для подстановки в deploy/grafana/provisioning/datasources/postgres.yml
-      # ($POSTGRES_DB и т.д.) — тот же Postgres, что и у самого приложения
-      # (усиление аудита, решение Заказчика: алерты читают audit_auditlog
-      # напрямую, см. deploy/grafana/provisioning/alerting/audit-alerts.yml).
-      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
-      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in infra env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in infra env}
+      GRAFANA_POSTGRES_USER: ${GRAFANA_POSTGRES_USER:?GRAFANA_POSTGRES_USER must be set in infra env}
+      GRAFANA_POSTGRES_PASSWORD: ${GRAFANA_POSTGRES_PASSWORD:?GRAFANA_POSTGRES_PASSWORD must be set in infra env}
     ports:
       - "127.0.0.1:3000:3000"
     volumes:

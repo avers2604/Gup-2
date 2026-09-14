@@ -202,12 +202,81 @@ OOXML_CONTRACTS = {
     ),
 }
 
+# ZIP limits are intentionally stricter than the 150 MiB compressed upload
+# ceiling. They bound CPU/RAM amplification before ClamAV or storage sees the
+# file. Settings may override these values for a deployment, but there is
+# always a safe default even when older environments have not added variables.
+_DEFAULT_OOXML_MAX_ENTRIES = 10_000
+_DEFAULT_OOXML_MAX_MEMBER_BYTES = 128 * 1024 * 1024
+_DEFAULT_OOXML_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+_DEFAULT_OOXML_MAX_COMPRESSION_RATIO = 100
+_DEFAULT_OOXML_COMPRESSION_RATIO_MIN_BYTES = 1024 * 1024
+
+
+def _ooxml_setting(name: str, default: int) -> int:
+    value = int(getattr(settings, name, default))
+    if value < 1:
+        raise InvalidOOXML("Некорректная конфигурация проверки DOCX/XLSX.")
+    return value
+
+
+def _validate_ooxml_resource_limits(archive: zipfile.ZipFile) -> None:
+    infos = archive.infolist()
+    max_entries = _ooxml_setting("OOXML_MAX_ENTRIES", _DEFAULT_OOXML_MAX_ENTRIES)
+    max_member = _ooxml_setting(
+        "OOXML_MAX_MEMBER_BYTES", _DEFAULT_OOXML_MAX_MEMBER_BYTES
+    )
+    max_total = _ooxml_setting(
+        "OOXML_MAX_UNCOMPRESSED_BYTES", _DEFAULT_OOXML_MAX_UNCOMPRESSED_BYTES
+    )
+    max_ratio = _ooxml_setting(
+        "OOXML_MAX_COMPRESSION_RATIO", _DEFAULT_OOXML_MAX_COMPRESSION_RATIO
+    )
+    ratio_min_bytes = _ooxml_setting(
+        "OOXML_COMPRESSION_RATIO_MIN_BYTES",
+        _DEFAULT_OOXML_COMPRESSION_RATIO_MIN_BYTES,
+    )
+
+    if len(infos) > max_entries:
+        raise InvalidOOXML("Архив DOCX/XLSX содержит слишком много элементов.")
+
+    total_uncompressed = 0
+    for info in infos:
+        if info.is_dir():
+            continue
+        file_size = max(int(info.file_size), 0)
+        compressed_size = max(int(info.compress_size), 0)
+        if file_size > max_member:
+            raise InvalidOOXML("Элемент DOCX/XLSX превышает допустимый размер.")
+        total_uncompressed += file_size
+        if total_uncompressed > max_total:
+            raise InvalidOOXML("Распакованный DOCX/XLSX превышает допустимый размер.")
+        if file_size >= ratio_min_bytes and (
+            compressed_size == 0 or file_size > compressed_size * max_ratio
+        ):
+            raise InvalidOOXML("DOCX/XLSX имеет недопустимую степень сжатия.")
+
+
+def _parse_ooxml_xml_member(archive: zipfile.ZipFile, name: str):
+    """Parse a size-bounded XML member without first materializing raw bytes."""
+    with archive.open(name, "r") as member:
+        return ElementTree.parse(member).getroot()
+
+
+def _drain_ooxml_member(archive: zipfile.ZipFile, name: str) -> None:
+    """Force decompression/CRC checking in bounded chunks without RAM amplification."""
+    with archive.open(name, "r") as member:
+        while member.read(1024 * 1024):
+            pass
+
 
 def validate_ooxml(field_file, expected_kind: str) -> None:
     """Prove that an upload is a readable DOCX/XLSX package of the requested kind.
 
     This is intentionally structural rather than full ECMA-376 schema
     validation. Macro/ActiveX policy remains in ``apps.core.macro_check``.
+    ZIP metadata is checked before any member is decompressed so a small
+    compressed upload cannot amplify into unbounded memory/CPU consumption.
     """
     try:
         main_part, expected_type = OOXML_CONTRACTS[expected_kind]
@@ -218,17 +287,18 @@ def validate_ooxml(field_file, expected_kind: str) -> None:
     try:
         source.seek(0)
         with zipfile.ZipFile(source) as archive:
+            _validate_ooxml_resource_limits(archive)
             names = archive.namelist()
             for required in ("[Content_Types].xml", "_rels/.rels", main_part):
                 if names.count(required) != 1:
                     raise InvalidOOXML("Некорректная структура файла DOCX/XLSX.")
 
             try:
-                content_types = ElementTree.fromstring(
-                    archive.read("[Content_Types].xml")
+                content_types = _parse_ooxml_xml_member(
+                    archive, "[Content_Types].xml"
                 )
-                ElementTree.fromstring(archive.read("_rels/.rels"))
-                archive.read(main_part)
+                _parse_ooxml_xml_member(archive, "_rels/.rels")
+                _drain_ooxml_member(archive, main_part)
             except (
                 ParseError,
                 DefusedXmlException,
@@ -246,7 +316,7 @@ def validate_ooxml(field_file, expected_kind: str) -> None:
                 raise InvalidOOXML(
                     "Файл не соответствует заявленному формату DOCX/XLSX."
                 )
-    except (zipfile.BadZipFile, OSError, ValueError) as exc:
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, ValueError) as exc:
         raise InvalidOOXML("Некорректная структура файла DOCX/XLSX.") from exc
     finally:
         try:
