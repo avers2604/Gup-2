@@ -376,6 +376,56 @@
   border-bottom-color: var(--color-accent);
 }
 
+/* Карточка без внутренних отступов: вкладки и таблица должны доходить
+   до её края, а собственные отступы у них свои. */
+.card--flush { padding: 0; overflow: hidden; }
+.card--flush .table-scroll,
+.card--flush .empty-state { padding: 0; }
+.card--flush .pager { padding: var(--space-4) var(--space-5); }
+.card--flush .empty-state { padding: var(--space-8) var(--space-5); }
+
+/* Узкие служебные колонки таблицы. Ширина задана here, а не в шаблоне:
+   иначе она разъедется между реестром, поиском и сводными редакциями —
+   ровно так, как разъезжались плашки статусов. */
+.cell--star { width: 44px; padding-left: var(--space-3); padding-right: 0; }
+/* Колонка действий. min-width, а не width: три кнопки по 36 px с
+   промежутками требуют 124 — при width: 1% браузер сжимал ячейку до
+   95 px, и ряд кнопок вставал столбиком, растягивая строку втрое.
+   nowrap у самого ряда: иначе тот же перенос вернётся при любом
+   добавлении четвёртой кнопки. */
+.cell--actions {
+  width: 1%;
+  min-width: 132px;
+  white-space: nowrap;
+  text-align: right;
+}
+.cell--actions .row { flex-wrap: nowrap; justify-content: flex-end; }
+
+/* Кнопка, видимая только при фокусе. Нужна там, где действие выполняется
+   без неё (выбор размера страницы отправляет форму сам), но клавиатурный
+   пользователь обязан иметь способ её отправить. */
+.sr-only-focusable:not(:focus):not(:focus-within) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Флажок с подписью справа. gap, а не отступ у квадратика: подпись
+   кликабельна вместе с ним, и промежуток должен принадлежать строке. */
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-size: 14px;
+}
+.field-check input { margin: 0; flex: none; }
+
 /* ---------- Панель фильтров ----------
    Правая колонка экрана-списка. Заголовок со сбросом, поля в столбик,
    два действия внизу. Отдельно от .card только отступами: рамка, фон и

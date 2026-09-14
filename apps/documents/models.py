@@ -589,3 +589,59 @@ class DocumentStatusHistory(models.Model):
 
     def __str__(self):
         return f"{self.document.reg_number}: {self.status} {self.period}"
+
+
+class DocumentBookmark(TimeStampedModel):
+    """Закладка «Избранное»: личная пометка пользователя на документе.
+
+    Это НЕ свойство документа и не его статус. Одна и та же карточка у
+    одного сотрудника в избранном, у другого нет, и на сам документ это
+    не влияет никак — поэтому отдельная таблица, а не флаг на
+    NormativeDocument.
+
+    Гриф ДСП закладка не обходит. Строка в этой таблице не даёт доступа
+    сама по себе: и список избранного, и переключение звезды проходят
+    через permissions.visible_documents(). Если у сотрудника отозвали
+    допуск, закладка остаётся в базе, но документ исчезает из выдачи —
+    удалять её при отзыве допуска нельзя, иначе возврат допуска молча
+    терял бы работу пользователя.
+
+    on_delete=CASCADE у обеих связей: закладка не имеет смысла ни без
+    пользователя, ни без документа, и хранить её осиротевшей незачем.
+    Документы, впрочем, не удаляются (WORM-хранение, ТЗ 4.2), так что на
+    практике срабатывает только удаление учётной записи.
+    """
+
+    user = models.ForeignKey(
+        "iam.User",
+        on_delete=models.CASCADE,
+        related_name="document_bookmarks",
+        verbose_name="Пользователь",
+    )
+    document = models.ForeignKey(
+        NormativeDocument,
+        on_delete=models.CASCADE,
+        related_name="bookmarks",
+        verbose_name="Документ",
+    )
+
+    class Meta:
+        verbose_name = "Закладка «Избранное»"
+        verbose_name_plural = "Закладки «Избранное»"
+        ordering = ["-created_at"]
+        constraints = [
+            # Повторное нажатие звезды не должно плодить строки: без
+            # ограничения двойной клик (или две вкладки) дал бы две
+            # закладки, и снятие звезды убрало бы только одну.
+            models.UniqueConstraint(
+                fields=["user", "document"], name="unique_bookmark_per_user_document"
+            ),
+        ]
+        indexes = [
+            # Выборка «избранное этого пользователя» — основной запрос
+            # экрана; ведущим полем идёт user, как в фильтре.
+            models.Index(fields=["user", "-created_at"], name="bookmark_user_recent_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.personnel_number} → {self.document.reg_number}"

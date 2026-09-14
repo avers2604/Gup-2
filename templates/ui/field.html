@@ -15,10 +15,24 @@
 {% endcomment %}
 {% load forms %}
 <div class="field-row stack stack--snug{% if field.errors %} field-row--invalid{% endif %}">
+  {% comment %}
+    Флажок — единственный виджет, у которого подпись стоит СПРАВА, а не
+    сверху: у остальных полей подпись называет то, что вводят, а у
+    флажка она и есть то, что включают. Подпись над пустым квадратиком
+    читается как заголовок раздела, а не как выбор, — и именно так
+    «Только избранное» и выглядело на первом снимке панели фильтров.
+  {% endcomment %}
+  {% if field.field.widget.input_type == 'checkbox' %}
+    <label class="field-check" for="{{ field.id_for_label }}">
+      {% field_widget field %}
+      <span>{{ field.label }}</span>
+    </label>
+  {% else %}
   <label class="field-label" for="{{ field.id_for_label }}">
     {{ field.label }}{% if field.field.required %}<span class="field-required" aria-hidden="true"> *</span><span class="sr-only"> (обязательное поле)</span>{% endif %}
   </label>
   {% field_widget field %}
+  {% endif %}
   {% if field.help_text %}<p class="caption" id="{{ field.auto_id }}-help">{{ field.help_text }}</p>{% endif %}
   {% for error in field.errors %}<p class="field-error" id="{{ field.auto_id }}-error">{{ error }}</p>{% endfor %}
 </div>

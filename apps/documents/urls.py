@@ -20,6 +20,10 @@ urlpatterns = [
     # будущей замены конвертера на более широкий.
     path("<uuid:pk>/files/<str:kind>/", file_views.document_file_link, name="file-link"),
     path("<uuid:pk>/", views.DocumentDetailView.as_view(), name="detail"),
+    path(
+        "<uuid:pk>/bookmark/",
+        views.DocumentBookmarkToggleView.as_view(), name="bookmark_toggle",
+    ),
     path("<uuid:pk>/edit/", views.DocumentUpdateView.as_view(), name="edit"),
     path("<uuid:pk>/status/", views.DocumentStatusChangeView.as_view(), name="status"),
     path(

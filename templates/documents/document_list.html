@@ -1,134 +1,263 @@
 {% extends "base.html" %}
 {% load status_pills %}
+{% load icons %}
 {% block title %}Реестр НРД · АИС «БЗ ГЭТ»{% endblock %}
+
+{% block breadcrumbs %}
+  <nav class="breadcrumbs" aria-label="Хлебные крошки">
+    <ol>
+      <li><a href="{% url 'search_ocr:search' %}">Поиск</a></li>
+      <li aria-current="page">Реестр документов</li>
+    </ol>
+  </nav>
+{% endblock %}
+
 {% block content %}
- <div class="stack">
+<div class="stack">
   <header class="page-header stack">
     <p class="eyebrow">Нормативно-распорядительная документация</p>
-    <div class="row row--baseline">
-      <h1 class="title">Реестр документов</h1>
+    <div class="row row--baseline row--between">
+      <div class="stack stack--snug">
+        <h1 class="title">Документы</h1>
+        <p class="caption">Поиск и просмотр нормативных документов</p>
+      </div>
       {% if can_edit %}
-        <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
+        <a class="btn btn--accent" href="{% url 'documents:create' %}">
+          {% icon "plus" %}Зарегистрировать документ
+        </a>
       {% endif %}
     </div>
   </header>
 
-  <div class="card">
-    <form method="get" novalidate class="stack stack--tight">
-      {% if form.non_field_errors %}
-        <p class="field-error">{{ form.non_field_errors.0 }}</p>
-      {% endif %}
-      <div class="row row--end">
-        {% for field in form %}{% include "ui/field.html" %}{% endfor %}
-        <button class="btn btn--primary" type="submit">Применить</button>
-        <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить</a>
-      </div>
-    </form>
-  </div>
-
-  {% if applied_filters %}
-    <div class="filter-summary">
-      <span class="label">Применены фильтры</span>
-      {% for filter in applied_filters %}
-        <span class="filter-chip">{{ filter.label }}: <strong>{{ filter.value }}</strong></span>
-      {% endfor %}
-      <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить все</a>
-    </div>
-  {% endif %}
-
-  <div class="stack stack--tight">
-    {% if page_obj %}
-      <p class="caption">
-        Страница {{ page_obj.number }} из {{ page_obj.paginator.num_pages }} ·
-        показано {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ page_obj.paginator.count }}
-      </p>
-    {% endif %}
-
-    {% if results %}
-      <div class="table-scroll">
-        <table class="table">
-          <thead>
-            <tr>
-              {% for column in columns %}
-                <th aria-sort="{{ column.aria_sort }}">
-                  <a class="th-sort{% if column.is_active %} is-active{% endif %}" href="{{ column.url }}">
-                    {{ column.label }}
-                    {% if column.is_active %}
-                      <span aria-hidden="true">{% if column.descending %}↓{% else %}↑{% endif %}</span>
-                      <span class="sr-only">{% if column.descending %}по убыванию{% else %}по возрастанию{% endif %}</span>
-                    {% endif %}
-                  </a>
-                </th>
-              {% endfor %}
-            </tr>
-          </thead>
-          <tbody>
-            {% for doc in results %}
-              <tr>
-                <td class="data"><a href="{% url 'documents:detail' doc.pk %}">{{ doc.reg_number }}</a></td>
-                <td>
-                  {{ doc.title }}
-                  {% include "ui/access_pill.html" with document=doc %}
-                </td>
-                <td>{{ doc.get_doc_type_display }}</td>
-                <td>
-                  <span class="status-pill {{ doc.status|status_pill }}">
-                    {{ doc.get_status_display }}
-                  </span>
-                </td>
-                <td>{{ doc.issuer_dept.name }}</td>
-                <td class="data">{{ doc.effective_date|date:"d.m.Y" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-
-      {% if page_obj.paginator.num_pages > 1 %}
-        <nav class="row row--tight" aria-label="Страницы реестра">
-          {% if page_obj.has_previous %}
-            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}">Назад</a>
-          {% endif %}
-
-          {% for num in page_obj.paginator.page_range %}
-            {% if num == page_obj.number %}
-              <span class="btn btn--primary" aria-current="page">{{ num }}</span>
-            {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
-              <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
-            {% endif %}
+  <div class="workspace">
+    <div class="stack stack--tight">
+      {% comment %}
+        Вкладки — срезы этого же списка. «Внутренние»/«Внешние» из макета
+        здесь нет намеренно: такого признака в модели НРД не существует
+        (см. REGISTRY_TABS в views.py). «Бланки» — отдельный раздел со
+        своей моделью, ему место в меню, а не во вкладке реестра.
+      {% endcomment %}
+      <div class="card card--flush">
+        <nav class="tabs" aria-label="Срезы реестра">
+          {% for tab in tabs %}
+            <a class="tab{% if tab.is_active %} is-active{% endif %}"
+               href="{{ tab.url }}"{% if tab.is_active %} aria-current="page"{% endif %}>
+              {% if tab.key == 'favourites' %}{% icon "star" %}{% endif %}{{ tab.label }}
+            </a>
           {% endfor %}
-
-          {% if page_obj.has_next %}
-            <a class="btn btn--ghost" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}">Вперёд</a>
-          {% endif %}
         </nav>
-      {% endif %}
-    {% else %}
-      <div class="card empty-state stack stack--tight">
-        {% if applied_filters %}
-          <p class="heading">Под фильтры не подошёл ни один документ</p>
-          <p class="caption measure">
-            В реестре есть документы, но заданным условиям они не отвечают.
-            Снимите часть фильтров или расширьте диапазон дат.
-          </p>
-          <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить фильтры</a>
-        {% else %}
-          <p class="heading">В реестре пока нет документов</p>
-          <p class="caption measure">
-            {% if can_edit %}
-              Зарегистрируйте первую карточку НРД — она появится здесь сразу
-              после сохранения черновика.
-            {% else %}
-              Как только служба-эмитент зарегистрирует документ, он появится
-              в реестре.
+
+        {% if results %}
+          <div class="table-scroll">
+            <table class="table table--dense">
+              <thead>
+                <tr>
+                  <th class="cell--star"><span class="sr-only">В избранном</span></th>
+                  {% for column in columns %}
+                    <th aria-sort="{{ column.aria_sort }}">
+                      <a class="th-sort{% if column.is_active %} is-active{% endif %}" href="{{ column.url }}">
+                        {{ column.label }}
+                        {% if column.is_active %}
+                          <span aria-hidden="true">{% if column.descending %}↓{% else %}↑{% endif %}</span>
+                          <span class="sr-only">{% if column.descending %}по убыванию{% else %}по возрастанию{% endif %}</span>
+                        {% endif %}
+                      </a>
+                    </th>
+                  {% endfor %}
+                  <th class="cell--actions">Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for doc in results %}
+                  <tr>
+                    <td class="cell--star">
+                      {% comment %}
+                        Форма, а не ссылка: закладка меняет состояние, и
+                        по GET её менять нельзя. next возвращает на ту же
+                        страницу с теми же фильтрами — без него звезда
+                        выбрасывала бы в начало реестра.
+                      {% endcomment %}
+                      <form method="post" action="{% url 'documents:bookmark_toggle' doc.pk %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button class="icon-btn star-btn{% if doc.is_bookmarked %} is-on{% endif %}"
+                                type="submit"
+                                aria-pressed="{% if doc.is_bookmarked %}true{% else %}false{% endif %}"
+                                aria-label="{% if doc.is_bookmarked %}Убрать из избранного{% else %}Добавить в избранное{% endif %}">
+                          {% if doc.is_bookmarked %}{% icon "star" filled=True %}{% else %}{% icon "star" %}{% endif %}
+                        </button>
+                      </form>
+                    </td>
+                    <td class="data"><a href="{% url 'documents:detail' doc.pk %}">{{ doc.reg_number }}</a></td>
+                    <td>
+                      {{ doc.title }}
+                      {% include "ui/access_pill.html" with document=doc %}
+                    </td>
+                    <td>{{ doc.get_doc_type_display }}</td>
+                    <td>
+                      <span class="status-pill {{ doc.status|status_pill }}">
+                        {{ doc.get_status_display }}
+                      </span>
+                    </td>
+                    <td>{{ doc.issuer_dept.name }}</td>
+                    <td class="data">{{ doc.effective_date|date:"d.m.Y" }}</td>
+                    <td class="cell--actions">
+                      <div class="row row--tight row--end">
+                        <a class="icon-btn" href="{% url 'documents:detail' doc.pk %}"
+                           aria-label="Открыть карточку {{ doc.reg_number }}">{% icon "eye" %}</a>
+                        {% if doc.files_original %}
+                          <a class="icon-btn" href="{% url 'documents:file-link' doc.pk 'original' %}"
+                             aria-label="Скачать скан-оригинал {{ doc.reg_number }}">{% icon "download" %}</a>
+                        {% else %}
+                          <span class="icon-btn" aria-disabled="true"
+                                title="Скан-оригинал не приложен">{% icon "download" %}</span>
+                        {% endif %}
+                        <details class="row-menu">
+                          <summary class="icon-btn" aria-label="Ещё действия по {{ doc.reg_number }}">{% icon "dots" %}</summary>
+                          <div class="row-menu__list">
+                            <a href="{% url 'documents:detail' doc.pk %}">Открыть карточку</a>
+                            {% if can_edit and doc.status == 'draft' %}
+                              <a href="{% url 'documents:edit' doc.pk %}">Править черновик</a>
+                            {% endif %}
+                            <a href="{% url 'documents:consolidated_detail' doc.pk %}">Сводная редакция</a>
+                          </div>
+                        </details>
+                      </div>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div class="pager">
+            <p class="caption">
+              Показано {{ page_obj.start_index }}–{{ page_obj.end_index }} из {{ page_obj.paginator.count }}
+            </p>
+
+            {% if page_obj.paginator.num_pages > 1 %}
+              <nav class="pager__pages" aria-label="Страницы реестра">
+                {% if page_obj.has_previous %}
+                  <a class="page-link" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.previous_page_number }}"
+                     aria-label="Предыдущая страница">{% icon "chevron-left" %}</a>
+                {% endif %}
+                {% for num in page_obj.paginator.page_range %}
+                  {% if num == page_obj.number %}
+                    <span class="page-link is-current" aria-current="page">{{ num }}</span>
+                  {% elif num >= page_obj.number|add:"-2" and num <= page_obj.number|add:"2" %}
+                    <a class="page-link" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
+                  {% elif num == 1 or num == page_obj.paginator.num_pages %}
+                    <a class="page-link" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ num }}">{{ num }}</a>
+                  {% elif num == page_obj.number|add:"-3" or num == page_obj.number|add:"3" %}
+                    <span class="page-link is-gap" aria-hidden="true">…</span>
+                  {% endif %}
+                {% endfor %}
+                {% if page_obj.has_next %}
+                  <a class="page-link" href="?{% if query_string %}{{ query_string }}&{% endif %}page={{ page_obj.next_page_number }}"
+                     aria-label="Следующая страница">{% icon "chevron-right" %}</a>
+                {% endif %}
+              </nav>
             {% endif %}
-          </p>
-          {% if can_edit %}
-            <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
-          {% endif %}
+
+            {% comment %}
+              Размер страницы — форма с автоотправкой средствами самой
+              формы: кнопка «Показать» рядом с выпадающим списком из
+              четырёх значений выглядела бы лишней, а без неё выбор без
+              JS не применился бы вовсе. Поэтому кнопка есть, но она
+              визуально скрыта и доступна с клавиатуры.
+            {% endcomment %}
+            <form class="pager__size" method="get">
+              {% for key, value in preserved_params %}
+                <input type="hidden" name="{{ key }}" value="{{ value }}">
+              {% endfor %}
+              <label for="per-page" class="caption">Показывать по:</label>
+              <select class="field" id="per-page" name="per_page" onchange="this.form.submit()">
+                {% for size in page_size_choices %}
+                  <option value="{{ size }}"{% if size == per_page %} selected{% endif %}>{{ size }}</option>
+                {% endfor %}
+              </select>
+              <button class="sr-only-focusable btn btn--ghost" type="submit">Применить</button>
+            </form>
+          </div>
+        {% else %}
+          <div class="empty-state stack stack--tight">
+            {% if applied_filters %}
+              <p class="heading">Под фильтры не подошёл ни один документ</p>
+              <p class="caption measure">
+                В реестре есть документы, но заданным условиям они не отвечают.
+                Снимите часть фильтров или расширьте диапазон дат.
+              </p>
+              <a class="btn btn--ghost" href="{% url 'documents:list' %}">Сбросить фильтры</a>
+            {% elif current_tab != 'all' %}
+              {% comment %}
+                Отдельное сообщение для среза. Писать здесь «В реестре
+                пока нет документов» было бы неправдой: на вкладке
+                «Черновики» реестр может быть полон, просто черновиков в
+                нём нет — и пользователь пошёл бы заводить документ,
+                которого уже двести.
+              {% endcomment %}
+              <p class="heading">На этой вкладке документов нет</p>
+              <p class="caption measure">
+                Срез пуст, но в реестре могут быть другие документы.
+                Вернитесь на «Все документы», чтобы увидеть их.
+              </p>
+              <a class="btn btn--ghost" href="{% url 'documents:list' %}">Все документы</a>
+            {% else %}
+              <p class="heading">В реестре пока нет документов</p>
+              <p class="caption measure">
+                {% if can_edit %}
+                  Зарегистрируйте первую карточку НРД — она появится здесь сразу
+                  после сохранения черновика.
+                {% else %}
+                  Как только служба-эмитент зарегистрирует документ, он появится
+                  в реестре.
+                {% endif %}
+              </p>
+              {% if can_edit %}
+                <a class="btn btn--accent" href="{% url 'documents:create' %}">Зарегистрировать документ</a>
+              {% endif %}
+            {% endif %}
+          </div>
         {% endif %}
       </div>
-    {% endif %}
+    </div>
+
+    {% comment %}
+      Панель фильтров справа — как в макете. На ширине ниже 1100 px
+      встаёт над таблицей (shell.css): рядом с ней таблице остаётся
+      меньше 700 px, а в них шесть колонок не живут.
+    {% endcomment %}
+    <aside class="card stack stack--tight" aria-labelledby="filters-heading">
+      <div class="filter-panel__head">
+        <h2 class="heading" id="filters-heading">Фильтры</h2>
+        <a class="caption" href="{% url 'documents:list' %}">Сбросить</a>
+      </div>
+
+      <form method="get" novalidate class="stack stack--tight">
+        {% if form.non_field_errors %}
+          <p class="field-error">{{ form.non_field_errors.0 }}</p>
+        {% endif %}
+        {% comment %}
+          Вкладка переносится скрытым полем: иначе «Применить» на вкладке
+          «Черновики» возвращало бы на «Все документы», молча отменяя
+          выбранный срез.
+        {% endcomment %}
+        {% if request.GET.tab %}
+          <input type="hidden" name="tab" value="{{ request.GET.tab }}">
+        {% endif %}
+        {% for field in form %}{% include "ui/field.html" %}{% endfor %}
+        <button class="btn btn--primary" type="submit">Применить</button>
+      </form>
+
+      {% if applied_filters %}
+        <div class="filter-summary">
+          <span class="label">Применены фильтры</span>
+          {% for filter in applied_filters %}
+            <span class="filter-chip">{{ filter.label }}: <strong>{{ filter.value }}</strong></span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </aside>
   </div>
- </div>
+</div>
 {% endblock %}
