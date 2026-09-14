@@ -28,6 +28,7 @@ class ProductionStorageSecurityTests(TestCase):
                 "MINIO_BUCKET_ORIGINALS": "originals",
                 "MINIO_BUCKET_WORKING": "working",
                 "MINIO_PRESIGNED_URL_TTL_SECONDS": "300",
+                "BUSINESS_METRICS_TOKEN": "metrics-test-token-that-is-long-enough",
                 "ALLOWED_HOSTS": "localhost",
             }
         )
