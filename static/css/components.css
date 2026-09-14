@@ -288,6 +288,21 @@
    Серый — «нейтраль» из таблицы DESIGN.md: публикация не состоялась. */
 .status-pill--annulled { background: var(--color-grey); color: var(--text-on-grey); }
 
+/* Пометка «собрано автоматически». Намеренно неяркая: это служебное
+   уточнение о происхождении текста, а не статус документа, и спорить за
+   внимание со статус-плашками рядом она не должна. */
+.badge-auto {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-field);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
 /* ---------- Гриф доступа ----------
    Гриф — не статус документа, а свойство доступа к нему, поэтому и выглядит
    иначе по типу, а не только по цвету. Раньше ДСП помечался

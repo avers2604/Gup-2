@@ -189,8 +189,9 @@ OCR-конвейер работает асинхронно через Celery + R
 
 `/health/` выполняет минимальный `SELECT 1` через настроенный DB endpoint, не кэшируется и не раскрывает детали инфраструктурной ошибки.
 
-Оформление собрано из четырёх слоёв CSS (`tokens` → `base` → `layout` →
-`components`), порядок подключения значим. Тема переключается кнопкой в
+Оформление собрано из пяти слоёв CSS (`tokens` → `base` → `layout` →
+`shell` → `components`), порядок подключения значим. `shell` — постоянная
+рама приложения: боковое меню и верхняя панель. Тема переключается кнопкой в
 шапке: системная → светлая → тёмная; выбор хранится в `localStorage` и
 применяется до первой отрисовки, без мигания. Сборки фронтенда нет —
 ни npm, ни бандлера: CSS и единственный скрипт отдаются как есть.
@@ -323,7 +324,7 @@ apps/iam/             пользователи, auth/TOTP, импорт перс
 apps/search_ocr/      тезаурус, Smart Search, persisted search read-model
 apps/templates_bank/  банк бланков
 config/               Django/Celery/settings/urls
-static/css/           четыре слоя: tokens → base → layout → components
+static/css/           пять слоёв: tokens → base → layout → shell → components
 static/js/            переключатель темы (без сборки и без зависимостей)
 templates/            Django templates; templates/ui/ — общие фрагменты
 deploy/ha/            Patroni/etcd/PgBouncer/HAProxy
@@ -370,6 +371,10 @@ bash deploy/minio/init-bucket.sh
 # повторный OCR
 python manage.py rerun_ocr
 python manage.py rerun_ocr --force
+
+# досборка аннотаций из уже распознанного текста (без повторного OCR)
+python manage.py build_annotations --dry-run
+python manage.py build_annotations
 
 # полный rebuild поискового read-model
 python manage.py rebuild_search_index

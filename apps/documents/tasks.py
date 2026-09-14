@@ -7,6 +7,7 @@ from django.db import transaction
 from apps.audit.models import AuditLog
 from apps.core.business_metrics import sync_ocr_review_queue
 
+from .annotation import build_annotation
 from .ocr import extract_text_and_confidence
 from .ocr_thresholds import get_threshold_for_document
 
@@ -140,7 +141,20 @@ def run_ocr_for_document(self, document_id, _promotion_waits=0):
         document.ocr_body = text
         document.ocr_confidence = confidence
         document.ocr_status = ocr_status
-        document.save(update_fields=["ocr_body", "ocr_confidence", "ocr_status"])
+        updated = ["ocr_body", "ocr_confidence", "ocr_status"]
+
+        # Аннотация собирается ТОЛЬКО если её не писал человек. Пустая —
+        # можно; собранная прошлым прогоном (summary_is_auto) — можно,
+        # текст скана мог измениться вместе с файлом; написанная
+        # методистом — нельзя ни при каких условиях, это его работа.
+        if not document.summary or document.summary_is_auto:
+            annotation = build_annotation(text)
+            if annotation:
+                document.summary = annotation
+                document.summary_is_auto = True
+                updated += ["summary", "summary_is_auto"]
+
+        document.save(update_fields=updated)
         sync_ocr_review_queue(
             document.pk,
             needs_review=ocr_status == NormativeDocument.OcrStatus.NEEDS_REVIEW,
@@ -151,6 +165,7 @@ def run_ocr_for_document(self, document_id, _promotion_waits=0):
             object_id=str(document.pk),
             details={
                 "text_length": len(text),
+                "annotation_built": "summary" in updated,
                 "confidence": confidence,
                 "review_threshold": threshold.review_below,
                 "ocr_status": ocr_status,

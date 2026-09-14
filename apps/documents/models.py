@@ -88,6 +88,16 @@ class NormativeDocument(UUIDPKModel, TimeStampedModel):
     doc_type = models.CharField(max_length=32, choices=DocType.choices, verbose_name="Вид документа")
     title = models.CharField(max_length=500, verbose_name="Наименование")
     summary = models.TextField(blank=True, verbose_name="Аннотация")
+    # Признак того, что аннотацию собрал конвейер, а не человек. Нужен по
+    # двум причинам, и обе существенные: в карточке такая аннотация
+    # помечается («собрано автоматически»), чтобы методист не принял её
+    # за выверенный текст, а конвейер по этому же признаку понимает, что
+    # перезаписывать можно. Аннотацию, написанную человеком, он не трогает
+    # никогда — см. apps/documents/annotation.py.
+    summary_is_auto = models.BooleanField(
+        default=False, editable=False,
+        verbose_name="Аннотация собрана автоматически",
+    )
 
     issuer_dept = models.ForeignKey(
         Department, on_delete=models.PROTECT, related_name="issued_documents", verbose_name="Служба-эмитент"
