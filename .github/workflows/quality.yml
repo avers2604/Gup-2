@@ -10,8 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POSTGRES_DB: bz_get
+      POSTGRES_ADMIN_USER: ci_admin
+      POSTGRES_ADMIN_PASSWORD: ci-admin-password
+      POSTGRES_MIGRATION_USER: ci_migrator
+      POSTGRES_MIGRATION_PASSWORD: ci-migration-password
       POSTGRES_USER: bz_get
       POSTGRES_PASSWORD: ci-postgres-password
+      GRAFANA_POSTGRES_USER: ci_grafana
+      GRAFANA_POSTGRES_PASSWORD: ci-grafana-db-password
+      MINIO_ROOT_USER: ci-minio-root
+      MINIO_ROOT_PASSWORD: ci-minio-root-password
       MINIO_ACCESS_KEY: ci-minio-access-key
       MINIO_SECRET_KEY: ci-minio-secret-key
       MINIO_BUCKET_ORIGINALS: originals
