@@ -63,6 +63,9 @@ jobs:
       - name: Установить зависимости
         run: pip install -r requirements-dev.txt -c constraints.txt
 
+      - name: Проверить least-privilege deployment contracts
+        run: python3 deploy/security/test_infrastructure_hardening.py
+
       - name: Установить системные пакеты OCR
         run: sudo apt-get update -qq && sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-rus poppler-utils fonts-dejavu-core
 
